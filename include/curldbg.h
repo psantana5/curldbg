@@ -38,6 +38,18 @@ struct hop_info {
     double ttfb_ms;
     char connected_ip[NI_MAXHOST];
     int connected_family;
+    bool has_loser;
+    char loser_ip[NI_MAXHOST];
+    int loser_family;
+    double loser_connect_ms;
+};
+
+struct connect_race_info {
+    double winner_connect_ms;
+    bool has_loser;
+    char loser_ip[NI_MAXHOST];
+    int loser_family;
+    double loser_connect_ms;
 };
 
 struct connection {
@@ -64,7 +76,8 @@ int connect_tcp(
     char *connected_ip,
     size_t connected_ip_size,
     int *connected_family,
-    int connect_timeout_ms
+    int connect_timeout_ms,
+    struct connect_race_info *race_info
 );
 void apply_socket_timeout(int fd, int timeout_ms);
 void close_connection(struct connection *conn);

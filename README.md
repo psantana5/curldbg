@@ -12,6 +12,7 @@ It also prints:
 - Redirect chain (with `-L`)
 - Per-hop timing (DNS/TCP/TTFB)
 - Connected IP + family (IPv4/IPv6) per hop
+- Optional "Other" raced endpoint line when Happy Eyeballs captures a loser candidate
 - Final resolved URL (after redirects, when `-L` is used)
 - A small preview of the response body (about 1 KB)
 
@@ -35,6 +36,7 @@ Project layout:
 
 ```bash
 ./curldbg <url>
+./curldbg google.com # bare hosts default to https://
 ./curldbg -L <url>   # follow redirects
 ./curldbg -4 <url>   # force IPv4
 ./curldbg -6 <url>   # force IPv6
@@ -63,3 +65,7 @@ Flags:
 - `--max-redirs <n>` maximum redirects when `-L` is enabled (default: 10)
 
 `--compare` and `--compare-urls` both reuse the same request path as normal mode, then compare: DNS, TCP, TTFB, total, final status, connected IP/family, and final URL.
+
+When URL scheme is omitted (for example `google.com`), `curldbg` defaults to `https://`.
+
+By default (`auto` family), connect uses a Happy Eyeballs style strategy: IPv6 is attempted first, then IPv4 is started shortly after to reduce dual-stack stalls.

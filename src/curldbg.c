@@ -15,6 +15,8 @@
 
 #include <openssl/err.h>
 
+#define HAPPY_EYEBALLS_DELAY_MS 250
+
 void die(const char *msg) {
     perror(msg);
     exit(EXIT_FAILURE);
@@ -46,6 +48,57 @@ static bool is_timeout_errno(int err) {
     return err == EAGAIN || err == EWOULDBLOCK || err == ETIMEDOUT;
 }
 
+static long long now_ms_monotonic(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0;
+    }
+    return (long long)ts.tv_sec * 1000LL + (long long)(ts.tv_nsec / 1000000LL);
+}
+
+static int set_nonblocking(int fd, bool enabled) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        return -1;
+    }
+
+    if (enabled) {
+        flags |= O_NONBLOCK;
+    } else {
+        flags &= ~O_NONBLOCK;
+    }
+
+    return fcntl(fd, F_SETFL, flags);
+}
+
+static void fill_connected_endpoint(
+    const struct addrinfo *ai,
+    char *connected_ip,
+    size_t connected_ip_size,
+    int *connected_family
+) {
+    if (getnameinfo(
+            ai->ai_addr,
+            ai->ai_addrlen,
+            connected_ip,
+            connected_ip_size,
+            NULL,
+            0,
+            NI_NUMERICHOST
+        ) != 0) {
+        strncpy(connected_ip, "unknown", connected_ip_size);
+        connected_ip[connected_ip_size - 1] = '\0';
+    }
+    *connected_family = ai->ai_family;
+}
+
+static void clear_race_info(struct connect_race_info *race_info) {
+    if (race_info == NULL) {
+        return;
+    }
+    memset(race_info, 0, sizeof(*race_info));
+}
+
 double ms_between(const struct timespec *start, const struct timespec *end) {
     double sec = (double)(end->tv_sec - start->tv_sec) * 1000.0;
     double nsec = (double)(end->tv_nsec - start->tv_nsec) / 1000000.0;
@@ -73,7 +126,7 @@ static void trim_spaces(char **start) {
     }
 }
 
-/* Parse http(s)://host[:port][/path] into host/port/path. */
+/* Parse [http(s)://]host[:port][/path] into host/port/path. */
 int parse_url(const char *url, struct url_info *out) {
     const char *authority_start;
     const char *path_start;
@@ -91,8 +144,13 @@ int parse_url(const char *url, struct url_info *out) {
         out->use_tls = true;
         strcpy(out->port, "443");
     } else {
-        fprintf(stderr, "Only http:// and https:// URLs are supported\n");
-        return -1;
+        if (strstr(url, "://") != NULL) {
+            fprintf(stderr, "Only http:// and https:// URLs are supported\n");
+            return -1;
+        }
+        authority_start = url;
+        out->use_tls = true;
+        strcpy(out->port, "443");
     }
 
     out->has_explicit_port = false;
@@ -356,41 +414,42 @@ static int connect_with_timeout(int fd, const struct sockaddr *addr, socklen_t a
     return 0;
 }
 
-/* Try each resolved address until one connect() succeeds. */
-int connect_tcp(
+static int connect_tcp_sequential(
     const struct addrinfo *addrs,
     char *connected_ip,
     size_t connected_ip_size,
     int *connected_family,
-    int connect_timeout_ms
+    int connect_timeout_ms,
+    struct connect_race_info *race_info
 ) {
     const struct addrinfo *ai;
     int last_errno = 0;
 
+    clear_race_info(race_info);
+
     for (ai = addrs; ai != NULL; ai = ai->ai_next) {
+        struct timespec start_ts;
+        struct timespec end_ts;
         int fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd < 0) {
             last_errno = errno;
             continue;
         }
 
+        if (clock_gettime(CLOCK_MONOTONIC, &start_ts) != 0) {
+            close(fd);
+            last_errno = errno;
+            continue;
+        }
         if (connect_with_timeout(fd, ai->ai_addr, ai->ai_addrlen, connect_timeout_ms) == 0) {
-            if (getnameinfo(
-                    ai->ai_addr,
-                    ai->ai_addrlen,
-                    connected_ip,
-                    connected_ip_size,
-                    NULL,
-                    0,
-                    NI_NUMERICHOST
-                ) != 0) {
-                strncpy(connected_ip, "unknown", connected_ip_size);
-                connected_ip[connected_ip_size - 1] = '\0';
+            if (clock_gettime(CLOCK_MONOTONIC, &end_ts) == 0 && race_info != NULL) {
+                race_info->winner_connect_ms = ms_between(&start_ts, &end_ts);
             }
-            *connected_family = ai->ai_family;
+            fill_connected_endpoint(ai, connected_ip, connected_ip_size, connected_family);
             return fd;
         }
 
+        (void)clock_gettime(CLOCK_MONOTONIC, &end_ts);
         last_errno = errno;
         close(fd);
     }
@@ -401,6 +460,403 @@ int connect_tcp(
         errno = ECONNREFUSED;
     }
     return -1;
+}
+
+struct he_attempt {
+    const struct addrinfo *ai;
+    int fd;
+    bool active;
+    long long started_ms;
+    bool finished;
+    bool success;
+    double connect_ms;
+};
+
+static int connect_tcp_happy_eyeballs(
+    const struct addrinfo *addrs,
+    char *connected_ip,
+    size_t connected_ip_size,
+    int *connected_family,
+    int connect_timeout_ms,
+    struct connect_race_info *race_info
+) {
+    const struct addrinfo *ai;
+    size_t total = 0;
+    size_t v4_total = 0;
+    size_t v6_total = 0;
+    const struct addrinfo **v4 = NULL;
+    const struct addrinfo **v6 = NULL;
+    struct he_attempt *attempts = NULL;
+    struct pollfd *pfds = NULL;
+    size_t next_index = 0;
+    int active_count = 0;
+    int last_errno = 0;
+    long long next_start_ms;
+    int winner_fd = -1;
+    size_t winner_idx = 0;
+    bool have_winner = false;
+    long long race_start_ms;
+
+    for (ai = addrs; ai != NULL; ai = ai->ai_next) {
+        if (ai->ai_family == AF_INET) {
+            v4_total++;
+            total++;
+        } else if (ai->ai_family == AF_INET6) {
+            v6_total++;
+            total++;
+        }
+    }
+
+    if (v4_total == 0 || v6_total == 0 || total == 0) {
+        return connect_tcp_sequential(
+            addrs,
+            connected_ip,
+            connected_ip_size,
+            connected_family,
+            connect_timeout_ms,
+            race_info
+        );
+    }
+
+    clear_race_info(race_info);
+
+    v4 = calloc(v4_total, sizeof(*v4));
+    v6 = calloc(v6_total, sizeof(*v6));
+    attempts = calloc(total, sizeof(*attempts));
+    pfds = calloc(total, sizeof(*pfds));
+    if (v4 == NULL || v6 == NULL || attempts == NULL || pfds == NULL) {
+        free(v4);
+        free(v6);
+        free(attempts);
+        free(pfds);
+        errno = ENOMEM;
+        return -1;
+    }
+
+    {
+        size_t i4 = 0;
+        size_t i6 = 0;
+        size_t idx = 0;
+
+        for (ai = addrs; ai != NULL; ai = ai->ai_next) {
+            if (ai->ai_family == AF_INET) {
+                v4[i4++] = ai;
+            } else if (ai->ai_family == AF_INET6) {
+                v6[i6++] = ai;
+            }
+        }
+
+        i4 = 0;
+        i6 = 0;
+        while (i4 < v4_total || i6 < v6_total) {
+            if (i6 < v6_total) {
+                attempts[idx].ai = v6[i6++];
+                attempts[idx].fd = -1;
+                idx++;
+            }
+            if (i4 < v4_total) {
+                attempts[idx].ai = v4[i4++];
+                attempts[idx].fd = -1;
+                idx++;
+            }
+        }
+    }
+
+    race_start_ms = now_ms_monotonic();
+    next_start_ms = race_start_ms;
+
+    for (;;) {
+        long long now = now_ms_monotonic();
+
+        if (next_index < total && now >= next_start_ms) {
+            int fd = socket(attempts[next_index].ai->ai_family, SOCK_STREAM, attempts[next_index].ai->ai_protocol);
+            if (fd >= 0) {
+                if (set_nonblocking(fd, true) != 0) {
+                    last_errno = errno;
+                    close(fd);
+                } else {
+                    int rc = connect(
+                        fd,
+                        attempts[next_index].ai->ai_addr,
+                        attempts[next_index].ai->ai_addrlen
+                    );
+                    if (rc == 0) {
+                        attempts[next_index].fd = fd;
+                        attempts[next_index].finished = true;
+                        attempts[next_index].success = true;
+                        attempts[next_index].connect_ms = (double)(now - race_start_ms);
+                        have_winner = true;
+                        winner_fd = fd;
+                        winner_idx = next_index;
+                        break;
+                    }
+                    if (errno == EINPROGRESS) {
+                        attempts[next_index].fd = fd;
+                        attempts[next_index].active = true;
+                        attempts[next_index].started_ms = now;
+                        active_count++;
+                    } else {
+                        last_errno = errno;
+                        attempts[next_index].finished = true;
+                        attempts[next_index].success = false;
+                        attempts[next_index].connect_ms = (double)(now - race_start_ms);
+                        close(fd);
+                    }
+                }
+            } else {
+                last_errno = errno;
+            }
+
+            next_index++;
+            next_start_ms = now + HAPPY_EYEBALLS_DELAY_MS;
+            continue;
+        }
+
+        if (active_count == 0) {
+            if (next_index >= total) {
+                break;
+            }
+
+            now = now_ms_monotonic();
+            if (next_start_ms > now) {
+                int sleep_ms = (int)(next_start_ms - now);
+                (void)poll(NULL, 0, sleep_ms);
+            }
+            continue;
+        }
+
+        {
+            nfds_t nfds = 0;
+            int poll_timeout = -1;
+
+            now = now_ms_monotonic();
+
+            if (next_index < total && next_start_ms > now) {
+                poll_timeout = (int)(next_start_ms - now);
+            } else if (next_index < total) {
+                poll_timeout = 0;
+            }
+
+            if (connect_timeout_ms > 0) {
+                int nearest_deadline = -1;
+                for (size_t i = 0; i < total; i++) {
+                    if (!attempts[i].active) {
+                        continue;
+                    }
+                    long long remain = (attempts[i].started_ms + connect_timeout_ms) - now;
+                    int remain_ms = (remain <= 0) ? 0 : (int)remain;
+                    if (nearest_deadline < 0 || remain_ms < nearest_deadline) {
+                        nearest_deadline = remain_ms;
+                    }
+                }
+                if (nearest_deadline >= 0 && (poll_timeout < 0 || nearest_deadline < poll_timeout)) {
+                    poll_timeout = nearest_deadline;
+                }
+            }
+
+            for (size_t i = 0; i < total; i++) {
+                if (!attempts[i].active) {
+                    continue;
+                }
+                pfds[nfds].fd = attempts[i].fd;
+                pfds[nfds].events = POLLOUT;
+                pfds[nfds].revents = 0;
+                nfds++;
+            }
+
+            if (poll(pfds, nfds, poll_timeout) < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                last_errno = errno;
+                break;
+            }
+
+            now = now_ms_monotonic();
+
+            for (nfds_t pidx = 0; pidx < nfds; pidx++) {
+                if ((pfds[pidx].revents & (POLLOUT | POLLERR | POLLHUP)) == 0) {
+                    continue;
+                }
+                for (size_t i = 0; i < total; i++) {
+                    if (!attempts[i].active || attempts[i].fd != pfds[pidx].fd) {
+                        continue;
+                    }
+
+                    {
+                        int so_error = 0;
+                        socklen_t so_len = sizeof(so_error);
+                        if (getsockopt(attempts[i].fd, SOL_SOCKET, SO_ERROR, &so_error, &so_len) != 0) {
+                            so_error = errno;
+                        }
+
+                        if (so_error == 0) {
+                            attempts[i].finished = true;
+                            attempts[i].success = true;
+                            attempts[i].connect_ms = (double)(now - race_start_ms);
+                            have_winner = true;
+                            winner_fd = attempts[i].fd;
+                            winner_idx = i;
+                            attempts[i].active = false;
+                            active_count--;
+                        } else {
+                            last_errno = so_error;
+                            attempts[i].finished = true;
+                            attempts[i].success = false;
+                            attempts[i].connect_ms = (double)(now - race_start_ms);
+                            close(attempts[i].fd);
+                            attempts[i].fd = -1;
+                            attempts[i].active = false;
+                            active_count--;
+                        }
+                    }
+
+                    break;
+                }
+
+            }
+
+            if (!have_winner && connect_timeout_ms > 0) {
+                for (size_t i = 0; i < total; i++) {
+                    if (!attempts[i].active) {
+                        continue;
+                    }
+                    if (now - attempts[i].started_ms >= connect_timeout_ms) {
+                        last_errno = ETIMEDOUT;
+                        attempts[i].finished = true;
+                        attempts[i].success = false;
+                        attempts[i].connect_ms = (double)(now - race_start_ms);
+                        close(attempts[i].fd);
+                        attempts[i].fd = -1;
+                        attempts[i].active = false;
+                        active_count--;
+                    }
+                }
+            }
+        }
+
+        if (have_winner) {
+            break;
+        }
+    }
+
+    if (have_winner) {
+        long long now = now_ms_monotonic();
+        size_t loser_idx = total;
+
+        if (now < race_start_ms) {
+            now = race_start_ms;
+        }
+
+        for (size_t i = 0; i < total; i++) {
+            struct pollfd pfd;
+            int so_error = 0;
+            socklen_t so_len = sizeof(so_error);
+            int rc;
+
+            if (i == winner_idx || !attempts[i].active || attempts[i].fd < 0) {
+                continue;
+            }
+
+            memset(&pfd, 0, sizeof(pfd));
+            pfd.fd = attempts[i].fd;
+            pfd.events = POLLOUT;
+            rc = poll(&pfd, 1, 0);
+            if (rc <= 0 || !(pfd.revents & (POLLOUT | POLLERR | POLLHUP | POLLNVAL))) {
+                continue;
+            }
+
+            if (getsockopt(attempts[i].fd, SOL_SOCKET, SO_ERROR, &so_error, &so_len) != 0) {
+                so_error = errno;
+            }
+            attempts[i].finished = true;
+            attempts[i].connect_ms = (double)(now - race_start_ms);
+            attempts[i].active = false;
+            if (so_error == 0) {
+                attempts[i].success = true;
+            } else {
+                attempts[i].success = false;
+            }
+        }
+
+        if (race_info != NULL) {
+            race_info->winner_connect_ms = attempts[winner_idx].connect_ms;
+        }
+
+        for (size_t i = 0; i < total; i++) {
+            if (i == winner_idx || !attempts[i].finished || !attempts[i].success) {
+                continue;
+            }
+
+            if (loser_idx == total || attempts[i].connect_ms > attempts[loser_idx].connect_ms) {
+                loser_idx = i;
+            }
+        }
+
+        if (race_info != NULL && loser_idx != total) {
+            race_info->has_loser = true;
+            race_info->loser_connect_ms = attempts[loser_idx].connect_ms;
+            fill_connected_endpoint(
+                attempts[loser_idx].ai,
+                race_info->loser_ip,
+                sizeof(race_info->loser_ip),
+                &race_info->loser_family
+            );
+        }
+
+        for (size_t i = 0; i < total; i++) {
+            if (i == winner_idx) {
+                continue;
+            }
+            if (attempts[i].fd >= 0) {
+                close(attempts[i].fd);
+                attempts[i].fd = -1;
+            }
+        }
+
+        if (set_nonblocking(winner_fd, false) != 0) {
+            last_errno = errno;
+            close(winner_fd);
+            winner_fd = -1;
+        } else {
+            fill_connected_endpoint(attempts[winner_idx].ai, connected_ip, connected_ip_size, connected_family);
+        }
+    }
+
+    free(v4);
+    free(v6);
+    free(pfds);
+    free(attempts);
+
+    if (winner_fd >= 0) {
+        return winner_fd;
+    }
+
+    if (last_errno != 0) {
+        errno = last_errno;
+    } else {
+        errno = ECONNREFUSED;
+    }
+    return -1;
+}
+
+/* Try each resolved address until one connect() succeeds. */
+int connect_tcp(
+    const struct addrinfo *addrs,
+    char *connected_ip,
+    size_t connected_ip_size,
+    int *connected_family,
+    int connect_timeout_ms,
+    struct connect_race_info *race_info
+) {
+    return connect_tcp_happy_eyeballs(
+        addrs,
+        connected_ip,
+        connected_ip_size,
+        connected_family,
+        connect_timeout_ms,
+        race_info
+    );
 }
 
 void apply_socket_timeout(int fd, int timeout_ms) {

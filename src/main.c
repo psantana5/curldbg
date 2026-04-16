@@ -96,6 +96,16 @@ static void final_endpoint(const struct run_result *result, char *out, size_t ou
     }
 }
 
+static const char *family_short_name(int family) {
+    if (family == AF_INET) {
+        return "v4";
+    }
+    if (family == AF_INET6) {
+        return "v6";
+    }
+    return "?";
+}
+
 static int run_request(
     const char *input_url,
     const struct run_options *opts,
@@ -132,6 +142,7 @@ static int run_request(
         int fd;
         int gai_error = 0;
         struct connection conn;
+        struct connect_race_info race_info;
         struct timespec dns_start, dns_end;
         struct timespec connect_start, connect_end;
         struct timespec ttfb_start;
@@ -171,7 +182,8 @@ static int run_request(
             out->hops[out->hop_count].connected_ip,
             sizeof(out->hops[out->hop_count].connected_ip),
             &out->hops[out->hop_count].connected_family,
-            opts->connect_timeout_ms
+            opts->connect_timeout_ms,
+            &race_info
         );
         if (clock_gettime(CLOCK_MONOTONIC, &connect_end) != 0) {
             die("clock_gettime");
@@ -182,7 +194,11 @@ static int run_request(
             free_run_result(out);
             return -1;
         }
-        out->connect_ms += ms_between(&connect_start, &connect_end);
+        if (race_info.winner_connect_ms > 0.0) {
+            out->connect_ms += race_info.winner_connect_ms;
+        } else {
+            out->connect_ms += ms_between(&connect_start, &connect_end);
+        }
 
         conn.fd = fd;
         conn.use_tls = url.use_tls;
@@ -227,8 +243,23 @@ static int run_request(
         snprintf(out->hops[out->hop_count].host, sizeof(out->hops[out->hop_count].host), "%s", url.host);
         out->hops[out->hop_count].status_code = out->resp.status_code;
         out->hops[out->hop_count].dns_ms = ms_between(&dns_start, &dns_end);
-        out->hops[out->hop_count].tcp_ms = ms_between(&connect_start, &connect_end);
+        if (race_info.winner_connect_ms > 0.0) {
+            out->hops[out->hop_count].tcp_ms = race_info.winner_connect_ms;
+        } else {
+            out->hops[out->hop_count].tcp_ms = ms_between(&connect_start, &connect_end);
+        }
         out->hops[out->hop_count].ttfb_ms = out->resp.ttfb_ms;
+        out->hops[out->hop_count].has_loser = race_info.has_loser;
+        if (race_info.has_loser) {
+            snprintf(
+                out->hops[out->hop_count].loser_ip,
+                sizeof(out->hops[out->hop_count].loser_ip),
+                "%s",
+                race_info.loser_ip
+            );
+            out->hops[out->hop_count].loser_family = race_info.loser_family;
+            out->hops[out->hop_count].loser_connect_ms = race_info.loser_connect_ms;
+        }
 
         if (is_redirect_status(out->resp.status_code) && out->resp.location[0] != '\0' &&
             build_redirect_url(out->resp.location, &url, next_url, sizeof(next_url)) == 0 &&
@@ -272,9 +303,13 @@ static int run_request(
 
 static void print_single_output(const struct run_result *result, bool summary_mode, bool color_mode) {
     char endpoint[NI_MAXHOST + 16];
+    const struct hop_info *final_hop = NULL;
     int status_code = final_status_code(result);
 
     final_endpoint(result, endpoint, sizeof(endpoint));
+    if (result->hop_count > 0) {
+        final_hop = &result->hops[result->hop_count - 1];
+    }
 
     printf(
         "%sDNS lookup:%s        %.2f ms\n",
@@ -324,6 +359,16 @@ static void print_single_output(const struct run_result *result, bool summary_mo
         color(color_mode, COLOR_RESET),
         endpoint
     );
+    if (final_hop != NULL && final_hop->has_loser && final_hop->loser_connect_ms >= 0.0) {
+        printf(
+            "%sOther:%s             %s (%s, %+0.2f ms)\n",
+            color(color_mode, COLOR_CYAN),
+            color(color_mode, COLOR_RESET),
+            final_hop->loser_ip,
+            family_short_name(final_hop->loser_family),
+            final_hop->loser_connect_ms - final_hop->tcp_ms
+        );
+    }
     printf(
         "%sFinal URL:%s         %s\n",
         color(color_mode, COLOR_CYAN),
@@ -374,6 +419,14 @@ static void print_single_output(const struct run_result *result, bool summary_mo
             result->hops[i].connected_ip,
             family_name(result->hops[i].connected_family)
         );
+        if (result->hops[i].has_loser && result->hops[i].loser_connect_ms >= 0.0) {
+            printf(
+                "  Other: %s (%s, %+0.2f ms)\n",
+                result->hops[i].loser_ip,
+                family_short_name(result->hops[i].loser_family),
+                result->hops[i].loser_connect_ms - result->hops[i].tcp_ms
+            );
+        }
     }
 
     printf(
@@ -624,7 +677,8 @@ int main(int argc, char **argv) {
                 stderr,
                 "Usage: %s [-L] [-4|-6] [-X GET|POST] [-d data] [--summary] [--color] "
                 "[--connect-timeout ms] [--read-timeout ms] "
-                "[--max-redirs n] <http://host[:port][/path] | https://host[:port][/path]>\n",
+                "[--max-redirs n] <url>\n"
+                "  URL may be http://..., https://..., or bare host/path (defaults to https)\n",
                 argv[0]
             );
             return EXIT_FAILURE;
