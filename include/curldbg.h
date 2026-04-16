@@ -69,7 +69,14 @@ int connect_tcp(
 void apply_socket_timeout(int fd, int timeout_ms);
 void close_connection(struct connection *conn);
 int init_tls(struct connection *conn, const char *hostname, char *error, size_t error_len);
-int send_request(struct connection *conn, const struct url_info *url, char *error, size_t error_len);
+int send_request(
+    struct connection *conn,
+    const struct url_info *url,
+    const char *method,
+    const char *data,
+    char *error,
+    size_t error_len
+);
 int receive_response(
     struct connection *conn,
     const struct timespec *ttfb_start,

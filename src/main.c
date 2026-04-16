@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 
 #define COLOR_RESET "\x1b[0m"
@@ -14,6 +15,8 @@
 #define COLOR_RED "\x1b[31m"
 
 struct run_options {
+    char method[8];
+    const char *data;
     bool follow_redirects;
     int address_family;
     int connect_timeout_ms;
@@ -200,7 +203,14 @@ static int run_request(
         if (clock_gettime(CLOCK_MONOTONIC, &ttfb_start) != 0) {
             die("clock_gettime");
         }
-        if (send_request(&conn, &url, out->error, sizeof(out->error)) != 0) {
+        if (send_request(
+                &conn,
+                &url,
+                opts->method,
+                opts->data,
+                out->error,
+                sizeof(out->error)
+            ) != 0) {
             close_connection(&conn);
             freeaddrinfo(addrs);
             free_run_result(out);
@@ -475,6 +485,9 @@ static void print_compare_family_run(const char *name, const struct run_result *
 int main(int argc, char **argv) {
     const char *input_url = NULL;
     const char *compare_url = NULL;
+    char request_method[8] = "GET";
+    bool method_explicit = false;
+    const char *request_data = NULL;
     bool compare_family_mode = false;
     bool compare_urls_mode = false;
     bool summary_mode = false;
@@ -500,6 +513,31 @@ int main(int argc, char **argv) {
         }
         if (strcmp(argv[i], "--color") == 0) {
             color_mode = true;
+            continue;
+        }
+        if (strcmp(argv[i], "-X") == 0 || strcmp(argv[i], "--request") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Missing value for %s\n", argv[i]);
+                return EXIT_FAILURE;
+            }
+            i++;
+            if (strcasecmp(argv[i], "GET") == 0) {
+                strcpy(request_method, "GET");
+            } else if (strcasecmp(argv[i], "POST") == 0) {
+                strcpy(request_method, "POST");
+            } else {
+                fprintf(stderr, "Only GET and POST are supported for -X/--request\n");
+                return EXIT_FAILURE;
+            }
+            method_explicit = true;
+            continue;
+        }
+        if (strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--data") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Missing value for %s\n", argv[i]);
+                return EXIT_FAILURE;
+            }
+            request_data = argv[++i];
             continue;
         }
         if (strcmp(argv[i], "-L") == 0) {
@@ -569,6 +607,9 @@ int main(int argc, char **argv) {
         fprintf(stderr, "--compare and --compare-urls are mutually exclusive\n");
         return EXIT_FAILURE;
     }
+    if (request_data != NULL && !method_explicit) {
+        strcpy(request_method, "POST");
+    }
     if ((compare_family_mode || compare_urls_mode) && summary_mode) {
         fprintf(stderr, "--summary is only supported for single-request mode\n");
         return EXIT_FAILURE;
@@ -581,7 +622,8 @@ int main(int argc, char **argv) {
         if (input_url == NULL || compare_url != NULL) {
             fprintf(
                 stderr,
-                "Usage: %s [-L] [-4|-6] [--summary] [--color] [--connect-timeout ms] [--read-timeout ms] "
+                "Usage: %s [-L] [-4|-6] [-X GET|POST] [-d data] [--summary] [--color] "
+                "[--connect-timeout ms] [--read-timeout ms] "
                 "[--max-redirs n] <http://host[:port][/path] | https://host[:port][/path]>\n",
                 argv[0]
             );
@@ -589,6 +631,8 @@ int main(int argc, char **argv) {
         }
 
         opts.follow_redirects = follow_redirects;
+        strcpy(opts.method, request_method);
+        opts.data = request_data;
         opts.address_family = address_family;
         opts.connect_timeout_ms = connect_timeout_ms;
         opts.read_timeout_ms = read_timeout_ms;
@@ -618,7 +662,8 @@ int main(int argc, char **argv) {
         if (input_url == NULL || compare_url != NULL) {
             fprintf(
                 stderr,
-                "Usage: %s --compare [-L] [--color] [--connect-timeout ms] [--read-timeout ms] [--max-redirs n] "
+                "Usage: %s --compare [-L] [-X GET|POST] [-d data] [--color] [--connect-timeout ms] "
+                "[--read-timeout ms] [--max-redirs n] "
                 "<url>\n",
                 argv[0]
             );
@@ -630,6 +675,8 @@ int main(int argc, char **argv) {
         }
 
         opts_v4.follow_redirects = follow_redirects;
+        strcpy(opts_v4.method, request_method);
+        opts_v4.data = request_data;
         opts_v4.address_family = AF_INET;
         opts_v4.connect_timeout_ms = connect_timeout_ms;
         opts_v4.read_timeout_ms = read_timeout_ms;
@@ -726,7 +773,8 @@ int main(int argc, char **argv) {
         if (input_url == NULL || compare_url == NULL) {
             fprintf(
                 stderr,
-                "Usage: %s --compare-urls [-L] [-4|-6] [--color] [--connect-timeout ms] [--read-timeout ms] "
+                "Usage: %s --compare-urls [-L] [-4|-6] [-X GET|POST] [-d data] [--color] "
+                "[--connect-timeout ms] [--read-timeout ms] "
                 "[--max-redirs n] <url-a> <url-b>\n",
                 argv[0]
             );
@@ -734,6 +782,8 @@ int main(int argc, char **argv) {
         }
 
         opts.follow_redirects = follow_redirects;
+        strcpy(opts.method, request_method);
+        opts.data = request_data;
         opts.address_family = address_family;
         opts.connect_timeout_ms = connect_timeout_ms;
         opts.read_timeout_ms = read_timeout_ms;

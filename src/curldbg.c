@@ -623,25 +623,54 @@ static void format_host_header(const struct url_info *url, char *out, size_t out
     }
 }
 
-/* Send a minimal HTTP/1.1 GET request. */
-int send_request(struct connection *conn, const struct url_info *url, char *error, size_t error_len) {
+/* Send a minimal HTTP/1.1 request (GET/POST). */
+int send_request(
+    struct connection *conn,
+    const struct url_info *url,
+    const char *method,
+    const char *data,
+    char *error,
+    size_t error_len
+) {
     char req[2048];
     char host_header[320];
+    char body_headers[256];
+    const char *verb = (method != NULL) ? method : "GET";
+    size_t data_len = (data != NULL) ? strlen(data) : 0;
+    bool include_body_headers = (strcasecmp(verb, "POST") == 0) || (data != NULL);
     size_t req_len;
     int n;
 
     format_host_header(url, host_header, sizeof(host_header));
 
+    body_headers[0] = '\0';
+    if (include_body_headers) {
+        n = snprintf(
+            body_headers,
+            sizeof(body_headers),
+            "Content-Type: application/x-www-form-urlencoded\r\n"
+            "Content-Length: %zu\r\n",
+            data_len
+        );
+        if (n < 0 || (size_t)n >= sizeof(body_headers)) {
+            set_error(error, error_len, "Request body headers are too large");
+            return -1;
+        }
+    }
+
     n = snprintf(
         req,
         sizeof(req),
-        "GET %s HTTP/1.1\r\n"
+        "%s %s HTTP/1.1\r\n"
         "Host: %s\r\n"
         "User-Agent: curldbg/1.0\r\n"
         "Connection: close\r\n"
+        "%s"
         "\r\n",
+        verb,
         url->path,
-        host_header
+        host_header,
+        body_headers
     );
 
     if (n < 0 || (size_t)n >= sizeof(req)) {
@@ -650,7 +679,13 @@ int send_request(struct connection *conn, const struct url_info *url, char *erro
     }
 
     req_len = (size_t)n;
-    return connection_write_all(conn, req, req_len, error, error_len);
+    if (connection_write_all(conn, req, req_len, error, error_len) != 0) {
+        return -1;
+    }
+    if (data_len > 0) {
+        return connection_write_all(conn, data, data_len, error, error_len);
+    }
+    return 0;
 }
 
 /* Find the end of HTTP headers in a byte buffer (\r\n\r\n). */

@@ -1,6 +1,6 @@
 # curldbg
 
-`curldbg` is a tiny HTTP/HTTPS request debugger written in C. It performs a single GET request and prints request lifecycle timing:
+`curldbg` is a tiny HTTP/HTTPS request debugger written in C. It performs a single GET/POST request and prints request lifecycle timing:
 
 - DNS lookup
 - TCP connect
@@ -38,10 +38,12 @@ Project layout:
 ./curldbg -L <url>   # follow redirects
 ./curldbg -4 <url>   # force IPv4
 ./curldbg -6 <url>   # force IPv6
+./curldbg -X GET <url>
+./curldbg -X POST -d "k=v&x=1" <url>
 ./curldbg --connect-timeout 3000 --read-timeout 5000 <url>
 ./curldbg -L --max-redirs 20 <url>
-./curldbg --compare -L <url>                  # compare IPv4 vs IPv6 for one URL
-./curldbg --compare-urls <url-a> <url-b>      # compare two URLs side-by-side
+./curldbg --compare -L -X POST -d "a=1" <url>         # compare IPv4 vs IPv6 for one URL
+./curldbg --compare-urls -X GET <url-a> <url-b>       # compare two URLs side-by-side
 ./curldbg --summary --color <url>             # concise output with colors
 ```
 
@@ -51,6 +53,8 @@ Flags:
 - `--compare-urls` run two URL requests and print side-by-side metrics + deltas
 - `--summary` compact single-request output (no redirect chain/body preview)
 - `--color` colorize headings/statuses in terminal output
+- `-X, --request <GET|POST>` choose HTTP method
+- `-d, --data <body>` request body data (defaults method to POST if `-X` is not set)
 - `-L` follow redirects
 - `-4` force IPv4 DNS/connect
 - `-6` force IPv6 DNS/connect
