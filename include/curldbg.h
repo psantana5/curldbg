@@ -64,6 +64,7 @@ double ms_between(const struct timespec *start, const struct timespec *end);
 bool is_redirect_status(int status_code);
 const char *family_name(int family);
 int parse_url(const char *url, struct url_info *out);
+int format_url(const struct url_info *url, char *out_url, size_t out_size);
 int build_redirect_url(
     const char *location,
     const struct url_info *base,

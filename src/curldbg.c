@@ -8,6 +8,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <strings.h>
+#include <limits.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -77,11 +78,19 @@ static void fill_connected_endpoint(
     size_t connected_ip_size,
     int *connected_family
 ) {
+    socklen_t hostlen;
+
+    if (connected_ip_size == 0) {
+        return;
+    }
+
+    hostlen = (connected_ip_size > (size_t)UINT_MAX) ? (socklen_t)UINT_MAX : (socklen_t)connected_ip_size;
+
     if (getnameinfo(
             ai->ai_addr,
             ai->ai_addrlen,
             connected_ip,
-            connected_ip_size,
+            hostlen,
             NULL,
             0,
             NI_NUMERICHOST
@@ -145,7 +154,6 @@ int parse_url(const char *url, struct url_info *out) {
         strcpy(out->port, "443");
     } else {
         if (strstr(url, "://") != NULL) {
-            fprintf(stderr, "Only http:// and https:// URLs are supported\n");
             return -1;
         }
         authority_start = url;
@@ -158,7 +166,6 @@ int parse_url(const char *url, struct url_info *out) {
     authority_len = path_start ? (size_t)(path_start - authority_start) : strlen(authority_start);
 
     if (authority_len == 0 || authority_len >= sizeof(authority)) {
-        fprintf(stderr, "Invalid URL authority\n");
         return -1;
     }
 
@@ -168,26 +175,22 @@ int parse_url(const char *url, struct url_info *out) {
     if (authority[0] == '[') {
         char *closing = strchr(authority, ']');
         if (closing == NULL) {
-            fprintf(stderr, "Invalid IPv6 host format\n");
             return -1;
         }
 
         *closing = '\0';
         if (strlen(authority + 1) >= sizeof(out->host)) {
-            fprintf(stderr, "Host is too long\n");
             return -1;
         }
         strcpy(out->host, authority + 1);
 
         if (*(closing + 1) == ':') {
             if (strlen(closing + 2) == 0 || strlen(closing + 2) >= sizeof(out->port)) {
-                fprintf(stderr, "Invalid port\n");
                 return -1;
             }
             strcpy(out->port, closing + 2);
             out->has_explicit_port = true;
         } else if (*(closing + 1) != '\0') {
-            fprintf(stderr, "Invalid authority format\n");
             return -1;
         }
     } else {
@@ -195,7 +198,6 @@ int parse_url(const char *url, struct url_info *out) {
         if (colon != NULL) {
             *colon = '\0';
             if (strlen(colon + 1) == 0 || strlen(colon + 1) >= sizeof(out->port)) {
-                fprintf(stderr, "Invalid port\n");
                 return -1;
             }
             strcpy(out->port, colon + 1);
@@ -203,7 +205,6 @@ int parse_url(const char *url, struct url_info *out) {
         }
 
         if (strlen(authority) == 0 || strlen(authority) >= sizeof(out->host)) {
-            fprintf(stderr, "Invalid host\n");
             return -1;
         }
         strcpy(out->host, authority);
@@ -213,12 +214,36 @@ int parse_url(const char *url, struct url_info *out) {
         strcpy(out->path, "/");
     } else {
         if (strlen(path_start) >= sizeof(out->path)) {
-            fprintf(stderr, "Path is too long\n");
             return -1;
         }
         strcpy(out->path, path_start);
     }
 
+    return 0;
+}
+
+int format_url(const struct url_info *url, char *out_url, size_t out_size) {
+    const char *scheme = url->use_tls ? "https" : "http";
+    bool is_ipv6_literal = strchr(url->host, ':') != NULL;
+    int n;
+
+    if (url->has_explicit_port) {
+        if (is_ipv6_literal) {
+            n = snprintf(out_url, out_size, "%s://[%s]:%s%s", scheme, url->host, url->port, url->path);
+        } else {
+            n = snprintf(out_url, out_size, "%s://%s:%s%s", scheme, url->host, url->port, url->path);
+        }
+    } else {
+        if (is_ipv6_literal) {
+            n = snprintf(out_url, out_size, "%s://[%s]%s", scheme, url->host, url->path);
+        } else {
+            n = snprintf(out_url, out_size, "%s://%s%s", scheme, url->host, url->path);
+        }
+    }
+
+    if (n < 0 || (size_t)n >= out_size) {
+        return -1;
+    }
     return 0;
 }
 

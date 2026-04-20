@@ -280,6 +280,9 @@ static int run_request(
         out->hop_count++;
 
         if (!opts->follow_redirects || !can_redirect) {
+            if (format_url(&url, out->final_url, sizeof(out->final_url)) != 0) {
+                snprintf(out->final_url, sizeof(out->final_url), "%s", current_url);
+            }
             break;
         }
 
@@ -297,7 +300,6 @@ static int run_request(
         die("clock_gettime");
     }
     out->total_ms = ms_between(&total_start, &total_end);
-    strcpy(out->final_url, current_url);
     return 0;
 }
 
