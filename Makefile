@@ -1,6 +1,6 @@
 CC := gcc
-CFLAGS := -O2 -Wall -Wextra -Iinclude
-LDLIBS := -lssl -lcrypto
+CFLAGS := -O2 -Wall -Wextra -pthread -Iinclude
+LDLIBS := -pthread -lssl -lcrypto
 TARGET := curldbg
 SRCS := src/main.c src/curldbg.c
 OBJS := $(SRCS:.c=.o)

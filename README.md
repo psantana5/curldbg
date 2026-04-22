@@ -46,15 +46,12 @@ Project layout:
 ./curldbg -L --max-redirs 20 <url>
 ./curldbg --compare -L -X POST -d "a=1" <url>         # compare IPv4 vs IPv6 for one URL
 ./curldbg --compare-urls -X GET <url-a> <url-b>       # compare two URLs side-by-side
-./curldbg --summary --color <url>             # concise output with colors
 ```
 
 Flags:
 
 - `--compare` run the same URL twice (IPv4 vs IPv6) and print diffs
 - `--compare-urls` run two URL requests and print side-by-side metrics + deltas
-- `--summary` compact single-request output (no redirect chain/body preview)
-- `--color` colorize headings/statuses in terminal output
 - `-X, --request <GET|POST>` choose HTTP method
 - `-d, --data <body>` request body data (defaults method to POST if `-X` is not set)
 - `-L` follow redirects
@@ -65,6 +62,7 @@ Flags:
 - `--max-redirs <n>` maximum redirects when `-L` is enabled (default: 10)
 
 `--compare` and `--compare-urls` both reuse the same request path as normal mode, then compare: DNS, TCP, TTFB, total, final status, connected IP/family, and final URL.
+Both compare modes run the two profiles concurrently to reduce total wall-clock time.
 
 When URL scheme is omitted (for example `google.com`), `curldbg` defaults to `https://`.
 
