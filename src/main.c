@@ -1,18 +1,12 @@
 #include "curldbg.h"
 
 #include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <time.h>
-
-#define COLOR_RESET "\x1b[0m"
-#define COLOR_BOLD "\x1b[1m"
-#define COLOR_CYAN "\x1b[36m"
-#define COLOR_GREEN "\x1b[32m"
-#define COLOR_YELLOW "\x1b[33m"
-#define COLOR_RED "\x1b[31m"
 
 struct run_options {
     char method[8];
@@ -36,22 +30,29 @@ struct run_result {
     char error[256];
 };
 
-static const char *color(bool enabled, const char *code) {
-    return enabled ? code : "";
-}
+struct run_request_task {
+    const char *url;
+    const struct run_options *opts;
+    struct run_result *result;
+    bool ok;
+};
 
-static const char *http_status_color(bool enabled, int status_code) {
-    if (!enabled) {
-        return "";
-    }
-    if (status_code >= 200 && status_code < 300) {
-        return COLOR_GREEN;
-    }
-    if (status_code >= 300 && status_code < 400) {
-        return COLOR_YELLOW;
-    }
-    return COLOR_RED;
-}
+static int run_request(
+    const char *input_url,
+    const struct run_options *opts,
+    struct run_result *out
+);
+static void *run_request_thread(void *arg);
+static void run_two_requests_parallel(
+    const char *url_a,
+    const struct run_options *opts_a,
+    struct run_result *result_a,
+    bool *ok_a,
+    const char *url_b,
+    const struct run_options *opts_b,
+    struct run_result *result_b,
+    bool *ok_b
+);
 
 static int parse_non_negative_int(const char *value, const char *flag_name) {
     char *end = NULL;
@@ -104,6 +105,52 @@ static const char *family_short_name(int family) {
         return "v6";
     }
     return "?";
+}
+
+static void *run_request_thread(void *arg) {
+    struct run_request_task *task = (struct run_request_task *)arg;
+    task->ok = (run_request(task->url, task->opts, task->result) == 0);
+    return NULL;
+}
+
+static void run_two_requests_parallel(
+    const char *url_a,
+    const struct run_options *opts_a,
+    struct run_result *result_a,
+    bool *ok_a,
+    const char *url_b,
+    const struct run_options *opts_b,
+    struct run_result *result_b,
+    bool *ok_b
+) {
+    struct run_request_task task_a = {.url = url_a, .opts = opts_a, .result = result_a, .ok = false};
+    struct run_request_task task_b = {.url = url_b, .opts = opts_b, .result = result_b, .ok = false};
+    pthread_t thread_a;
+    pthread_t thread_b;
+    bool thread_a_started = false;
+    bool thread_b_started = false;
+
+    if (pthread_create(&thread_a, NULL, run_request_thread, &task_a) == 0) {
+        thread_a_started = true;
+    } else {
+        task_a.ok = (run_request(url_a, opts_a, result_a) == 0);
+    }
+
+    if (pthread_create(&thread_b, NULL, run_request_thread, &task_b) == 0) {
+        thread_b_started = true;
+    } else {
+        task_b.ok = (run_request(url_b, opts_b, result_b) == 0);
+    }
+
+    if (thread_a_started) {
+        (void)pthread_join(thread_a, NULL);
+    }
+    if (thread_b_started) {
+        (void)pthread_join(thread_b, NULL);
+    }
+
+    *ok_a = task_a.ok;
+    *ok_b = task_b.ok;
 }
 
 static int run_request(
@@ -303,7 +350,7 @@ static int run_request(
     return 0;
 }
 
-static void print_single_output(const struct run_result *result, bool summary_mode, bool color_mode) {
+static void print_single_output(const struct run_result *result) {
     char endpoint[NI_MAXHOST + 16];
     const struct hop_info *final_hop = NULL;
     int status_code = final_status_code(result);
@@ -313,81 +360,29 @@ static void print_single_output(const struct run_result *result, bool summary_mo
         final_hop = &result->hops[result->hop_count - 1];
     }
 
-    printf(
-        "%sDNS lookup:%s        %.2f ms\n",
-        color(color_mode, COLOR_CYAN),
-        color(color_mode, COLOR_RESET),
-        result->dns_ms
-    );
-    printf(
-        "%sTCP connect:%s       %.2f ms\n",
-        color(color_mode, COLOR_CYAN),
-        color(color_mode, COLOR_RESET),
-        result->connect_ms
-    );
+    printf("DNS lookup:        %.2f ms\n", result->dns_ms);
+    printf("TCP connect:       %.2f ms\n", result->connect_ms);
     if (result->ttfb_ms >= 0.0) {
-        printf(
-            "%sTTFB:%s              %.2f ms\n",
-            color(color_mode, COLOR_CYAN),
-            color(color_mode, COLOR_RESET),
-            result->ttfb_ms
-        );
+        printf("TTFB:              %.2f ms\n", result->ttfb_ms);
     } else {
-        printf(
-            "%sTTFB:%s              n/a (no response bytes)\n",
-            color(color_mode, COLOR_CYAN),
-            color(color_mode, COLOR_RESET)
-        );
+        printf("TTFB:              n/a (no response bytes)\n");
     }
-    printf(
-        "%sTotal:%s             %.2f ms\n",
-        color(color_mode, COLOR_CYAN),
-        color(color_mode, COLOR_RESET),
-        result->total_ms
-    );
+    printf("Total:             %.2f ms\n", result->total_ms);
     if (status_code > 0) {
-        printf(
-            "%sHTTP status:%s       %s%d%s\n",
-            color(color_mode, COLOR_CYAN),
-            color(color_mode, COLOR_RESET),
-            http_status_color(color_mode, status_code),
-            status_code,
-            color(color_mode, COLOR_RESET)
-        );
+        printf("HTTP status:       %d\n", status_code);
     }
-    printf(
-        "%sEndpoint:%s          %s\n",
-        color(color_mode, COLOR_CYAN),
-        color(color_mode, COLOR_RESET),
-        endpoint
-    );
+    printf("Endpoint:          %s\n", endpoint);
     if (final_hop != NULL && final_hop->has_loser && final_hop->loser_connect_ms >= 0.0) {
         printf(
-            "%sOther:%s             %s (%s, %+0.2f ms)\n",
-            color(color_mode, COLOR_CYAN),
-            color(color_mode, COLOR_RESET),
+            "Other:             %s (%s, %+0.2f ms)\n",
             final_hop->loser_ip,
             family_short_name(final_hop->loser_family),
             final_hop->loser_connect_ms - final_hop->tcp_ms
         );
     }
-    printf(
-        "%sFinal URL:%s         %s\n",
-        color(color_mode, COLOR_CYAN),
-        color(color_mode, COLOR_RESET),
-        result->final_url
-    );
+    printf("Final URL:         %s\n", result->final_url);
 
-    if (summary_mode) {
-        return;
-    }
-
-    printf(
-        "\n%s%sRedirect chain:%s\n",
-        color(color_mode, COLOR_BOLD),
-        color(color_mode, COLOR_CYAN),
-        color(color_mode, COLOR_RESET)
-    );
+    printf("\nRedirect chain:\n");
     for (int i = 0; i < result->hop_count; i++) {
         if (result->hops[i].has_redirect_target) {
             printf(
@@ -401,12 +396,7 @@ static void print_single_output(const struct run_result *result, bool summary_mo
         }
     }
 
-    printf(
-        "\n%s%sPer-hop timing:%s\n",
-        color(color_mode, COLOR_BOLD),
-        color(color_mode, COLOR_CYAN),
-        color(color_mode, COLOR_RESET)
-    );
+    printf("\nPer-hop timing:\n");
     for (int i = 0; i < result->hop_count; i++) {
         printf("Hop %d:\n", i + 1);
         printf("  DNS: %.2f ms\n", result->hops[i].dns_ms);
@@ -431,12 +421,7 @@ static void print_single_output(const struct run_result *result, bool summary_mo
         }
     }
 
-    printf(
-        "\n%s%sResponse body preview (first ~1KB):%s\n",
-        color(color_mode, COLOR_BOLD),
-        color(color_mode, COLOR_CYAN),
-        color(color_mode, COLOR_RESET)
-    );
+    printf("\nResponse body preview (first ~1KB):\n");
     if (result->resp.preview_len > 0) {
         fwrite(result->resp.preview, 1, result->resp.preview_len, stdout);
         if (result->resp.preview[result->resp.preview_len - 1] != '\n') {
@@ -499,26 +484,17 @@ static void print_compare_family_metric(const char *label, double v4, double v6)
     }
 }
 
-static void print_compare_family_run(const char *name, const struct run_result *result, bool ok, bool color_mode) {
+static void print_compare_family_run(const char *name, const struct run_result *result, bool ok) {
     printf("%s:\n", name);
     if (!ok) {
-        printf(
-            "  status: %sfailed%s\n",
-            color(color_mode, COLOR_RED),
-            color(color_mode, COLOR_RESET)
-        );
+        printf("  status: failed\n");
         if (result->error[0] != '\0') {
             printf("  error: %s\n", result->error);
         }
         return;
     }
 
-    printf(
-        "  status: %s%d%s\n",
-        http_status_color(color_mode, final_status_code(result)),
-        final_status_code(result),
-        color(color_mode, COLOR_RESET)
-    );
+    printf("  status: %d\n", final_status_code(result));
     printf("  total: %.2f ms\n", result->total_ms);
     printf("  dns: %.2f ms\n", result->dns_ms);
     printf("  tcp: %.2f ms\n", result->connect_ms);
@@ -545,8 +521,6 @@ int main(int argc, char **argv) {
     const char *request_data = NULL;
     bool compare_family_mode = false;
     bool compare_urls_mode = false;
-    bool summary_mode = false;
-    bool color_mode = false;
     bool follow_redirects = false;
     int address_family = AF_UNSPEC;
     int connect_timeout_ms = 0;
@@ -560,14 +534,6 @@ int main(int argc, char **argv) {
         }
         if (strcmp(argv[i], "--compare-urls") == 0) {
             compare_urls_mode = true;
-            continue;
-        }
-        if (strcmp(argv[i], "--summary") == 0) {
-            summary_mode = true;
-            continue;
-        }
-        if (strcmp(argv[i], "--color") == 0) {
-            color_mode = true;
             continue;
         }
         if (strcmp(argv[i], "-X") == 0 || strcmp(argv[i], "--request") == 0) {
@@ -665,10 +631,6 @@ int main(int argc, char **argv) {
     if (request_data != NULL && !method_explicit) {
         strcpy(request_method, "POST");
     }
-    if ((compare_family_mode || compare_urls_mode) && summary_mode) {
-        fprintf(stderr, "--summary is only supported for single-request mode\n");
-        return EXIT_FAILURE;
-    }
 
     if (!compare_family_mode && !compare_urls_mode) {
         struct run_options opts;
@@ -677,7 +639,7 @@ int main(int argc, char **argv) {
         if (input_url == NULL || compare_url != NULL) {
             fprintf(
                 stderr,
-                "Usage: %s [-L] [-4|-6] [-X GET|POST] [-d data] [--summary] [--color] "
+                "Usage: %s [-L] [-4|-6] [-X GET|POST] [-d data] "
                 "[--connect-timeout ms] [--read-timeout ms] "
                 "[--max-redirs n] <url>\n"
                 "  URL may be http://..., https://..., or bare host/path (defaults to https)\n",
@@ -701,7 +663,7 @@ int main(int argc, char **argv) {
             return EXIT_FAILURE;
         }
 
-        print_single_output(&result, summary_mode, color_mode);
+        print_single_output(&result);
         free_run_result(&result);
         return EXIT_SUCCESS;
     }
@@ -718,7 +680,7 @@ int main(int argc, char **argv) {
         if (input_url == NULL || compare_url != NULL) {
             fprintf(
                 stderr,
-                "Usage: %s --compare [-L] [-X GET|POST] [-d data] [--color] [--connect-timeout ms] "
+                "Usage: %s --compare [-L] [-X GET|POST] [-d data] [--connect-timeout ms] "
                 "[--read-timeout ms] [--max-redirs n] "
                 "<url>\n",
                 argv[0]
@@ -741,31 +703,29 @@ int main(int argc, char **argv) {
         opts_v6 = opts_v4;
         opts_v6.address_family = AF_INET6;
 
-        ok_v4 = run_request(input_url, &opts_v4, &result_v4) == 0;
-        ok_v6 = run_request(input_url, &opts_v6, &result_v6) == 0;
-
-        printf(
-            "%s%sCompare mode:%s      IPv4 vs IPv6\n",
-            color(color_mode, COLOR_BOLD),
-            color(color_mode, COLOR_CYAN),
-            color(color_mode, COLOR_RESET)
+        run_two_requests_parallel(
+            input_url,
+            &opts_v4,
+            &result_v4,
+            &ok_v4,
+            input_url,
+            &opts_v6,
+            &result_v6,
+            &ok_v6
         );
+
+        printf("Compare mode:      IPv4 vs IPv6\n");
         printf("Input URL:         %s\n", input_url);
         printf("Follow redirects:  %s\n", follow_redirects ? "yes" : "no");
         printf("Max redirects:     %d\n", max_redirects);
         printf("\n");
 
-        print_compare_family_run("IPv4 run", &result_v4, ok_v4, color_mode);
+        print_compare_family_run("IPv4 run", &result_v4, ok_v4);
         printf("\n");
-        print_compare_family_run("IPv6 run", &result_v6, ok_v6, color_mode);
+        print_compare_family_run("IPv6 run", &result_v6, ok_v6);
 
         if (ok_v4 && ok_v6) {
-            printf(
-                "\n%s%sDiff (IPv6 - IPv4):%s\n",
-                color(color_mode, COLOR_BOLD),
-                color(color_mode, COLOR_CYAN),
-                color(color_mode, COLOR_RESET)
-            );
+            printf("\nDiff (IPv6 - IPv4):\n");
             print_compare_family_metric("DNS", result_v4.dns_ms, result_v6.dns_ms);
             print_compare_family_metric("TCP", result_v4.connect_ms, result_v6.connect_ms);
             print_compare_family_metric("TTFB", result_v4.ttfb_ms, result_v6.ttfb_ms);
@@ -773,19 +733,9 @@ int main(int argc, char **argv) {
 
             total_delta = result_v6.total_ms - result_v4.total_ms;
             if (total_delta > 0.1) {
-                printf(
-                    "\n%sFaster path:%s       IPv4 (by %.2f ms)\n",
-                    color(color_mode, COLOR_GREEN),
-                    color(color_mode, COLOR_RESET),
-                    total_delta
-                );
+                printf("\nFaster path:       IPv4 (by %.2f ms)\n", total_delta);
             } else if (total_delta < -0.1) {
-                printf(
-                    "\n%sFaster path:%s       IPv6 (by %.2f ms)\n",
-                    color(color_mode, COLOR_GREEN),
-                    color(color_mode, COLOR_RESET),
-                    -total_delta
-                );
+                printf("\nFaster path:       IPv6 (by %.2f ms)\n", -total_delta);
             } else {
                 printf("\nFaster path:       tie\n");
             }
@@ -797,11 +747,7 @@ int main(int argc, char **argv) {
                 printf("HTTP status differs between runs.\n");
             }
         } else {
-            printf(
-                "\n%sComparison incomplete:%s one or both runs failed.\n",
-                color(color_mode, COLOR_YELLOW),
-                color(color_mode, COLOR_RESET)
-            );
+            printf("\nComparison incomplete: one or both runs failed.\n");
         }
 
         if (ok_v4) {
@@ -829,7 +775,7 @@ int main(int argc, char **argv) {
         if (input_url == NULL || compare_url == NULL) {
             fprintf(
                 stderr,
-                "Usage: %s --compare-urls [-L] [-4|-6] [-X GET|POST] [-d data] [--color] "
+                "Usage: %s --compare-urls [-L] [-4|-6] [-X GET|POST] [-d data] "
                 "[--connect-timeout ms] [--read-timeout ms] "
                 "[--max-redirs n] <url-a> <url-b>\n",
                 argv[0]
@@ -847,8 +793,16 @@ int main(int argc, char **argv) {
 
         memset(&result_a, 0, sizeof(result_a));
         memset(&result_b, 0, sizeof(result_b));
-        ok_a = run_request(input_url, &opts, &result_a) == 0;
-        ok_b = run_request(compare_url, &opts, &result_b) == 0;
+        run_two_requests_parallel(
+            input_url,
+            &opts,
+            &result_a,
+            &ok_a,
+            compare_url,
+            &opts,
+            &result_b,
+            &ok_b
+        );
 
         if (ok_a) {
             final_endpoint(&result_a, endpoint_a, sizeof(endpoint_a));
@@ -865,12 +819,7 @@ int main(int argc, char **argv) {
             snprintf(status_b, sizeof(status_b), "failed");
         }
 
-        printf(
-            "%s%sCompare mode:%s      request profile A vs B\n",
-            color(color_mode, COLOR_BOLD),
-            color(color_mode, COLOR_CYAN),
-            color(color_mode, COLOR_RESET)
-        );
+        printf("Compare mode:      request profile A vs B\n");
         printf("Profile A URL:     %s\n", input_url);
         printf("Profile B URL:     %s\n", compare_url);
         printf("Follow redirects:  %s\n", follow_redirects ? "yes" : "no");
@@ -890,19 +839,9 @@ int main(int argc, char **argv) {
         if (ok_a && ok_b) {
             total_delta = result_b.total_ms - result_a.total_ms;
             if (total_delta > 0.1) {
-                printf(
-                    "\n%sFaster profile:%s    A (by %.2f ms)\n",
-                    color(color_mode, COLOR_GREEN),
-                    color(color_mode, COLOR_RESET),
-                    total_delta
-                );
+                printf("\nFaster profile:    A (by %.2f ms)\n", total_delta);
             } else if (total_delta < -0.1) {
-                printf(
-                    "\n%sFaster profile:%s    B (by %.2f ms)\n",
-                    color(color_mode, COLOR_GREEN),
-                    color(color_mode, COLOR_RESET),
-                    -total_delta
-                );
+                printf("\nFaster profile:    B (by %.2f ms)\n", -total_delta);
             } else {
                 printf("\nFaster profile:    tie\n");
             }
@@ -913,11 +852,7 @@ int main(int argc, char **argv) {
             if (!ok_b && result_b.error[0] != '\0') {
                 printf("B error: %s\n", result_b.error);
             }
-            printf(
-                "\n%sComparison incomplete:%s one or both profiles failed.\n",
-                color(color_mode, COLOR_YELLOW),
-                color(color_mode, COLOR_RESET)
-            );
+            printf("\nComparison incomplete: one or both profiles failed.\n");
         }
 
         if (ok_a) {

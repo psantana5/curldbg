@@ -9,6 +9,7 @@
 #include <string.h>
 #include <strings.h>
 #include <limits.h>
+#include <pthread.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -47,6 +48,60 @@ static void set_ssl_error(char *error, size_t error_len, const char *prefix) {
 
 static bool is_timeout_errno(int err) {
     return err == EAGAIN || err == EWOULDBLOCK || err == ETIMEDOUT;
+}
+
+static SSL_CTX *g_shared_tls_ctx = NULL;
+static pthread_once_t g_tls_ctx_once = PTHREAD_ONCE_INIT;
+static int g_tls_ctx_init_status = -1;
+static char g_tls_ctx_init_error[256];
+
+static void init_shared_tls_ctx_once(void) {
+    g_tls_ctx_init_error[0] = '\0';
+
+    if (OPENSSL_init_ssl(0, NULL) != 1) {
+        set_ssl_error(g_tls_ctx_init_error, sizeof(g_tls_ctx_init_error), "OPENSSL_init_ssl failed");
+        return;
+    }
+
+    g_shared_tls_ctx = SSL_CTX_new(TLS_client_method());
+    if (g_shared_tls_ctx == NULL) {
+        set_ssl_error(g_tls_ctx_init_error, sizeof(g_tls_ctx_init_error), "SSL_CTX_new failed");
+        return;
+    }
+
+#ifdef SSL_OP_IGNORE_UNEXPECTED_EOF
+    SSL_CTX_set_options(g_shared_tls_ctx, SSL_OP_IGNORE_UNEXPECTED_EOF);
+#endif
+
+    SSL_CTX_set_verify(g_shared_tls_ctx, SSL_VERIFY_PEER, NULL);
+    if (SSL_CTX_set_default_verify_paths(g_shared_tls_ctx) != 1) {
+        set_ssl_error(g_tls_ctx_init_error, sizeof(g_tls_ctx_init_error), "Could not load system CA certificates");
+        SSL_CTX_free(g_shared_tls_ctx);
+        g_shared_tls_ctx = NULL;
+        return;
+    }
+
+    g_tls_ctx_init_status = 0;
+}
+
+static int get_shared_tls_ctx(SSL_CTX **ctx, char *error, size_t error_len) {
+    int rc = pthread_once(&g_tls_ctx_once, init_shared_tls_ctx_once);
+    if (rc != 0) {
+        set_error(error, error_len, "pthread_once failed: %s", strerror(rc));
+        return -1;
+    }
+
+    if (g_tls_ctx_init_status != 0 || g_shared_tls_ctx == NULL) {
+        if (g_tls_ctx_init_error[0] != '\0') {
+            set_error(error, error_len, "%s", g_tls_ctx_init_error);
+        } else {
+            set_error(error, error_len, "TLS context initialization failed");
+        }
+        return -1;
+    }
+
+    *ctx = g_shared_tls_ctx;
+    return 0;
 }
 
 static long long now_ms_monotonic(void) {
@@ -919,28 +974,13 @@ void close_connection(struct connection *conn) {
 }
 
 int init_tls(struct connection *conn, const char *hostname, char *error, size_t error_len) {
-    if (OPENSSL_init_ssl(0, NULL) != 1) {
-        set_ssl_error(error, error_len, "OPENSSL_init_ssl failed");
+    SSL_CTX *shared_ctx = NULL;
+
+    if (get_shared_tls_ctx(&shared_ctx, error, error_len) != 0) {
         return -1;
     }
 
-    conn->ctx = SSL_CTX_new(TLS_client_method());
-    if (conn->ctx == NULL) {
-        set_ssl_error(error, error_len, "SSL_CTX_new failed");
-        return -1;
-    }
-
-#ifdef SSL_OP_IGNORE_UNEXPECTED_EOF
-    SSL_CTX_set_options(conn->ctx, SSL_OP_IGNORE_UNEXPECTED_EOF);
-#endif
-
-    SSL_CTX_set_verify(conn->ctx, SSL_VERIFY_PEER, NULL);
-    if (SSL_CTX_set_default_verify_paths(conn->ctx) != 1) {
-        set_ssl_error(error, error_len, "Could not load system CA certificates");
-        return -1;
-    }
-
-    conn->ssl = SSL_new(conn->ctx);
+    conn->ssl = SSL_new(shared_ctx);
     if (conn->ssl == NULL) {
         set_ssl_error(error, error_len, "SSL_new failed");
         return -1;
