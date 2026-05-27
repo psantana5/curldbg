@@ -46,6 +46,45 @@ static void set_ssl_error(char *error, size_t error_len, const char *prefix) {
     }
 }
 
+static int base64_encode(const unsigned char *input, size_t len, char *out, size_t out_len) {
+    static const char table[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t out_needed = 4 * ((len + 2) / 3);
+    size_t i = 0;
+    size_t o = 0;
+
+    if (out_len < out_needed + 1) {
+        return -1;
+    }
+
+    while (i < len) {
+        size_t rem = len - i;
+        unsigned int octet_a = input[i++];
+        unsigned int octet_b = (rem > 1) ? input[i++] : 0;
+        unsigned int octet_c = (rem > 2) ? input[i++] : 0;
+        unsigned int triple = (octet_a << 16) | (octet_b << 8) | octet_c;
+
+        out[o++] = table[(triple >> 18) & 0x3F];
+        out[o++] = table[(triple >> 12) & 0x3F];
+        out[o++] = (rem > 1) ? table[(triple >> 6) & 0x3F] : '=';
+        out[o++] = (rem > 2) ? table[triple & 0x3F] : '=';
+    }
+
+    out[o] = '\0';
+    return 0;
+}
+
+static int append_str(char *buf, size_t buf_size, size_t *offset, const char *str) {
+    size_t len = strlen(str);
+    if (*offset + len >= buf_size) {
+        return -1;
+    }
+    memcpy(buf + *offset, str, len);
+    *offset += len;
+    buf[*offset] = '\0';
+    return 0;
+}
+
 static bool is_timeout_errno(int err) {
     return err == EAGAIN || err == EWOULDBLOCK || err == ETIMEDOUT;
 }
@@ -973,7 +1012,7 @@ void close_connection(struct connection *conn) {
     }
 }
 
-int init_tls(struct connection *conn, const char *hostname, char *error, size_t error_len) {
+int init_tls(struct connection *conn, const char *hostname, bool insecure, char *error, size_t error_len) {
     SSL_CTX *shared_ctx = NULL;
 
     if (get_shared_tls_ctx(&shared_ctx, error, error_len) != 0) {
@@ -991,9 +1030,13 @@ int init_tls(struct connection *conn, const char *hostname, char *error, size_t 
         return -1;
     }
 
-    if (SSL_set1_host(conn->ssl, hostname) != 1) {
-        set_ssl_error(error, error_len, "Failed to configure TLS hostname verification");
-        return -1;
+    if (!insecure) {
+        if (SSL_set1_host(conn->ssl, hostname) != 1) {
+            set_ssl_error(error, error_len, "Failed to configure TLS hostname verification");
+            return -1;
+        }
+    } else {
+        SSL_set_verify(conn->ssl, SSL_VERIFY_NONE, NULL);
     }
 
     if (SSL_set_fd(conn->ssl, conn->fd) != 1) {
@@ -1024,9 +1067,11 @@ int init_tls(struct connection *conn, const char *hostname, char *error, size_t 
         }
     }
 
-    if (SSL_get_verify_result(conn->ssl) != X509_V_OK) {
-        set_error(error, error_len, "TLS certificate verification failed");
-        return -1;
+    if (!insecure) {
+        if (SSL_get_verify_result(conn->ssl) != X509_V_OK) {
+            set_error(error, error_len, "TLS certificate verification failed");
+            return -1;
+        }
     }
     return 0;
 }
@@ -1144,34 +1189,60 @@ static void format_host_header(const struct url_info *url, char *out, size_t out
     }
 }
 
-/* Send a minimal HTTP/1.1 request (GET/POST). */
+/* Send a minimal HTTP/1.1 request (GET/POST/PUT). */
 int send_request(
     struct connection *conn,
     const struct url_info *url,
     const char *method,
     const char *data,
+    FILE *upload_file,
+    size_t upload_size,
+    const char **extra_headers,
+    size_t extra_header_count,
+    const char *basic_auth,
     char *error,
     size_t error_len
 ) {
-    char req[2048];
+    char *req = NULL;
     char host_header[320];
     char body_headers[256];
     const char *verb = (method != NULL) ? method : "GET";
     size_t data_len = (data != NULL) ? strlen(data) : 0;
-    bool include_body_headers = (strcasecmp(verb, "POST") == 0) || (data != NULL);
-    size_t req_len;
+    size_t req_len = 0;
+    size_t extra_len = 0;
+    size_t auth_len = 0;
+    size_t content_len = 0;
+    bool include_body_headers = false;
+    char auth_header[1024];
+    char auth_b64[512];
     int n;
 
     format_host_header(url, host_header, sizeof(host_header));
 
     body_headers[0] = '\0';
-    if (include_body_headers) {
+    if (upload_file != NULL) {
+        content_len = upload_size;
+        include_body_headers = true;
+        n = snprintf(
+            body_headers,
+            sizeof(body_headers),
+            "Content-Type: application/octet-stream\r\n"
+            "Content-Length: %zu\r\n",
+            content_len
+        );
+        if (n < 0 || (size_t)n >= sizeof(body_headers)) {
+            set_error(error, error_len, "Request body headers are too large");
+            return -1;
+        }
+    } else if (data != NULL || strcasecmp(verb, "POST") == 0 || strcasecmp(verb, "PUT") == 0) {
+        content_len = data_len;
+        include_body_headers = true;
         n = snprintf(
             body_headers,
             sizeof(body_headers),
             "Content-Type: application/x-www-form-urlencoded\r\n"
             "Content-Length: %zu\r\n",
-            data_len
+            content_len
         );
         if (n < 0 || (size_t)n >= sizeof(body_headers)) {
             set_error(error, error_len, "Request body headers are too large");
@@ -1179,32 +1250,115 @@ int send_request(
         }
     }
 
-    n = snprintf(
-        req,
-        sizeof(req),
-        "%s %s HTTP/1.1\r\n"
-        "Host: %s\r\n"
-        "User-Agent: curldbg/1.0\r\n"
-        "Connection: close\r\n"
-        "%s"
-        "\r\n",
-        verb,
-        url->path,
-        host_header,
-        body_headers
-    );
+    if (basic_auth != NULL && basic_auth[0] != '\0') {
+        if (base64_encode((const unsigned char *)basic_auth, strlen(basic_auth),
+                          auth_b64, sizeof(auth_b64)) != 0) {
+            set_error(error, error_len, "Basic auth value is too large");
+            return -1;
+        }
+        n = snprintf(auth_header, sizeof(auth_header), "Authorization: Basic %s\r\n", auth_b64);
+        if (n < 0 || (size_t)n >= sizeof(auth_header)) {
+            set_error(error, error_len, "Authorization header is too large");
+            return -1;
+        }
+        auth_len = (size_t)n;
+    }
 
-    if (n < 0 || (size_t)n >= sizeof(req)) {
-        set_error(error, error_len, "Request is too large");
+    for (size_t i = 0; i < extra_header_count; i++) {
+        if (extra_headers[i] != NULL) {
+            extra_len += strlen(extra_headers[i]) + 2;
+        }
+    }
+
+    req_len = strlen(verb) + strlen(url->path) + strlen(host_header) +
+              strlen(body_headers) + auth_len + extra_len + 128;
+    req = calloc(req_len + 1, 1);
+    if (req == NULL) {
+        set_error(error, error_len, "Out of memory building request");
         return -1;
     }
 
-    req_len = (size_t)n;
-    if (connection_write_all(conn, req, req_len, error, error_len) != 0) {
+    {
+        size_t offset = 0;
+        n = snprintf(
+            req,
+            req_len + 1,
+            "%s %s HTTP/1.1\r\n"
+            "Host: %s\r\n"
+            "User-Agent: curldbg/1.0\r\n"
+            "Connection: close\r\n",
+            verb,
+            url->path,
+            host_header
+        );
+        if (n < 0 || (size_t)n >= req_len + 1) {
+            set_error(error, error_len, "Request is too large");
+            free(req);
+            return -1;
+        }
+        offset = (size_t)n;
+
+        if (include_body_headers && body_headers[0] != '\0') {
+            if (append_str(req, req_len + 1, &offset, body_headers) != 0) {
+                set_error(error, error_len, "Request is too large");
+                free(req);
+                return -1;
+            }
+        }
+        if (auth_len > 0) {
+            if (append_str(req, req_len + 1, &offset, auth_header) != 0) {
+                set_error(error, error_len, "Request is too large");
+                free(req);
+                return -1;
+            }
+        }
+        for (size_t i = 0; i < extra_header_count; i++) {
+            if (extra_headers[i] == NULL) {
+                continue;
+            }
+            if (append_str(req, req_len + 1, &offset, extra_headers[i]) != 0) {
+                set_error(error, error_len, "Request is too large");
+                free(req);
+                return -1;
+            }
+            if (append_str(req, req_len + 1, &offset, "\r\n") != 0) {
+                set_error(error, error_len, "Request is too large");
+                free(req);
+                return -1;
+            }
+        }
+        if (append_str(req, req_len + 1, &offset, "\r\n") != 0) {
+            set_error(error, error_len, "Request is too large");
+            free(req);
+            return -1;
+        }
+    }
+
+    if (connection_write_all(conn, req, strlen(req), error, error_len) != 0) {
+        free(req);
         return -1;
     }
+    free(req);
     if (data_len > 0) {
         return connection_write_all(conn, data, data_len, error, error_len);
+    }
+    if (upload_file != NULL) {
+        char buf[4096];
+        for (;;) {
+            size_t nread = fread(buf, 1, sizeof(buf), upload_file);
+            if (nread > 0) {
+                if (connection_write_all(conn, buf, nread, error, error_len) != 0) {
+                    return -1;
+                }
+            }
+            if (nread < sizeof(buf)) {
+                if (ferror(upload_file)) {
+                    set_error(error, error_len, "Failed to read upload file");
+                    return -1;
+                }
+                break;
+            }
+        }
     }
     return 0;
 }
@@ -1234,13 +1388,17 @@ int receive_response(
     const struct timespec *ttfb_start,
     struct response_info *out,
     char *error,
-    size_t error_len
+    size_t error_len,
+    FILE *body_out,
+    bool follow_redirects,
+    bool fail_on_http_error
 ) {
     char recv_buf[4096];
     char header_buf[HEADER_MAX + 1];
     size_t header_len = 0;
     bool header_done = false;
     bool seen_first_byte = false;
+    bool write_body = body_out != NULL;
     struct timespec first_byte_ts;
 
     memset(out, 0, sizeof(*out));
@@ -1283,14 +1441,32 @@ int receive_response(
                 headers_only[header_bytes] = '\0';
                 parse_response_headers(headers_only, out);
 
+                if ((follow_redirects && is_redirect_status(out->status_code) && out->location[0] != '\0') ||
+                    (fail_on_http_error && out->status_code >= 400)) {
+                    write_body = false;
+                }
+
                 if (take > PREVIEW_BYTES - out->preview_len) {
                     take = PREVIEW_BYTES - out->preview_len;
                 }
                 memcpy(out->preview + out->preview_len, body_start, take);
                 out->preview_len += take;
+                if (write_body && body_available > 0) {
+                    if (fwrite(body_start, 1, body_available, body_out) != body_available) {
+                        set_error(error, error_len, "Failed to write response body");
+                        return -1;
+                    }
+                }
                 header_done = true;
             }
             continue;
+        }
+
+        if (write_body) {
+            if (fwrite(recv_buf, 1, (size_t)n, body_out) != (size_t)n) {
+                set_error(error, error_len, "Failed to write response body");
+                return -1;
+            }
         }
 
         if (out->preview_len < PREVIEW_BYTES) {

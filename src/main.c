@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <stdint.h>
+#include <sys/stat.h>
 #include <time.h>
 
 struct run_options {
@@ -16,6 +18,13 @@ struct run_options {
     int connect_timeout_ms;
     int read_timeout_ms;
     int max_redirects;
+    bool fail_on_http_error;
+    FILE *body_out;
+    bool insecure_tls;
+    const char *basic_auth;
+    const char **extra_headers;
+    size_t extra_header_count;
+    const char *upload_path;
 };
 
 struct run_result {
@@ -53,6 +62,7 @@ static void run_two_requests_parallel(
     struct run_result *result_b,
     bool *ok_b
 );
+static int output_filename_from_url(const char *input_url, char *out, size_t out_size);
 
 static int parse_non_negative_int(const char *value, const char *flag_name) {
     char *end = NULL;
@@ -70,6 +80,98 @@ static int parse_non_negative_int(const char *value, const char *flag_name) {
     }
 
     return (int)parsed;
+}
+
+static void close_upload_file(FILE **file) {
+    if (file != NULL && *file != NULL) {
+        fclose(*file);
+        *file = NULL;
+    }
+}
+
+static bool is_loopback_ip(const char *ip) {
+    return ip != NULL && (strcmp(ip, "127.0.0.1") == 0 || strcmp(ip, "::1") == 0);
+}
+
+static bool is_localhost_url(const char *input_url) {
+    struct url_info url;
+
+    if (input_url == NULL) {
+        return false;
+    }
+    if (parse_url(input_url, &url) != 0) {
+        return false;
+    }
+    return strcmp(url.host, "localhost") == 0 ||
+           strcmp(url.host, "127.0.0.1") == 0 ||
+           strcmp(url.host, "::1") == 0;
+}
+
+static void maybe_print_april_fools(void) {
+    static bool printed = false;
+    time_t now;
+    struct tm local_tm;
+
+    if (printed) {
+        return;
+    }
+    now = time(NULL);
+    if (now == (time_t)-1) {
+        return;
+    }
+    if (localtime_r(&now, &local_tm) == NULL) {
+        return;
+    }
+    if (local_tm.tm_mon == 3 && local_tm.tm_mday == 1) {
+        printf("HTTP/3 disabled due to mercury retrograde\n");
+        printed = true;
+    }
+}
+
+static void print_wizard_banner(void) {
+    printf("You are now entering advanced networking wizard mode.\n");
+    printf("Latency is temporary. Packets are eternal.\n");
+    printf("OH NOW WE'RE TALKING 😭💀\n");
+}
+
+static void print_fika_banner(void) {
+    printf("Pausing requests for mandatory Swedish coffee break...\n");
+}
+
+static int output_filename_from_url(const char *input_url, char *out, size_t out_size) {
+    struct url_info url;
+    const char *path;
+    const char *segment;
+    const char *slash;
+    char name_buf[1024];
+    char *cut;
+    int n;
+
+    if (parse_url(input_url, &url) != 0) {
+        return -1;
+    }
+
+    path = url.path;
+    slash = strrchr(path, '/');
+    segment = (slash != NULL) ? slash + 1 : path;
+
+    if (segment[0] == '\0') {
+        n = snprintf(out, out_size, "index.html");
+        return (n < 0 || (size_t)n >= out_size) ? -1 : 0;
+    }
+
+    snprintf(name_buf, sizeof(name_buf), "%s", segment);
+    cut = strpbrk(name_buf, "?#");
+    if (cut != NULL) {
+        *cut = '\0';
+    }
+    if (name_buf[0] == '\0') {
+        n = snprintf(out, out_size, "index.html");
+    } else {
+        n = snprintf(out, out_size, "%s", name_buf);
+    }
+
+    return (n < 0 || (size_t)n >= out_size) ? -1 : 0;
 }
 
 static void free_run_result(struct run_result *result) {
@@ -161,6 +263,8 @@ static int run_request(
     char current_url[2048];
     char next_url[2048];
     int redirect_count = 0;
+    FILE *upload_file = NULL;
+    size_t upload_size = 0;
     struct timespec total_start, total_end;
 
     memset(out, 0, sizeof(*out));
@@ -172,6 +276,33 @@ static int run_request(
         return -1;
     }
     strcpy(current_url, input_url);
+
+    if (opts->upload_path != NULL) {
+        struct stat st;
+        upload_file = fopen(opts->upload_path, "rb");
+        if (upload_file == NULL) {
+            snprintf(out->error, sizeof(out->error), "Unable to open upload file '%s': %s",
+                     opts->upload_path, strerror(errno));
+            return -1;
+        }
+        if (stat(opts->upload_path, &st) != 0) {
+            snprintf(out->error, sizeof(out->error), "Unable to stat upload file '%s': %s",
+                     opts->upload_path, strerror(errno));
+            close_upload_file(&upload_file);
+            return -1;
+        }
+        if (st.st_size < 0) {
+            snprintf(out->error, sizeof(out->error), "Upload file size is invalid");
+            close_upload_file(&upload_file);
+            return -1;
+        }
+        if ((unsigned long long)st.st_size > (unsigned long long)SIZE_MAX) {
+            snprintf(out->error, sizeof(out->error), "Upload file is too large");
+            close_upload_file(&upload_file);
+            return -1;
+        }
+        upload_size = (size_t)st.st_size;
+    }
 
     out->hops = calloc((size_t)opts->max_redirects + 1, sizeof(*out->hops));
     if (out->hops == NULL) {
@@ -198,11 +329,13 @@ static int run_request(
         if (parse_url(current_url, &url) != 0) {
             snprintf(out->error, sizeof(out->error), "Invalid URL: %s", current_url);
             free_run_result(out);
+            close_upload_file(&upload_file);
             return -1;
         }
         if (out->hop_count >= opts->max_redirects + 1) {
             snprintf(out->error, sizeof(out->error), "Too many hops");
             free_run_result(out);
+            close_upload_file(&upload_file);
             return -1;
         }
         memset(&out->hops[out->hop_count], 0, sizeof(out->hops[out->hop_count]));
@@ -217,6 +350,7 @@ static int run_request(
         if (addrs == NULL) {
             snprintf(out->error, sizeof(out->error), "DNS resolution failed: %s", gai_strerror(gai_error));
             free_run_result(out);
+            close_upload_file(&upload_file);
             return -1;
         }
         out->dns_ms += ms_between(&dns_start, &dns_end);
@@ -239,6 +373,7 @@ static int run_request(
             snprintf(out->error, sizeof(out->error), "TCP connect failed: %s", strerror(errno));
             freeaddrinfo(addrs);
             free_run_result(out);
+            close_upload_file(&upload_file);
             return -1;
         }
         if (race_info.winner_connect_ms > 0.0) {
@@ -255,10 +390,11 @@ static int run_request(
         apply_socket_timeout(conn.fd, opts->read_timeout_ms);
 
         if (url.use_tls) {
-            if (init_tls(&conn, url.host, out->error, sizeof(out->error)) != 0) {
+            if (init_tls(&conn, url.host, opts->insecure_tls, out->error, sizeof(out->error)) != 0) {
                 close_connection(&conn);
                 freeaddrinfo(addrs);
                 free_run_result(out);
+                close_upload_file(&upload_file);
                 return -1;
             }
         }
@@ -266,23 +402,57 @@ static int run_request(
         if (clock_gettime(CLOCK_MONOTONIC, &ttfb_start) != 0) {
             die("clock_gettime");
         }
+        if (upload_file != NULL) {
+            if (fseeko(upload_file, 0, SEEK_SET) != 0) {
+                snprintf(out->error, sizeof(out->error), "Failed to rewind upload file");
+                close_connection(&conn);
+                freeaddrinfo(addrs);
+                free_run_result(out);
+                close_upload_file(&upload_file);
+                return -1;
+            }
+        }
         if (send_request(
                 &conn,
                 &url,
                 opts->method,
                 opts->data,
+                upload_file,
+                upload_size,
+                opts->extra_headers,
+                opts->extra_header_count,
+                opts->basic_auth,
                 out->error,
                 sizeof(out->error)
             ) != 0) {
             close_connection(&conn);
             freeaddrinfo(addrs);
             free_run_result(out);
+            close_upload_file(&upload_file);
             return -1;
         }
-        if (receive_response(&conn, &ttfb_start, &out->resp, out->error, sizeof(out->error)) != 0) {
+        if (receive_response(
+                &conn,
+                &ttfb_start,
+                &out->resp,
+                out->error,
+                sizeof(out->error),
+                opts->body_out,
+                opts->follow_redirects,
+                opts->fail_on_http_error
+            ) != 0) {
             close_connection(&conn);
             freeaddrinfo(addrs);
             free_run_result(out);
+            close_upload_file(&upload_file);
+            return -1;
+        }
+        if (opts->fail_on_http_error && out->resp.status_code >= 400) {
+            snprintf(out->error, sizeof(out->error), "HTTP %d", out->resp.status_code);
+            close_connection(&conn);
+            freeaddrinfo(addrs);
+            free_run_result(out);
+            close_upload_file(&upload_file);
             return -1;
         }
         out->ttfb_ms = out->resp.ttfb_ms;
@@ -336,6 +506,7 @@ static int run_request(
         if (redirect_count >= opts->max_redirects) {
             snprintf(out->error, sizeof(out->error), "Too many redirects (limit %d)", opts->max_redirects);
             free_run_result(out);
+            close_upload_file(&upload_file);
             return -1;
         }
 
@@ -347,6 +518,7 @@ static int run_request(
         die("clock_gettime");
     }
     out->total_ms = ms_between(&total_start, &total_end);
+    close_upload_file(&upload_file);
     return 0;
 }
 
@@ -372,6 +544,18 @@ static void print_single_output(const struct run_result *result) {
         printf("HTTP status:       %d\n", status_code);
     }
     printf("Endpoint:          %s\n", endpoint);
+    if (final_hop != NULL && is_loopback_ip(final_hop->connected_ip)) {
+        printf("Congratulations, you found yourself.\n");
+    }
+    if (status_code == 418) {
+        printf("The server acknowledges your coffee infrastructure.\n");
+    }
+    if (result->ttfb_ms >= 0.0 && result->ttfb_ms < 5.0) {
+        printf("WARNING: request arrived before it was sent\n");
+    }
+    if (result->dns_ms >= 2000.0) {
+        printf("DNS resolver currently communicating through astral plane\n");
+    }
     if (final_hop != NULL && final_hop->has_loser && final_hop->loser_connect_ms >= 0.0) {
         printf(
             "Other:             %s (%s, %+0.2f ms)\n",
@@ -394,6 +578,9 @@ static void print_single_output(const struct run_result *result) {
         } else {
             printf("[%d] %s\n", result->hops[i].status_code, result->hops[i].host);
         }
+    }
+    if (result->hop_count > 7) {
+        printf("Redirect chain resembles enterprise architecture.\n");
     }
 
     printf("\nPer-hop timing:\n");
@@ -522,6 +709,20 @@ int main(int argc, char **argv) {
     bool compare_family_mode = false;
     bool compare_urls_mode = false;
     bool follow_redirects = false;
+    bool fail_on_http_error = false;
+    bool silent = false;
+    bool show_error = true;
+    const char *output_path = NULL;
+    bool output_remote_name = false;
+    bool insecure_tls = false;
+    const char *basic_auth = NULL;
+    const char *upload_path = NULL;
+    const char **extra_headers = NULL;
+    size_t extra_header_count = 0;
+    bool wizard_mode = false;
+    bool debug_chaos = false;
+    bool lore_mode = false;
+    bool fika_mode = false;
     int address_family = AF_UNSPEC;
     int connect_timeout_ms = 0;
     int read_timeout_ms = 0;
@@ -536,6 +737,98 @@ int main(int argc, char **argv) {
             compare_urls_mode = true;
             continue;
         }
+        if (strcmp(argv[i], "--version") == 0) {
+            printf("curldbg %s\n", CURLDBG_VERSION);
+            printf("Author: Pau Santana\n");
+            free(extra_headers);
+            return EXIT_SUCCESS;
+        }
+        if (strcmp(argv[i], "--wizard") == 0) {
+            wizard_mode = true;
+            continue;
+        }
+        if (strcmp(argv[i], "--debug-chaos") == 0) {
+            debug_chaos = true;
+            continue;
+        }
+        if (strcmp(argv[i], "--lore") == 0) {
+            lore_mode = true;
+            continue;
+        }
+        if (strcmp(argv[i], "--fika") == 0) {
+            fika_mode = true;
+            continue;
+        }
+        if (strcmp(argv[i], "-k") == 0 || strcmp(argv[i], "--insecure") == 0) {
+            insecure_tls = true;
+            continue;
+        }
+        if (strcmp(argv[i], "-u") == 0 || strcmp(argv[i], "--user") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Missing value for %s\n", argv[i]);
+                return EXIT_FAILURE;
+            }
+            basic_auth = argv[++i];
+            continue;
+        }
+        if (strcmp(argv[i], "-H") == 0 || strcmp(argv[i], "--header") == 0) {
+            const char *header_value;
+            const char **next_headers;
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Missing value for %s\n", argv[i]);
+                return EXIT_FAILURE;
+            }
+            header_value = argv[++i];
+            if (strchr(header_value, '\r') != NULL || strchr(header_value, '\n') != NULL) {
+                fprintf(stderr, "Invalid header value (newline detected)\n");
+                return EXIT_FAILURE;
+            }
+            next_headers = realloc(extra_headers, (extra_header_count + 1) * sizeof(*extra_headers));
+            if (next_headers == NULL) {
+                fprintf(stderr, "Out of memory\n");
+                return EXIT_FAILURE;
+            }
+            extra_headers = next_headers;
+            extra_headers[extra_header_count++] = header_value;
+            continue;
+        }
+        if (strcmp(argv[i], "-T") == 0 || strcmp(argv[i], "--upload-file") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Missing value for %s\n", argv[i]);
+                return EXIT_FAILURE;
+            }
+            if (upload_path != NULL) {
+                fprintf(stderr, "Only one upload file is supported\n");
+                return EXIT_FAILURE;
+            }
+            upload_path = argv[++i];
+            continue;
+        }
+        if (strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--fail") == 0) {
+            fail_on_http_error = true;
+            continue;
+        }
+        if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--silent") == 0) {
+            silent = true;
+            show_error = false;
+            continue;
+        }
+        if (strcmp(argv[i], "-S") == 0 || strcmp(argv[i], "--show-error") == 0) {
+            show_error = true;
+            continue;
+        }
+        if (strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--output") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Missing value for %s\n", argv[i]);
+                return EXIT_FAILURE;
+            }
+            output_path = argv[++i];
+            continue;
+        }
+        if (strcmp(argv[i], "-O") == 0 || strcmp(argv[i], "--remote-name") == 0) {
+            output_remote_name = true;
+            continue;
+        }
         if (strcmp(argv[i], "-X") == 0 || strcmp(argv[i], "--request") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "Missing value for %s\n", argv[i]);
@@ -546,8 +839,10 @@ int main(int argc, char **argv) {
                 strcpy(request_method, "GET");
             } else if (strcasecmp(argv[i], "POST") == 0) {
                 strcpy(request_method, "POST");
+            } else if (strcasecmp(argv[i], "PUT") == 0) {
+                strcpy(request_method, "PUT");
             } else {
-                fprintf(stderr, "Only GET and POST are supported for -X/--request\n");
+                fprintf(stderr, "Only GET, POST, and PUT are supported for -X/--request\n");
                 return EXIT_FAILURE;
             }
             method_explicit = true;
@@ -606,6 +901,39 @@ int main(int argc, char **argv) {
             continue;
         }
 
+        if (argv[i][0] == '-' && argv[i][1] != '\0' && argv[i][1] != '-' && argv[i][2] != '\0') {
+            bool handled = true;
+            for (size_t j = 1; argv[i][j] != '\0'; j++) {
+                switch (argv[i][j]) {
+                    case 'f':
+                        fail_on_http_error = true;
+                        break;
+                    case 's':
+                        silent = true;
+                        show_error = false;
+                        break;
+                    case 'S':
+                        show_error = true;
+                        break;
+                    case 'k':
+                        insecure_tls = true;
+                        break;
+                    case 'L':
+                        follow_redirects = true;
+                        break;
+                    default:
+                        handled = false;
+                        break;
+                }
+                if (!handled) {
+                    break;
+                }
+            }
+            if (handled) {
+                continue;
+            }
+        }
+
         if (argv[i][0] == '-') {
             fprintf(stderr, "Unknown option: %s\n", argv[i]);
             return EXIT_FAILURE;
@@ -626,26 +954,113 @@ int main(int argc, char **argv) {
 
     if (compare_family_mode && compare_urls_mode) {
         fprintf(stderr, "--compare and --compare-urls are mutually exclusive\n");
+        free(extra_headers);
         return EXIT_FAILURE;
+    }
+    if (output_path != NULL && output_remote_name) {
+        fprintf(stderr, "-o and -O are mutually exclusive\n");
+        free(extra_headers);
+        return EXIT_FAILURE;
+    }
+    if ((output_path != NULL || output_remote_name) && (compare_family_mode || compare_urls_mode)) {
+        fprintf(stderr, "-o/-O are only supported in single request mode\n");
+        free(extra_headers);
+        return EXIT_FAILURE;
+    }
+    if (upload_path != NULL && (compare_family_mode || compare_urls_mode)) {
+        fprintf(stderr, "-T/--upload-file is only supported in single request mode\n");
+        free(extra_headers);
+        return EXIT_FAILURE;
+    }
+    if (upload_path != NULL && request_data != NULL) {
+        fprintf(stderr, "-T/--upload-file cannot be combined with -d/--data\n");
+        free(extra_headers);
+        return EXIT_FAILURE;
+    }
+    if (basic_auth != NULL && strchr(basic_auth, ':') == NULL) {
+        fprintf(stderr, "-u/--user must be in the form user:password\n");
+        free(extra_headers);
+        return EXIT_FAILURE;
+    }
+    if (upload_path != NULL) {
+        if (method_explicit && strcasecmp(request_method, "PUT") != 0) {
+            fprintf(stderr, "-T/--upload-file requires -X PUT or no -X flag\n");
+            free(extra_headers);
+            return EXIT_FAILURE;
+        }
+        if (!method_explicit) {
+            strcpy(request_method, "PUT");
+        }
     }
     if (request_data != NULL && !method_explicit) {
         strcpy(request_method, "POST");
+    }
+    if (lore_mode) {
+        printf("ORIGIN STORY:\n");
+        printf("Someone wanted better timing diagnostics.\n");
+        printf("Things escalated.\n");
+        free(extra_headers);
+        return EXIT_SUCCESS;
+    }
+    if (!compare_family_mode && !compare_urls_mode && input_url == NULL && compare_url == NULL &&
+        (wizard_mode || fika_mode || debug_chaos)) {
+        maybe_print_april_fools();
+        if (wizard_mode) {
+            print_wizard_banner();
+        }
+        if (fika_mode) {
+            print_fika_banner();
+        }
+        if (debug_chaos) {
+            fprintf(stderr, "Segmentation fault (not really)\n");
+        }
+        free(extra_headers);
+        return EXIT_SUCCESS;
+    }
+    if (debug_chaos) {
+        fprintf(stderr, "Segmentation fault (not really)\n");
     }
 
     if (!compare_family_mode && !compare_urls_mode) {
         struct run_options opts;
         struct run_result result;
+        FILE *body_out = NULL;
+        char output_path_buf[1024];
+        bool close_body = false;
 
         if (input_url == NULL || compare_url != NULL) {
             fprintf(
                 stderr,
-                "Usage: %s [-L] [-4|-6] [-X GET|POST] [-d data] "
+                "Usage: %s [-L] [-4|-6] [-X GET|POST|PUT] [-d data] [-f] [-s] [-S] [-k] [-u user:pass] "
+                "[-H header] [-o file | -O] [-T file] "
                 "[--connect-timeout ms] [--read-timeout ms] "
                 "[--max-redirs n] <url>\n"
                 "  URL may be http://..., https://..., or bare host/path (defaults to https)\n",
                 argv[0]
             );
             return EXIT_FAILURE;
+        }
+
+        if (output_remote_name) {
+            if (output_filename_from_url(input_url, output_path_buf, sizeof(output_path_buf)) != 0) {
+                fprintf(stderr, "Failed to derive output filename from URL\n");
+                return EXIT_FAILURE;
+            }
+            output_path = output_path_buf;
+        }
+
+        if (output_path != NULL) {
+            if (strcmp(output_path, "-") == 0) {
+                body_out = stdout;
+                silent = true;
+            } else {
+                body_out = fopen(output_path, "wb");
+                if (body_out == NULL) {
+                    fprintf(stderr, "Unable to open output file '%s': %s\n", output_path, strerror(errno));
+                    return EXIT_FAILURE;
+                }
+                close_body = true;
+            }
         }
 
         opts.follow_redirects = follow_redirects;
@@ -655,16 +1070,42 @@ int main(int argc, char **argv) {
         opts.connect_timeout_ms = connect_timeout_ms;
         opts.read_timeout_ms = read_timeout_ms;
         opts.max_redirects = max_redirects;
+        opts.fail_on_http_error = fail_on_http_error;
+        opts.body_out = body_out;
+        opts.insecure_tls = insecure_tls;
+        opts.basic_auth = basic_auth;
+        opts.extra_headers = extra_headers;
+        opts.extra_header_count = extra_header_count;
+        opts.upload_path = upload_path;
+
+        if (!silent) {
+            maybe_print_april_fools();
+            if (wizard_mode) {
+                print_wizard_banner();
+            }
+            if (fika_mode) {
+                print_fika_banner();
+            }
+        }
 
         if (run_request(input_url, &opts, &result) != 0) {
-            if (result.error[0] != '\0') {
+            if (show_error && result.error[0] != '\0') {
                 fprintf(stderr, "Request failed: %s\n", result.error);
+            }
+            if (close_body) {
+                fclose(body_out);
             }
             return EXIT_FAILURE;
         }
 
-        print_single_output(&result);
+        if (!silent) {
+            print_single_output(&result);
+        }
         free_run_result(&result);
+        if (close_body) {
+            fclose(body_out);
+        }
+        free(extra_headers);
         return EXIT_SUCCESS;
     }
 
@@ -680,7 +1121,8 @@ int main(int argc, char **argv) {
         if (input_url == NULL || compare_url != NULL) {
             fprintf(
                 stderr,
-                "Usage: %s --compare [-L] [-X GET|POST] [-d data] [--connect-timeout ms] "
+                "Usage: %s --compare [-L] [-X GET|POST|PUT] [-d data] [-f] [-s] [-S] [-k] [-u user:pass] "
+                "[-H header] [--connect-timeout ms] "
                 "[--read-timeout ms] [--max-redirs n] "
                 "<url>\n",
                 argv[0]
@@ -699,6 +1141,13 @@ int main(int argc, char **argv) {
         opts_v4.connect_timeout_ms = connect_timeout_ms;
         opts_v4.read_timeout_ms = read_timeout_ms;
         opts_v4.max_redirects = max_redirects;
+        opts_v4.fail_on_http_error = fail_on_http_error;
+        opts_v4.body_out = NULL;
+        opts_v4.insecure_tls = insecure_tls;
+        opts_v4.basic_auth = basic_auth;
+        opts_v4.extra_headers = extra_headers;
+        opts_v4.extra_header_count = extra_header_count;
+        opts_v4.upload_path = NULL;
 
         opts_v6 = opts_v4;
         opts_v6.address_family = AF_INET6;
@@ -714,40 +1163,59 @@ int main(int argc, char **argv) {
             &ok_v6
         );
 
-        printf("Compare mode:      IPv4 vs IPv6\n");
-        printf("Input URL:         %s\n", input_url);
-        printf("Follow redirects:  %s\n", follow_redirects ? "yes" : "no");
-        printf("Max redirects:     %d\n", max_redirects);
-        printf("\n");
+        if (!silent) {
+            maybe_print_april_fools();
+            if (wizard_mode) {
+                print_wizard_banner();
+            }
+            if (fika_mode) {
+                print_fika_banner();
+            }
+            printf("Compare mode:      IPv4 vs IPv6\n");
+            printf("Input URL:         %s\n", input_url);
+            printf("Follow redirects:  %s\n", follow_redirects ? "yes" : "no");
+            printf("Max redirects:     %d\n", max_redirects);
+            if (is_localhost_url(input_url)) {
+                printf("IPv4 and IPv6 are both trapped inside your machine.\n");
+            }
+            printf("\n");
 
-        print_compare_family_run("IPv4 run", &result_v4, ok_v4);
-        printf("\n");
-        print_compare_family_run("IPv6 run", &result_v6, ok_v6);
+            print_compare_family_run("IPv4 run", &result_v4, ok_v4);
+            printf("\n");
+            print_compare_family_run("IPv6 run", &result_v6, ok_v6);
 
-        if (ok_v4 && ok_v6) {
-            printf("\nDiff (IPv6 - IPv4):\n");
-            print_compare_family_metric("DNS", result_v4.dns_ms, result_v6.dns_ms);
-            print_compare_family_metric("TCP", result_v4.connect_ms, result_v6.connect_ms);
-            print_compare_family_metric("TTFB", result_v4.ttfb_ms, result_v6.ttfb_ms);
-            print_compare_family_metric("Total", result_v4.total_ms, result_v6.total_ms);
+            if (ok_v4 && ok_v6) {
+                printf("\nDiff (IPv6 - IPv4):\n");
+                print_compare_family_metric("DNS", result_v4.dns_ms, result_v6.dns_ms);
+                print_compare_family_metric("TCP", result_v4.connect_ms, result_v6.connect_ms);
+                print_compare_family_metric("TTFB", result_v4.ttfb_ms, result_v6.ttfb_ms);
+                print_compare_family_metric("Total", result_v4.total_ms, result_v6.total_ms);
 
-            total_delta = result_v6.total_ms - result_v4.total_ms;
-            if (total_delta > 0.1) {
-                printf("\nFaster path:       IPv4 (by %.2f ms)\n", total_delta);
-            } else if (total_delta < -0.1) {
-                printf("\nFaster path:       IPv6 (by %.2f ms)\n", -total_delta);
+                total_delta = result_v6.total_ms - result_v4.total_ms;
+                if (total_delta > 0.1) {
+                    printf("\nFaster path:       IPv4 (by %.2f ms)\n", total_delta);
+                } else if (total_delta < -0.1) {
+                    printf("\nFaster path:       IPv6 (by %.2f ms)\n", -total_delta);
+                } else {
+                    printf("\nFaster path:       tie\n");
+                }
+
+                if (strcmp(result_v4.final_url, result_v6.final_url) != 0) {
+                    printf("Final URL differs between runs.\n");
+                }
+                if (final_status_code(&result_v4) != final_status_code(&result_v6)) {
+                    printf("HTTP status differs between runs.\n");
+                }
             } else {
-                printf("\nFaster path:       tie\n");
+                printf("\nComparison incomplete: one or both runs failed.\n");
             }
-
-            if (strcmp(result_v4.final_url, result_v6.final_url) != 0) {
-                printf("Final URL differs between runs.\n");
+        } else if (show_error) {
+            if (!ok_v4 && result_v4.error[0] != '\0') {
+                fprintf(stderr, "IPv4 run failed: %s\n", result_v4.error);
             }
-            if (final_status_code(&result_v4) != final_status_code(&result_v6)) {
-                printf("HTTP status differs between runs.\n");
+            if (!ok_v6 && result_v6.error[0] != '\0') {
+                fprintf(stderr, "IPv6 run failed: %s\n", result_v6.error);
             }
-        } else {
-            printf("\nComparison incomplete: one or both runs failed.\n");
         }
 
         if (ok_v4) {
@@ -756,6 +1224,7 @@ int main(int argc, char **argv) {
         if (ok_v6) {
             free_run_result(&result_v6);
         }
+        free(extra_headers);
 
         return (ok_v4 && ok_v6) ? EXIT_SUCCESS : EXIT_FAILURE;
     }
@@ -775,7 +1244,8 @@ int main(int argc, char **argv) {
         if (input_url == NULL || compare_url == NULL) {
             fprintf(
                 stderr,
-                "Usage: %s --compare-urls [-L] [-4|-6] [-X GET|POST] [-d data] "
+                "Usage: %s --compare-urls [-L] [-4|-6] [-X GET|POST|PUT] [-d data] [-f] [-s] [-S] [-k] "
+                "[-u user:pass] [-H header] "
                 "[--connect-timeout ms] [--read-timeout ms] "
                 "[--max-redirs n] <url-a> <url-b>\n",
                 argv[0]
@@ -790,6 +1260,13 @@ int main(int argc, char **argv) {
         opts.connect_timeout_ms = connect_timeout_ms;
         opts.read_timeout_ms = read_timeout_ms;
         opts.max_redirects = max_redirects;
+        opts.fail_on_http_error = fail_on_http_error;
+        opts.body_out = NULL;
+        opts.insecure_tls = insecure_tls;
+        opts.basic_auth = basic_auth;
+        opts.extra_headers = extra_headers;
+        opts.extra_header_count = extra_header_count;
+        opts.upload_path = NULL;
 
         memset(&result_a, 0, sizeof(result_a));
         memset(&result_b, 0, sizeof(result_b));
@@ -819,40 +1296,56 @@ int main(int argc, char **argv) {
             snprintf(status_b, sizeof(status_b), "failed");
         }
 
-        printf("Compare mode:      request profile A vs B\n");
-        printf("Profile A URL:     %s\n", input_url);
-        printf("Profile B URL:     %s\n", compare_url);
-        printf("Follow redirects:  %s\n", follow_redirects ? "yes" : "no");
-        printf("Address family:    %s\n", (address_family == AF_INET) ? "IPv4" :
-                                         (address_family == AF_INET6) ? "IPv6" : "auto");
-
-        printf("\n%-10s | %-24s | %-24s | %-20s\n", "Metric", "A", "B", "Delta (B - A)");
-        printf("-----------+--------------------------+--------------------------+----------------------\n");
-        print_compare_metric_row("DNS", ok_a ? result_a.dns_ms : -1.0, ok_b ? result_b.dns_ms : -1.0);
-        print_compare_metric_row("TCP", ok_a ? result_a.connect_ms : -1.0, ok_b ? result_b.connect_ms : -1.0);
-        print_compare_metric_row("TTFB", ok_a ? result_a.ttfb_ms : -1.0, ok_b ? result_b.ttfb_ms : -1.0);
-        print_compare_metric_row("Total", ok_a ? result_a.total_ms : -1.0, ok_b ? result_b.total_ms : -1.0);
-        print_compare_text_row("Status", status_a, status_b);
-        print_compare_text_row("IP/Family", endpoint_a, endpoint_b);
-        print_compare_text_row("Final URL", ok_a ? result_a.final_url : "n/a", ok_b ? result_b.final_url : "n/a");
-
-        if (ok_a && ok_b) {
-            total_delta = result_b.total_ms - result_a.total_ms;
-            if (total_delta > 0.1) {
-                printf("\nFaster profile:    A (by %.2f ms)\n", total_delta);
-            } else if (total_delta < -0.1) {
-                printf("\nFaster profile:    B (by %.2f ms)\n", -total_delta);
-            } else {
-                printf("\nFaster profile:    tie\n");
+        if (!silent) {
+            maybe_print_april_fools();
+            if (wizard_mode) {
+                print_wizard_banner();
             }
-        } else {
+            if (fika_mode) {
+                print_fika_banner();
+            }
+            printf("Compare mode:      request profile A vs B\n");
+            printf("Profile A URL:     %s\n", input_url);
+            printf("Profile B URL:     %s\n", compare_url);
+            printf("Follow redirects:  %s\n", follow_redirects ? "yes" : "no");
+            printf("Address family:    %s\n", (address_family == AF_INET) ? "IPv4" :
+                                             (address_family == AF_INET6) ? "IPv6" : "auto");
+
+            printf("\n%-10s | %-24s | %-24s | %-20s\n", "Metric", "A", "B", "Delta (B - A)");
+            printf("-----------+--------------------------+--------------------------+----------------------\n");
+            print_compare_metric_row("DNS", ok_a ? result_a.dns_ms : -1.0, ok_b ? result_b.dns_ms : -1.0);
+            print_compare_metric_row("TCP", ok_a ? result_a.connect_ms : -1.0, ok_b ? result_b.connect_ms : -1.0);
+            print_compare_metric_row("TTFB", ok_a ? result_a.ttfb_ms : -1.0, ok_b ? result_b.ttfb_ms : -1.0);
+            print_compare_metric_row("Total", ok_a ? result_a.total_ms : -1.0, ok_b ? result_b.total_ms : -1.0);
+            print_compare_text_row("Status", status_a, status_b);
+            print_compare_text_row("IP/Family", endpoint_a, endpoint_b);
+            print_compare_text_row("Final URL", ok_a ? result_a.final_url : "n/a", ok_b ? result_b.final_url : "n/a");
+
+            if (ok_a && ok_b) {
+                total_delta = result_b.total_ms - result_a.total_ms;
+                if (total_delta > 0.1) {
+                    printf("\nFaster profile:    A (by %.2f ms)\n", total_delta);
+                } else if (total_delta < -0.1) {
+                    printf("\nFaster profile:    B (by %.2f ms)\n", -total_delta);
+                } else {
+                    printf("\nFaster profile:    tie\n");
+                }
+            } else {
+                if (!ok_a && result_a.error[0] != '\0') {
+                    printf("A error: %s\n", result_a.error);
+                }
+                if (!ok_b && result_b.error[0] != '\0') {
+                    printf("B error: %s\n", result_b.error);
+                }
+                printf("\nComparison incomplete: one or both profiles failed.\n");
+            }
+        } else if (show_error) {
             if (!ok_a && result_a.error[0] != '\0') {
-                printf("A error: %s\n", result_a.error);
+                fprintf(stderr, "A run failed: %s\n", result_a.error);
             }
             if (!ok_b && result_b.error[0] != '\0') {
-                printf("B error: %s\n", result_b.error);
+                fprintf(stderr, "B run failed: %s\n", result_b.error);
             }
-            printf("\nComparison incomplete: one or both profiles failed.\n");
         }
 
         if (ok_a) {
@@ -861,6 +1354,7 @@ int main(int argc, char **argv) {
         if (ok_b) {
             free_run_result(&result_b);
         }
+        free(extra_headers);
         return (ok_a && ok_b) ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 }

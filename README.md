@@ -42,24 +42,38 @@ Project layout:
 ./curldbg -6 <url>   # force IPv6
 ./curldbg -X GET <url>
 ./curldbg -X POST -d "k=v&x=1" <url>
+./curldbg -X PUT -T ./file.bin <url>
 ./curldbg --connect-timeout 3000 --read-timeout 5000 <url>
 ./curldbg -L --max-redirs 20 <url>
 ./curldbg --compare -L -X POST -d "a=1" <url>         # compare IPv4 vs IPv6 for one URL
 ./curldbg --compare-urls -X GET <url-a> <url-b>       # compare two URLs side-by-side
+./curldbg -sS -O <url>                                # save body to remote filename
+./curldbg -k -u user:pass -H "Accept: application/json" <url>
+./curldbg --version
 ```
 
 Flags:
 
 - `--compare` run the same URL twice (IPv4 vs IPv6) and print diffs
 - `--compare-urls` run two URL requests and print side-by-side metrics + deltas
-- `-X, --request <GET|POST>` choose HTTP method
+- `-X, --request <GET|POST|PUT>` choose HTTP method
 - `-d, --data <body>` request body data (defaults method to POST if `-X` is not set)
+- `-f, --fail` exit non-zero on HTTP status >= 400 (no body output)
 - `-L` follow redirects
+- `-s, --silent` suppress normal output
+- `-S, --show-error` show errors when used with `-s`
+- `-k, --insecure` skip TLS certificate verification
+- `-u, --user <user:pass>` use HTTP Basic auth
+- `-H, --header <header>` add a request header (repeatable)
 - `-4` force IPv4 DNS/connect
 - `-6` force IPv6 DNS/connect
+- `-o, --output <file>` write response body to file (single request mode only)
+- `-O, --remote-name` write response body using the URL filename (single request mode only)
+- `-T, --upload-file <file>` upload file as the PUT request body (single request mode only)
 - `--connect-timeout <ms>` timeout per connect attempt
 - `--read-timeout <ms>` timeout for read/write operations
 - `--max-redirs <n>` maximum redirects when `-L` is enabled (default: 10)
+- `--version` show version and author
 
 `--compare` and `--compare-urls` both reuse the same request path as normal mode, then compare: DNS, TCP, TTFB, total, final status, connected IP/family, and final URL.
 Both compare modes run the two profiles concurrently to reduce total wall-clock time.
