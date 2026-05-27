@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <time.h>
 
 #include <netdb.h>
@@ -11,6 +12,7 @@
 #define PREVIEW_BYTES 1024
 #define HEADER_MAX 16384
 #define DEFAULT_MAX_REDIRECTS 10
+#define CURLDBG_VERSION "0.5.1"
 
 struct url_info {
     char host[256];
@@ -82,12 +84,23 @@ int connect_tcp(
 );
 void apply_socket_timeout(int fd, int timeout_ms);
 void close_connection(struct connection *conn);
-int init_tls(struct connection *conn, const char *hostname, char *error, size_t error_len);
+int init_tls(
+    struct connection *conn,
+    const char *hostname,
+    bool insecure,
+    char *error,
+    size_t error_len
+);
 int send_request(
     struct connection *conn,
     const struct url_info *url,
     const char *method,
     const char *data,
+    FILE *upload_file,
+    size_t upload_size,
+    const char **extra_headers,
+    size_t extra_header_count,
+    const char *basic_auth,
     char *error,
     size_t error_len
 );
@@ -96,7 +109,10 @@ int receive_response(
     const struct timespec *ttfb_start,
     struct response_info *out,
     char *error,
-    size_t error_len
+    size_t error_len,
+    FILE *body_out,
+    bool follow_redirects,
+    bool fail_on_http_error
 );
 
 #endif

@@ -1,0 +1,93 @@
+.TH CURLDBG 1 "May 2026" "curldbg" "User Commands"
+.SH NAME
+curldbg \- tiny HTTP/HTTPS request debugger
+.SH SYNOPSIS
+.B curldbg
+[\fIoptions\fR] \fIurl\fR
+.P
+.B curldbg
+--compare [\fIoptions\fR] \fIurl\fR
+.P
+.B curldbg
+--compare-urls [\fIoptions\fR] \fIurl-a\fR \fIurl-b\fR
+.SH DESCRIPTION
+.B curldbg
+performs a single HTTP/HTTPS request (GET/POST/PUT), reports timing metrics,
+and prints a short preview of the response body. It can also compare IPv4 vs
+IPv6 or compare two URLs side-by-side.
+.SH OPTIONS
+.TP
+.B \-L
+Follow redirects.
+.TP
+.B \-4
+Force IPv4.
+.TP
+.B \-6
+Force IPv6.
+.TP
+.B \-X, \-\-request \fIGET|POST|PUT\fR
+Choose HTTP method.
+.TP
+.B \-d, \-\-data \fIbody\fR
+Send request body (defaults method to POST if \-X is not set).
+.TP
+.B \-T, \-\-upload-file \fIfile\fR
+Upload file as the PUT request body (single request mode only).
+.TP
+.B \-f, \-\-fail
+Exit non-zero on HTTP status >= 400.
+.TP
+.B \-s, \-\-silent
+Suppress normal output.
+.TP
+.B \-S, \-\-show-error
+Show errors when used with \-s.
+.TP
+.B \-k, \-\-insecure
+Skip TLS certificate verification.
+.TP
+.B \-u, \-\-user \fIuser:pass\fR
+Use HTTP Basic auth.
+.TP
+.B \-H, \-\-header \fIheader\fR
+Add a request header (repeatable).
+.TP
+.B \-o, \-\-output \fIfile\fR
+Write response body to file (single request mode only).
+.TP
+.B \-O, \-\-remote-name
+Write response body using the URL filename (single request mode only).
+.TP
+.B \-\-connect-timeout \fIms\fR
+Timeout per connect attempt in milliseconds.
+.TP
+.B \-\-read-timeout \fIms\fR
+Timeout for read/write operations in milliseconds.
+.TP
+.B \-\-max-redirs \fIn\fR
+Maximum redirects when \-L is enabled.
+.TP
+.B \-\-compare
+Compare IPv4 vs IPv6 for a single URL.
+.TP
+.B \-\-compare-urls
+Compare two URLs side-by-side.
+.TP
+.B \-\-version
+Show version and author.
+.SH EXAMPLES
+.TP
+.B curldbg \-L https://example.com
+Follow redirects and print timing.
+.TP
+.B curldbg \-u user:pass \-H "Accept: application/json" https://example.com
+Use Basic auth and custom header.
+.TP
+.B curldbg \-T ./file.bin https://example.com/upload
+Upload a file using PUT.
+.TP
+.B curldbg \-\-compare https://example.com
+Compare IPv4 vs IPv6 for one URL.
+.SH AUTHOR
+Pau Santana.
