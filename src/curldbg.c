@@ -966,8 +966,19 @@ int connect_tcp(
     size_t connected_ip_size,
     int *connected_family,
     int connect_timeout_ms,
-    struct connect_race_info *race_info
+    struct connect_race_info *race_info,
+    bool happy_eyeballs
 ) {
+    if (!happy_eyeballs) {
+        return connect_tcp_sequential(
+            addrs,
+            connected_ip,
+            connected_ip_size,
+            connected_family,
+            connect_timeout_ms,
+            race_info
+        );
+    }
     return connect_tcp_happy_eyeballs(
         addrs,
         connected_ip,
@@ -1393,7 +1404,7 @@ int receive_response(
     bool follow_redirects,
     bool fail_on_http_error
 ) {
-    char recv_buf[4096];
+    char recv_buf[RESPONSE_READ_BUF];
     char header_buf[HEADER_MAX + 1];
     size_t header_len = 0;
     bool header_done = false;

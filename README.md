@@ -72,6 +72,7 @@ Flags:
 - `-T, --upload-file <file>` upload file as the PUT request body (single request mode only)
 - `--connect-timeout <ms>` timeout per connect attempt
 - `--read-timeout <ms>` timeout for read/write operations
+- `--no-happy-eyeballs` disable Happy Eyeballs and connect sequentially
 - `--max-redirs <n>` maximum redirects when `-L` is enabled (default: 10)
 - `--version` show version and author
 

@@ -11,6 +11,7 @@
 
 #define PREVIEW_BYTES 1024
 #define HEADER_MAX 16384
+#define RESPONSE_READ_BUF 32768
 #define DEFAULT_MAX_REDIRECTS 10
 #define CURLDBG_VERSION "0.5.1"
 
@@ -80,7 +81,8 @@ int connect_tcp(
     size_t connected_ip_size,
     int *connected_family,
     int connect_timeout_ms,
-    struct connect_race_info *race_info
+    struct connect_race_info *race_info,
+    bool happy_eyeballs
 );
 void apply_socket_timeout(int fd, int timeout_ms);
 void close_connection(struct connection *conn);

@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
 struct run_options {
     char method[8];
@@ -25,6 +26,7 @@ struct run_options {
     const char **extra_headers;
     size_t extra_header_count;
     const char *upload_path;
+    bool happy_eyeballs;
 };
 
 struct run_result {
@@ -105,6 +107,14 @@ static bool is_localhost_url(const char *input_url) {
     return strcmp(url.host, "localhost") == 0 ||
            strcmp(url.host, "127.0.0.1") == 0 ||
            strcmp(url.host, "::1") == 0;
+}
+
+static void configure_output_buffering(void) {
+    if (isatty(fileno(stdout))) {
+        (void)setvbuf(stdout, NULL, _IOLBF, 0);
+        return;
+    }
+    (void)setvbuf(stdout, NULL, _IOFBF, 64 * 1024);
 }
 
 static void maybe_print_april_fools(void) {
@@ -364,7 +374,8 @@ static int run_request(
             sizeof(out->hops[out->hop_count].connected_ip),
             &out->hops[out->hop_count].connected_family,
             opts->connect_timeout_ms,
-            &race_info
+            &race_info,
+            opts->happy_eyeballs
         );
         if (clock_gettime(CLOCK_MONOTONIC, &connect_end) != 0) {
             die("clock_gettime");
@@ -723,10 +734,13 @@ int main(int argc, char **argv) {
     bool debug_chaos = false;
     bool lore_mode = false;
     bool fika_mode = false;
+    bool happy_eyeballs = true;
     int address_family = AF_UNSPEC;
     int connect_timeout_ms = 0;
     int read_timeout_ms = 0;
     int max_redirects = DEFAULT_MAX_REDIRECTS;
+
+    configure_output_buffering();
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--compare") == 0) {
@@ -757,6 +771,10 @@ int main(int argc, char **argv) {
         }
         if (strcmp(argv[i], "--fika") == 0) {
             fika_mode = true;
+            continue;
+        }
+        if (strcmp(argv[i], "--no-happy-eyeballs") == 0) {
+            happy_eyeballs = false;
             continue;
         }
         if (strcmp(argv[i], "-k") == 0 || strcmp(argv[i], "--insecure") == 0) {
@@ -882,6 +900,10 @@ int main(int argc, char **argv) {
                 return EXIT_FAILURE;
             }
             connect_timeout_ms = parse_non_negative_int(argv[++i], "--connect-timeout");
+            continue;
+        }
+        if (strcmp(argv[i], "--no-happy-eyeballs") == 0) {
+            happy_eyeballs = false;
             continue;
         }
         if (strcmp(argv[i], "--read-timeout") == 0) {
@@ -1033,7 +1055,7 @@ int main(int argc, char **argv) {
                 stderr,
                 "Usage: %s [-L] [-4|-6] [-X GET|POST|PUT] [-d data] [-f] [-s] [-S] [-k] [-u user:pass] "
                 "[-H header] [-o file | -O] [-T file] "
-                "[--connect-timeout ms] [--read-timeout ms] "
+                "[--connect-timeout ms] [--read-timeout ms] [--no-happy-eyeballs] "
                 "[--max-redirs n] <url>\n"
                 "  URL may be http://..., https://..., or bare host/path (defaults to https)\n",
                 argv[0]
@@ -1077,6 +1099,7 @@ int main(int argc, char **argv) {
         opts.extra_headers = extra_headers;
         opts.extra_header_count = extra_header_count;
         opts.upload_path = upload_path;
+        opts.happy_eyeballs = happy_eyeballs;
 
         if (!silent) {
             maybe_print_april_fools();
@@ -1122,7 +1145,7 @@ int main(int argc, char **argv) {
             fprintf(
                 stderr,
                 "Usage: %s --compare [-L] [-X GET|POST|PUT] [-d data] [-f] [-s] [-S] [-k] [-u user:pass] "
-                "[-H header] [--connect-timeout ms] "
+                "[-H header] [--connect-timeout ms] [--no-happy-eyeballs] "
                 "[--read-timeout ms] [--max-redirs n] "
                 "<url>\n",
                 argv[0]
@@ -1148,6 +1171,7 @@ int main(int argc, char **argv) {
         opts_v4.extra_headers = extra_headers;
         opts_v4.extra_header_count = extra_header_count;
         opts_v4.upload_path = NULL;
+        opts_v4.happy_eyeballs = happy_eyeballs;
 
         opts_v6 = opts_v4;
         opts_v6.address_family = AF_INET6;
@@ -1246,7 +1270,7 @@ int main(int argc, char **argv) {
                 stderr,
                 "Usage: %s --compare-urls [-L] [-4|-6] [-X GET|POST|PUT] [-d data] [-f] [-s] [-S] [-k] "
                 "[-u user:pass] [-H header] "
-                "[--connect-timeout ms] [--read-timeout ms] "
+                "[--connect-timeout ms] [--read-timeout ms] [--no-happy-eyeballs] "
                 "[--max-redirs n] <url-a> <url-b>\n",
                 argv[0]
             );
@@ -1267,6 +1291,7 @@ int main(int argc, char **argv) {
         opts.extra_headers = extra_headers;
         opts.extra_header_count = extra_header_count;
         opts.upload_path = NULL;
+        opts.happy_eyeballs = happy_eyeballs;
 
         memset(&result_a, 0, sizeof(result_a));
         memset(&result_b, 0, sizeof(result_b));
