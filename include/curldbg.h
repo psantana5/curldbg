@@ -30,6 +30,7 @@ struct response_info {
     int status_code;
     char location[2048];
     bool chunked;
+    long content_length;
 };
 
 struct hop_info {
@@ -89,6 +90,7 @@ int connect_tcp(
 );
 void apply_socket_timeout(int fd, int timeout_ms);
 void close_connection(struct connection *conn);
+void warmup_tls(void);
 int init_tls(
     struct connection *conn,
     const char *hostname,

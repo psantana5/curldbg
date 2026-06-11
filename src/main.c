@@ -285,6 +285,7 @@ static int run_request(
     const struct run_options *opts,
     struct run_result *out
 ) {
+    warmup_tls();
     char current_url[2048];
     char next_url[2048];
     int redirect_count = 0;
@@ -292,10 +293,18 @@ static int run_request(
     size_t upload_size = 0;
     struct timespec total_start, total_end;
     int preferred_family = AF_INET;
+    struct connection conn;
+    struct addrinfo *conn_addrs = NULL;
+    char conn_host[256] = "";
+    char conn_port[16] = "";
+    bool conn_use_tls = false;
+    int gai_error = 0;
 
     memset(out, 0, sizeof(*out));
     out->ttfb_ms = -1.0;
     out->error[0] = '\0';
+    memset(&conn, 0, sizeof(conn));
+    conn.fd = -1;
 
     if (strlen(input_url) >= sizeof(current_url)) {
         snprintf(out->error, sizeof(out->error), "URL too long");
@@ -343,14 +352,12 @@ static int run_request(
         struct url_info url;
         struct url_info redirected_url;
         struct addrinfo *addrs = NULL;
-        int fd;
-        int gai_error = 0;
-        struct connection conn;
         struct connect_race_info race_info;
         struct timespec dns_start, dns_end;
         struct timespec connect_start, connect_end;
         struct timespec ttfb_start;
         bool can_redirect = false;
+        bool reuse_connection = false;
 
         if (opts->max_time_ms > 0) {
             long rem = deadline_remaining_ms(&total_start, opts->max_time_ms);
@@ -358,6 +365,8 @@ static int run_request(
                 snprintf(out->error, sizeof(out->error), "Operation timed out after %d ms", opts->max_time_ms);
                 free_run_result(out);
                 close_upload_file(&upload_file);
+                close_connection(&conn);
+                freeaddrinfo(conn_addrs);
                 return -1;
             }
         }
@@ -366,106 +375,141 @@ static int run_request(
             snprintf(out->error, sizeof(out->error), "Invalid URL: %s", current_url);
             free_run_result(out);
             close_upload_file(&upload_file);
+            close_connection(&conn);
+            freeaddrinfo(conn_addrs);
             return -1;
         }
         if (out->hop_count >= opts->max_redirects + 1) {
             snprintf(out->error, sizeof(out->error), "Too many hops");
             free_run_result(out);
             close_upload_file(&upload_file);
+            close_connection(&conn);
+            freeaddrinfo(conn_addrs);
             return -1;
         }
         memset(&out->hops[out->hop_count], 0, sizeof(out->hops[out->hop_count]));
 
-        if (clock_gettime(CLOCK_MONOTONIC, &dns_start) != 0) {
-            die("clock_gettime");
-        }
-        addrs = resolve_dns(&url, opts->address_family, &gai_error);
-        if (clock_gettime(CLOCK_MONOTONIC, &dns_end) != 0) {
-            die("clock_gettime");
-        }
-        if (addrs == NULL) {
-            snprintf(out->error, sizeof(out->error), "DNS resolution failed: %s", gai_strerror(gai_error));
-            free_run_result(out);
-            close_upload_file(&upload_file);
-            return -1;
-        }
-        out->dns_ms += ms_between(&dns_start, &dns_end);
+        reuse_connection = (conn.fd >= 0 &&
+            strcmp(url.host, conn_host) == 0 &&
+            strcmp(url.port, conn_port) == 0 &&
+            url.use_tls == conn_use_tls);
 
-        if (clock_gettime(CLOCK_MONOTONIC, &connect_start) != 0) {
-            die("clock_gettime");
+        if (reuse_connection && out->hop_count > 0) {
+            const struct hop_info *prev = &out->hops[out->hop_count - 1];
+            strcpy(out->hops[out->hop_count].connected_ip, prev->connected_ip);
+            out->hops[out->hop_count].connected_family = prev->connected_family;
         }
-        int effective_connect_ms = opts->connect_timeout_ms;
-        if (opts->max_time_ms > 0) {
-            long rem = deadline_remaining_ms(&total_start, opts->max_time_ms);
-            if (rem <= 0) {
-                snprintf(out->error, sizeof(out->error), "Operation timed out after %d ms", opts->max_time_ms);
-                freeaddrinfo(addrs);
+
+        if (!reuse_connection) {
+            close_connection(&conn);
+            freeaddrinfo(conn_addrs);
+            conn_addrs = NULL;
+            conn_host[0] = '\0';
+            conn_port[0] = '\0';
+
+            if (clock_gettime(CLOCK_MONOTONIC, &dns_start) != 0) {
+                die("clock_gettime");
+            }
+            addrs = resolve_dns(&url, opts->address_family, &gai_error);
+            if (clock_gettime(CLOCK_MONOTONIC, &dns_end) != 0) {
+                die("clock_gettime");
+            }
+            if (addrs == NULL) {
+                snprintf(out->error, sizeof(out->error), "DNS resolution failed: %s", gai_strerror(gai_error));
                 free_run_result(out);
                 close_upload_file(&upload_file);
                 return -1;
             }
-            if (effective_connect_ms <= 0 || (int)rem < effective_connect_ms) {
-                effective_connect_ms = (int)rem;
+            out->dns_ms += ms_between(&dns_start, &dns_end);
+
+            conn_addrs = addrs;
+            strcpy(conn_host, url.host);
+            strcpy(conn_port, url.port);
+            conn_use_tls = url.use_tls;
+
+            if (clock_gettime(CLOCK_MONOTONIC, &connect_start) != 0) {
+                die("clock_gettime");
             }
-        }
-        fd = connect_tcp(
-            addrs,
-            out->hops[out->hop_count].connected_ip,
-            sizeof(out->hops[out->hop_count].connected_ip),
-            &out->hops[out->hop_count].connected_family,
-            effective_connect_ms,
-            &race_info,
-            opts->happy_eyeballs,
-            preferred_family
-        );
-        if (clock_gettime(CLOCK_MONOTONIC, &connect_end) != 0) {
-            die("clock_gettime");
-        }
-        if (fd < 0) {
-            snprintf(out->error, sizeof(out->error), "TCP connect failed: %s", strerror(errno));
-            freeaddrinfo(addrs);
-            free_run_result(out);
-            close_upload_file(&upload_file);
-            return -1;
-        }
-        preferred_family = out->hops[out->hop_count].connected_family;
-        if (race_info.winner_connect_ms > 0.0) {
-            out->connect_ms += race_info.winner_connect_ms;
+            int effective_connect_ms = opts->connect_timeout_ms;
+            if (opts->max_time_ms > 0) {
+                long rem = deadline_remaining_ms(&total_start, opts->max_time_ms);
+                if (rem <= 0) {
+                    snprintf(out->error, sizeof(out->error), "Operation timed out after %d ms", opts->max_time_ms);
+                    freeaddrinfo(addrs);
+                    conn_addrs = NULL;
+                    free_run_result(out);
+                    close_upload_file(&upload_file);
+                    return -1;
+                }
+                if (effective_connect_ms <= 0 || (int)rem < effective_connect_ms) {
+                    effective_connect_ms = (int)rem;
+                }
+            }
+            int fd = connect_tcp(
+                addrs,
+                out->hops[out->hop_count].connected_ip,
+                sizeof(out->hops[out->hop_count].connected_ip),
+                &out->hops[out->hop_count].connected_family,
+                effective_connect_ms,
+                &race_info,
+                opts->happy_eyeballs,
+                preferred_family
+            );
+            if (clock_gettime(CLOCK_MONOTONIC, &connect_end) != 0) {
+                die("clock_gettime");
+            }
+            if (fd < 0) {
+                snprintf(out->error, sizeof(out->error), "TCP connect failed: %s", strerror(errno));
+                freeaddrinfo(addrs);
+                conn_addrs = NULL;
+                free_run_result(out);
+                close_upload_file(&upload_file);
+                return -1;
+            }
+            preferred_family = out->hops[out->hop_count].connected_family;
+            if (race_info.winner_connect_ms > 0.0) {
+                out->connect_ms += race_info.winner_connect_ms;
+            } else {
+                out->connect_ms += ms_between(&connect_start, &connect_end);
+            }
+
+            conn.fd = fd;
+            conn.use_tls = url.use_tls;
+            conn.ctx = NULL;
+            conn.ssl = NULL;
+            conn.verbose = opts->verbose;
+
+            int effective_read_ms = opts->read_timeout_ms;
+            if (opts->max_time_ms > 0) {
+                long rem = deadline_remaining_ms(&total_start, opts->max_time_ms);
+                if (rem <= 0) {
+                    snprintf(out->error, sizeof(out->error), "Operation timed out after %d ms", opts->max_time_ms);
+                    close_connection(&conn);
+                    freeaddrinfo(addrs);
+                    conn_addrs = NULL;
+                    free_run_result(out);
+                    close_upload_file(&upload_file);
+                    return -1;
+                }
+                if (effective_read_ms <= 0 || (int)rem < effective_read_ms) {
+                    effective_read_ms = (int)rem;
+                }
+            }
+            apply_socket_timeout(conn.fd, effective_read_ms);
+
+            if (url.use_tls) {
+                if (init_tls(&conn, url.host, opts->insecure_tls, out->error, sizeof(out->error)) != 0) {
+                    close_connection(&conn);
+                    freeaddrinfo(addrs);
+                    conn_addrs = NULL;
+                    free_run_result(out);
+                    close_upload_file(&upload_file);
+                    return -1;
+                }
+            }
         } else {
-            out->connect_ms += ms_between(&connect_start, &connect_end);
-        }
-
-        conn.fd = fd;
-        conn.use_tls = url.use_tls;
-        conn.ctx = NULL;
-        conn.ssl = NULL;
-        conn.verbose = opts->verbose;
-
-        int effective_read_ms = opts->read_timeout_ms;
-        if (opts->max_time_ms > 0) {
-            long rem = deadline_remaining_ms(&total_start, opts->max_time_ms);
-            if (rem <= 0) {
-                snprintf(out->error, sizeof(out->error), "Operation timed out after %d ms", opts->max_time_ms);
-                close_connection(&conn);
-                freeaddrinfo(addrs);
-                free_run_result(out);
-                close_upload_file(&upload_file);
-                return -1;
-            }
-            if (effective_read_ms <= 0 || (int)rem < effective_read_ms) {
-                effective_read_ms = (int)rem;
-            }
-        }
-        apply_socket_timeout(conn.fd, effective_read_ms);
-
-        if (url.use_tls) {
-            if (init_tls(&conn, url.host, opts->insecure_tls, out->error, sizeof(out->error)) != 0) {
-                close_connection(&conn);
-                freeaddrinfo(addrs);
-                free_run_result(out);
-                close_upload_file(&upload_file);
-                return -1;
-            }
+            addrs = conn_addrs;
+            memset(&race_info, 0, sizeof(race_info));
         }
 
         if (clock_gettime(CLOCK_MONOTONIC, &ttfb_start) != 0) {
@@ -475,7 +519,8 @@ static int run_request(
             if (fseeko(upload_file, 0, SEEK_SET) != 0) {
                 snprintf(out->error, sizeof(out->error), "Failed to rewind upload file");
                 close_connection(&conn);
-                freeaddrinfo(addrs);
+                freeaddrinfo(conn_addrs);
+                conn_addrs = NULL;
                 free_run_result(out);
                 close_upload_file(&upload_file);
                 return -1;
@@ -496,7 +541,8 @@ static int run_request(
                 sizeof(out->error)
             ) != 0) {
             close_connection(&conn);
-            freeaddrinfo(addrs);
+            freeaddrinfo(conn_addrs);
+            conn_addrs = NULL;
             free_run_result(out);
             close_upload_file(&upload_file);
             return -1;
@@ -514,7 +560,8 @@ static int run_request(
                 head_method
             ) != 0) {
             close_connection(&conn);
-            freeaddrinfo(addrs);
+            freeaddrinfo(conn_addrs);
+            conn_addrs = NULL;
             free_run_result(out);
             close_upload_file(&upload_file);
             return -1;
@@ -522,7 +569,8 @@ static int run_request(
         if (opts->fail_on_http_error && out->resp.status_code >= 400) {
             snprintf(out->error, sizeof(out->error), "HTTP %d", out->resp.status_code);
             close_connection(&conn);
-            freeaddrinfo(addrs);
+            freeaddrinfo(conn_addrs);
+            conn_addrs = NULL;
             free_run_result(out);
             close_upload_file(&upload_file);
             return -1;
@@ -531,24 +579,26 @@ static int run_request(
 
         snprintf(out->hops[out->hop_count].host, sizeof(out->hops[out->hop_count].host), "%s", url.host);
         out->hops[out->hop_count].status_code = out->resp.status_code;
-        out->hops[out->hop_count].dns_ms = ms_between(&dns_start, &dns_end);
-        if (race_info.winner_connect_ms > 0.0) {
-            out->hops[out->hop_count].tcp_ms = race_info.winner_connect_ms;
-        } else {
-            out->hops[out->hop_count].tcp_ms = ms_between(&connect_start, &connect_end);
+        if (!reuse_connection) {
+            out->hops[out->hop_count].dns_ms = ms_between(&dns_start, &dns_end);
+            if (race_info.winner_connect_ms > 0.0) {
+                out->hops[out->hop_count].tcp_ms = race_info.winner_connect_ms;
+            } else {
+                out->hops[out->hop_count].tcp_ms = ms_between(&connect_start, &connect_end);
+            }
+            out->hops[out->hop_count].has_loser = race_info.has_loser;
+            if (race_info.has_loser) {
+                snprintf(
+                    out->hops[out->hop_count].loser_ip,
+                    sizeof(out->hops[out->hop_count].loser_ip),
+                    "%s",
+                    race_info.loser_ip
+                );
+                out->hops[out->hop_count].loser_family = race_info.loser_family;
+                out->hops[out->hop_count].loser_connect_ms = race_info.loser_connect_ms;
+            }
         }
         out->hops[out->hop_count].ttfb_ms = out->resp.ttfb_ms;
-        out->hops[out->hop_count].has_loser = race_info.has_loser;
-        if (race_info.has_loser) {
-            snprintf(
-                out->hops[out->hop_count].loser_ip,
-                sizeof(out->hops[out->hop_count].loser_ip),
-                "%s",
-                race_info.loser_ip
-            );
-            out->hops[out->hop_count].loser_family = race_info.loser_family;
-            out->hops[out->hop_count].loser_connect_ms = race_info.loser_connect_ms;
-        }
 
         if (is_redirect_status(out->resp.status_code) && out->resp.location[0] != '\0' &&
             build_redirect_url(out->resp.location, &url, next_url, sizeof(next_url)) == 0 &&
@@ -563,15 +613,15 @@ static int run_request(
             can_redirect = true;
         }
 
-        close_connection(&conn);
-        freeaddrinfo(addrs);
-
         out->hop_count++;
 
         if (!opts->follow_redirects || !can_redirect) {
             if (format_url(&url, out->final_url, sizeof(out->final_url)) != 0) {
                 snprintf(out->final_url, sizeof(out->final_url), "%s", current_url);
             }
+            close_connection(&conn);
+            freeaddrinfo(conn_addrs);
+            conn_addrs = NULL;
             break;
         }
 
@@ -579,7 +629,21 @@ static int run_request(
             snprintf(out->error, sizeof(out->error), "Too many redirects (limit %d)", opts->max_redirects);
             free_run_result(out);
             close_upload_file(&upload_file);
+            close_connection(&conn);
+            freeaddrinfo(conn_addrs);
             return -1;
+        }
+
+        bool same_host = (strcmp(redirected_url.host, conn_host) == 0 &&
+                          strcmp(redirected_url.port, conn_port) == 0 &&
+                          redirected_url.use_tls == conn_use_tls);
+
+        if (!same_host) {
+            close_connection(&conn);
+            freeaddrinfo(conn_addrs);
+            conn_addrs = NULL;
+            conn_host[0] = '\0';
+            conn_port[0] = '\0';
         }
 
         strcpy(current_url, next_url);

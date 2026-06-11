@@ -344,36 +344,52 @@ int format_url(const struct url_info *url, char *out_url, size_t out_size) {
 }
 
 static void parse_response_headers(char *headers, struct response_info *out) {
-    char *line;
-    char *line_end;
-
     out->status_code = 0;
     out->location[0] = '\0';
     out->chunked = false;
+    out->content_length = -1;
 
-    line_end = strstr(headers, "\r\n");
-    if (line_end == NULL) {
+    char *nl = (char *)memchr(headers, '\n', HEADER_MAX);
+    if (nl == NULL || nl == headers) {
         return;
     }
-    *line_end = '\0';
+    if (*(nl - 1) == '\r') {
+        *(nl - 1) = '\0';
+    }
+    *nl = '\0';
     if (sscanf(headers, "HTTP/%*d.%*d %d", &out->status_code) != 1) {
         out->status_code = 0;
+        return;
     }
 
-    line = line_end + 2;
-    while (*line != '\0') {
-        char *next = strstr(line, "\r\n");
-        if (next == NULL) {
+    char *line = nl + 1;
+    size_t remaining = HEADER_MAX - (size_t)(line - headers);
+    while (remaining > 0 && *line != '\0') {
+        nl = (char *)memchr(line, '\n', remaining);
+        if (nl == NULL) {
             break;
         }
-        *next = '\0';
+        size_t line_len = (size_t)(nl - line);
+        if (line_len > 0 && *(nl - 1) == '\r') {
+            *(nl - 1) = '\0';
+            line_len--;
+        }
+        *nl = '\0';
 
-        if (strncasecmp(line, "Location:", 9) == 0) {
+        if (line_len >= 9 && strncasecmp(line, "Location:", 9) == 0) {
             char *value = line + 9;
             trim_spaces(&value);
             strncpy(out->location, value, sizeof(out->location) - 1);
             out->location[sizeof(out->location) - 1] = '\0';
-        } else if (strncasecmp(line, "Transfer-Encoding:", 18) == 0) {
+        } else if (line_len >= 15 && strncasecmp(line, "Content-Length:", 15) == 0) {
+            const char *val = line + 15;
+            trim_spaces((char **)&val);
+            char *end = NULL;
+            long cl = strtol(val, &end, 10);
+            if (*end == '\0' && cl >= 0) {
+                out->content_length = cl;
+            }
+        } else if (line_len >= 18 && strncasecmp(line, "Transfer-Encoding:", 18) == 0) {
             const char *val = line + 18;
             trim_spaces((char **)&val);
             if (strcasecmp(val, "chunked") == 0) {
@@ -381,7 +397,8 @@ static void parse_response_headers(char *headers, struct response_info *out) {
             }
         }
 
-        line = next + 2;
+        line = nl + 1;
+        remaining = HEADER_MAX - (size_t)(line - headers);
     }
 }
 
@@ -1091,6 +1108,12 @@ void close_connection(struct connection *conn) {
     }
 }
 
+void warmup_tls(void) {
+    SSL_CTX *ctx = NULL;
+    char err[256];
+    (void)get_shared_tls_ctx(&ctx, err, sizeof(err));
+}
+
 int init_tls(struct connection *conn, const char *hostname, bool insecure, char *error, size_t error_len) {
     SSL_CTX *shared_ctx = NULL;
 
@@ -1385,7 +1408,7 @@ int send_request(
 
     req_len = strlen(verb) + strlen(url->path) + strlen(host_header) +
               strlen(body_headers) + auth_len + extra_len + 128;
-    req = calloc(req_len + 1, 1);
+    req = malloc(req_len + 1);
     if (req == NULL) {
         set_error(error, error_len, "Out of memory building request");
         return -1;
@@ -1393,37 +1416,33 @@ int send_request(
 
     {
         size_t offset = 0;
-        if (has_host) {
-            n = snprintf(
-                req,
-                req_len + 1,
-                "%s %s HTTP/1.1\r\n"
-                "User-Agent: %s\r\n"
-                "Connection: close\r\n",
-                verb,
-                url->path,
-                user_agent
-            );
-        } else {
-            n = snprintf(
-                req,
-                req_len + 1,
-                "%s %s HTTP/1.1\r\n"
-                "Host: %s\r\n"
-                "User-Agent: %s\r\n"
-                "Connection: close\r\n",
-                verb,
-                url->path,
-                host_header,
-                user_agent
-            );
+        {
+            size_t vlen = strlen(verb);
+            memcpy(req + offset, verb, vlen);
+            offset += vlen;
+            req[offset++] = ' ';
+            size_t plen = strlen(url->path);
+            memcpy(req + offset, url->path, plen);
+            offset += plen;
+            memcpy(req + offset, " HTTP/1.1\r\n", 11);
+            offset += 11;
+            if (!has_host) {
+                memcpy(req + offset, "Host: ", 6);
+                offset += 6;
+                size_t hlen = strlen(host_header);
+                memcpy(req + offset, host_header, hlen);
+                offset += hlen;
+                memcpy(req + offset, "\r\n", 2);
+                offset += 2;
+            }
+            memcpy(req + offset, "User-Agent: ", 12);
+            offset += 12;
+            size_t ualen = strlen(user_agent);
+            memcpy(req + offset, user_agent, ualen);
+            offset += ualen;
+            memcpy(req + offset, "\r\n", 2);
+            offset += 2;
         }
-        if (n < 0 || (size_t)n >= req_len + 1) {
-            set_error(error, error_len, "Request is too large");
-            free(req);
-            return -1;
-        }
-        offset = (size_t)n;
 
         if (include_body_headers && body_headers[0] != '\0') {
             if (append_str(req, req_len + 1, &offset, body_headers) != 0) {
@@ -1467,7 +1486,6 @@ int send_request(
             fprintf(stderr, "> Host: %s\n", host_header);
         }
         fprintf(stderr, "> User-Agent: %s\n", user_agent);
-        fprintf(stderr, "> Connection: close\n");
         if (include_body_headers) {
             size_t off = 0;
             while (off < strlen(body_headers)) {
@@ -1604,7 +1622,7 @@ static size_t chunked_write(const char *buf, size_t len, FILE *body_out, struct 
 }
 
 /*
- * Read response until EOF.
+ * Read response body until Content-Length or EOF.
  * - Measures TTFB from ttfb_start to first recv()/SSL_read() data
  * - Captures first ~1KB of body (headers are stripped)
  */
@@ -1632,6 +1650,7 @@ int receive_response(
     char chunk_line_buf[32];
     size_t chunk_line_len = 0;
     bool trailer_mode = false;
+    long body_remaining = -1;
 
     memset(out, 0, sizeof(*out));
 
@@ -1713,12 +1732,8 @@ int receive_response(
                     return 0;
                 }
 
-                if ((follow_redirects && is_redirect_status(out->status_code) && out->location[0] != '\0') ||
-                    (fail_on_http_error && out->status_code >= 400)) {
-                    return 0;
-                }
-
                 chunked = out->chunked;
+                body_remaining = out->content_length;
                 if (chunked) {
                     size_t cw = chunked_write(body_start, body_available, write_body ? body_out : NULL, out,
                                       &chunk_state, &chunk_remaining, chunk_line_buf, &chunk_line_len);
@@ -1749,8 +1764,14 @@ int receive_response(
                         set_error(error, error_len, "Failed to write response body");
                         return -1;
                     }
+                    if (body_remaining > 0) {
+                        body_remaining -= (long)body_available;
+                    }
                 }
                 header_done = true;
+                if (!chunked && body_remaining <= 0) {
+                    break;
+                }
             }
             continue;
         }
@@ -1781,9 +1802,19 @@ int receive_response(
                 }
             }
         } else {
-            if (write_body_data(recv_buf, (size_t)n, write_body ? body_out : NULL, out) == (size_t)-1) {
+            size_t take = (size_t)n;
+            if (body_remaining >= 0 && (long)take > body_remaining) {
+                take = (size_t)body_remaining;
+            }
+            if (write_body_data(recv_buf, take, write_body ? body_out : NULL, out) == (size_t)-1) {
                 set_error(error, error_len, "Failed to write response body");
                 return -1;
+            }
+            if (body_remaining >= 0) {
+                body_remaining -= (long)take;
+                if (body_remaining == 0) {
+                    break;
+                }
             }
         }
     }
