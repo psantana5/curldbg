@@ -835,6 +835,14 @@ int main(int argc, char **argv) {
             fail_on_http_error = true;
             continue;
         }
+        if (strcmp(argv[i], "--progress-bar") == 0) {
+            continue;
+        }
+        if (strcmp(argv[i], "-I") == 0 || strcmp(argv[i], "--head") == 0) {
+            strcpy(request_method, "HEAD");
+            method_explicit = true;
+            continue;
+        }
         if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--silent") == 0) {
             silent = true;
             continue;
@@ -982,7 +990,7 @@ int main(int argc, char **argv) {
             }
             continue;
         }
-        if (strcmp(argv[i], "-L") == 0) {
+        if (strcmp(argv[i], "-L") == 0 || strcmp(argv[i], "--location") == 0) {
             follow_redirects = true;
             continue;
         }
@@ -1052,6 +1060,10 @@ int main(int argc, char **argv) {
                         break;
                     case 'L':
                         follow_redirects = true;
+                        break;
+                    case 'I':
+                        strcpy(request_method, "HEAD");
+                        method_explicit = true;
                         break;
                     default:
                         handled = false;
