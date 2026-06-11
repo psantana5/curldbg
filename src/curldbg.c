@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include "curldbg.h"
 
 #include <errno.h>
@@ -14,10 +15,11 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <arpa/inet.h>
 
 #include <openssl/err.h>
 
-#define HAPPY_EYEBALLS_DELAY_MS 100
+#define HAPPY_EYEBALLS_DELAY_MS 25
 
 void die(const char *msg) {
     perror(msg);
@@ -489,12 +491,92 @@ struct addrinfo *resolve_dns(const struct url_info *url, int address_family, int
     return result;
 }
 
+struct dns_thread_arg {
+    struct url_info url;
+    int address_family;
+    struct addrinfo *result;
+    int gai_error;
+};
+
+static void *dns_thread_run(void *arg) {
+    struct dns_thread_arg *a = arg;
+    a->result = resolve_dns(&a->url, a->address_family, &a->gai_error);
+    return arg;
+}
+
+struct addrinfo *resolve_dns_timeout(
+    const struct url_info *url,
+    int address_family,
+    int *gai_error,
+    int timeout_ms
+) {
+    struct dns_thread_arg *arg;
+    struct addrinfo *result;
+    struct dns_thread_arg *finished;
+    pthread_t thread;
+    struct timespec ts;
+    int rc;
+
+    if (timeout_ms <= 0) {
+        return resolve_dns(url, address_family, gai_error);
+    }
+
+    /* Numeric IP addresses resolve instantly (no network I/O) — skip thread. */
+    {
+        struct in_addr a4;
+        struct in6_addr a6;
+        if (inet_pton(AF_INET, url->host, &a4) == 1 ||
+            inet_pton(AF_INET6, url->host, &a6) == 1) {
+            return resolve_dns(url, address_family, gai_error);
+        }
+    }
+
+    arg = malloc(sizeof(*arg));
+    if (arg == NULL) {
+        return resolve_dns(url, address_family, gai_error);
+    }
+
+    arg->url = *url;
+    arg->address_family = address_family;
+    arg->result = NULL;
+    arg->gai_error = 0;
+
+    if (pthread_create(&thread, NULL, dns_thread_run, arg) != 0) {
+        free(arg);
+        return resolve_dns(url, address_family, gai_error);
+    }
+
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += timeout_ms / 1000;
+    ts.tv_nsec += (timeout_ms % 1000) * 1000000LL;
+    if (ts.tv_nsec >= 1000000000LL) {
+        ts.tv_sec++;
+        ts.tv_nsec -= 1000000000LL;
+    }
+
+    rc = pthread_timedjoin_np(thread, (void **)&finished, &ts);
+    if (rc == ETIMEDOUT) {
+        pthread_detach(thread);
+        if (gai_error != NULL) {
+            *gai_error = EAI_AGAIN;
+        }
+        return NULL;
+    }
+
+    result = finished->result;
+    if (gai_error != NULL) {
+        *gai_error = finished->gai_error;
+    }
+    free(finished);
+    return result;
+}
+
 static int connect_with_timeout(int fd, const struct sockaddr *addr, socklen_t addrlen, int timeout_ms) {
     int flags;
     int rc;
 
     if (timeout_ms <= 0) {
-        return connect(fd, addr, addrlen);
+        timeout_ms = 30000;
     }
 
     flags = fcntl(fd, F_GETFL, 0);
@@ -795,6 +877,26 @@ static int connect_tcp_happy_eyeballs(
                 }
                 if (nearest_deadline >= 0 && (poll_timeout < 0 || nearest_deadline < poll_timeout)) {
                     poll_timeout = nearest_deadline;
+                }
+            }
+
+            if (poll_timeout < 0) {
+                int per_attempt_default = 30000;
+                int nearest_deadline = -1;
+                for (size_t i = 0; i < total; i++) {
+                    if (!attempts[i].active) {
+                        continue;
+                    }
+                    long long remain = (attempts[i].started_ms + per_attempt_default) - now;
+                    int remain_ms = (remain <= 0) ? 0 : (int)remain;
+                    if (nearest_deadline < 0 || remain_ms < nearest_deadline) {
+                        nearest_deadline = remain_ms;
+                    }
+                }
+                if (nearest_deadline >= 0) {
+                    poll_timeout = nearest_deadline;
+                } else {
+                    poll_timeout = 30000;
                 }
             }
 
@@ -1696,18 +1798,38 @@ int receive_response(
         }
 
         if (!header_done) {
-            if (header_len + (size_t)n >= sizeof(header_buf)) {
-                set_error(error, error_len, "Response headers too large");
-                return -1;
+            /* Cap what goes into header_buf so a large TCP read doesn't overflow it.
+               Excess recv_buf data is combined with the header_buf body tail and
+               processed as body once headers are found. */
+            size_t hbuf_room = sizeof(header_buf) - header_len - 1;
+            size_t hbuf_take = (size_t)n;
+            size_t recv_excess = 0;
+            if (hbuf_take > hbuf_room) {
+                hbuf_take = hbuf_room;
+                recv_excess = (size_t)n - hbuf_take;
             }
-            memcpy(header_buf + header_len, recv_buf, (size_t)n);
-            header_len += (size_t)n;
+            memcpy(header_buf + header_len, recv_buf, hbuf_take);
+            header_len += hbuf_take;
             header_buf[header_len] = '\0';
 
             char *body_start = find_header_end(header_buf, header_len);
             if (body_start != NULL) {
                 size_t header_bytes = (size_t)(body_start - header_buf);
-                size_t body_available = header_len - header_bytes;
+                size_t body_in_hbuf = header_len - header_bytes;
+
+                /* Combine body data from the header_buf tail and any recv_buf
+                   bytes that did not fit into header_buf. */
+                char pending_body[RESPONSE_READ_BUF];
+                size_t pending_len = 0;
+                if (body_in_hbuf > 0) {
+                    memcpy(pending_body, body_start, body_in_hbuf);
+                    pending_len = body_in_hbuf;
+                }
+                if (recv_excess > 0) {
+                    memcpy(pending_body + pending_len, recv_buf + hbuf_take, recv_excess);
+                    pending_len += recv_excess;
+                }
+
                 char headers_only[HEADER_MAX + 1];
 
                 memcpy(headers_only, header_buf, header_bytes);
@@ -1735,23 +1857,23 @@ int receive_response(
                 chunked = out->chunked;
                 body_remaining = out->content_length;
                 if (chunked) {
-                    size_t cw = chunked_write(body_start, body_available, write_body ? body_out : NULL, out,
+                    size_t cw = chunked_write(pending_body, pending_len, write_body ? body_out : NULL, out,
                                       &chunk_state, &chunk_remaining, chunk_line_buf, &chunk_line_len);
                     if (cw == (size_t)-1) {
                         set_error(error, error_len, "Failed to write response body");
                         return -1;
                     }
-                    if (chunk_state == 3 && cw < body_available) {
+                    if (chunk_state == 3 && cw < pending_len) {
                         size_t off = cw;
-                        while (off < body_available) {
-                            const char *cr = memchr(body_start + off, '\r', body_available - off);
+                        while (off < pending_len) {
+                            const char *cr = memchr(pending_body + off, '\r', pending_len - off);
                             if (cr == NULL) break;
-                            size_t cr_off = (size_t)(cr - body_start);
-                            if (cr_off + 1 < body_available && body_start[cr_off + 1] == '\n') {
+                            size_t cr_off = (size_t)(cr - pending_body);
+                            if (cr_off + 1 < pending_len && pending_body[cr_off + 1] == '\n') {
                                 bool empty = (cr_off == off);
                                 off = cr_off + 2;
                                 if (empty) break;
-                            } else if (cr_off + 1 >= body_available) {
+                            } else if (cr_off + 1 >= pending_len) {
                                 trailer_mode = true;
                                 break;
                             } else {
@@ -1759,19 +1881,22 @@ int receive_response(
                             }
                         }
                     }
-                } else if (body_available > 0) {
-                    if (write_body_data(body_start, body_available, write_body ? body_out : NULL, out) == (size_t)-1) {
+                } else if (pending_len > 0) {
+                    if (write_body_data(pending_body, pending_len, write_body ? body_out : NULL, out) == (size_t)-1) {
                         set_error(error, error_len, "Failed to write response body");
                         return -1;
                     }
                     if (body_remaining > 0) {
-                        body_remaining -= (long)body_available;
+                        body_remaining -= (long)pending_len;
                     }
                 }
                 header_done = true;
                 if (!chunked && body_remaining <= 0) {
                     break;
                 }
+            } else if (header_len >= sizeof(header_buf) - 1) {
+                set_error(error, error_len, "Response headers too large");
+                return -1;
             }
             continue;
         }

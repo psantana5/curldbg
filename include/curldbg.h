@@ -78,6 +78,12 @@ int build_redirect_url(
     size_t out_size
 );
 struct addrinfo *resolve_dns(const struct url_info *url, int address_family, int *gai_error);
+struct addrinfo *resolve_dns_timeout(
+    const struct url_info *url,
+    int address_family,
+    int *gai_error,
+    int timeout_ms
+);
 int connect_tcp(
     const struct addrinfo *addrs,
     char *connected_ip,

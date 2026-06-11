@@ -11,6 +11,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include <netinet/tcp.h>
 
 
 
@@ -285,7 +286,6 @@ static int run_request(
     const struct run_options *opts,
     struct run_result *out
 ) {
-    warmup_tls();
     char current_url[2048];
     char next_url[2048];
     int redirect_count = 0;
@@ -379,6 +379,9 @@ static int run_request(
             freeaddrinfo(conn_addrs);
             return -1;
         }
+        if (url.use_tls) {
+            warmup_tls();
+        }
         if (out->hop_count >= opts->max_redirects + 1) {
             snprintf(out->error, sizeof(out->error), "Too many hops");
             free_run_result(out);
@@ -410,7 +413,7 @@ static int run_request(
             if (clock_gettime(CLOCK_MONOTONIC, &dns_start) != 0) {
                 die("clock_gettime");
             }
-            addrs = resolve_dns(&url, opts->address_family, &gai_error);
+            addrs = resolve_dns_timeout(&url, opts->address_family, &gai_error, 5000);
             if (clock_gettime(CLOCK_MONOTONIC, &dns_end) != 0) {
                 die("clock_gettime");
             }
@@ -474,12 +477,19 @@ static int run_request(
             }
 
             conn.fd = fd;
+            {
+                int one = 1;
+                (void)setsockopt(conn.fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+            }
             conn.use_tls = url.use_tls;
             conn.ctx = NULL;
             conn.ssl = NULL;
             conn.verbose = opts->verbose;
 
             int effective_read_ms = opts->read_timeout_ms;
+            if (effective_read_ms <= 0) {
+                effective_read_ms = 30000;
+            }
             if (opts->max_time_ms > 0) {
                 long rem = deadline_remaining_ms(&total_start, opts->max_time_ms);
                 if (rem <= 0) {
@@ -745,14 +755,14 @@ static void print_single_output(const struct run_result *result) {
         }
     }
 
-    printf("\nResponse body preview (first ~1KB):\n");
+    fprintf(stderr, "\nResponse body preview (first ~1KB):\n");
     if (result->resp.preview_len > 0) {
-        fwrite(result->resp.preview, 1, result->resp.preview_len, stdout);
+        fwrite(result->resp.preview, 1, result->resp.preview_len, stderr);
         if (result->resp.preview[result->resp.preview_len - 1] != '\n') {
-            putchar('\n');
+            fputc('\n', stderr);
         }
     } else {
-        printf("(empty)\n");
+        fprintf(stderr, "(empty)\n");
     }
 }
 
