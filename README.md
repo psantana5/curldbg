@@ -1,93 +1,65 @@
 # curldbg
 
-`curldbg` is a tiny HTTP/HTTPS request debugger written in C. It performs a single GET/POST request and prints request lifecycle timing:
+curldbg is a lightweight HTTP/HTTPS client that doubles as both a **debugging tool**
+and a **curl-compatible CLI** for scripting. It speaks raw HTTP/1.1 over TLS, reports
+per-request timing metrics, and handles real-world HTTP features like redirects,
+chunked transfer encoding, and multi-value headers.
 
-- DNS lookup
-- TCP connect
-- TTFB (time to first byte)
-- Total request time
+It was born from a practical need — during the Ubuntu mirrors outage on April 16
+(`security.ubuntu.com`, `archive.ubuntu.com`), having quick low-level visibility
+into DNS, TCP connect, and TTFB timing was essential for diagnosing what was
+actually failing and where.
 
-It also prints:
+## Key capabilities
 
-- Redirect chain (with `-L`)
-- Per-hop timing (DNS/TCP/TTFB)
-- Connected IP + family (IPv4/IPv6) per hop
-- Optional "Other" raced endpoint line when Happy Eyeballs captures a loser candidate
-- Final resolved URL (after redirects, when `-L` is used)
-- A small preview of the response body (about 1 KB)
+- **Request profiling** — per-hop DNS, TCP, TTFB, and total timing, with connected
+  IP and address family for each hop
+- **curl-compatible CLI** — supports common curl flags (`-d`, `-L`, `-f`, `-sS`,
+  `-I`, `-A`, `-H`, `-u`, `-X`, `-o`, `-O`, `-T`, `-k`, `-4`/`-6`, `-v`,
+  `--max-time`, `--connect-timeout`, `--read-timeout`, `--no-happy-eyeballs`) for
+  drop-in use in scripts
+- **Redirect following** — tracks the full redirect chain with per-hop timing
+- **Post data from files/stdin** — `-d @file` and `-d @-` avoid shell escaping
+- **Chunked decoding** — decodes chunked Transfer-Encoding on the fly so piped
+  output (e.g. `curldbg ... | jq`) works transparently
+- **Pipe auto-detect** — when stdout is not a TTY, auto-silences and writes raw
+  body to stdout
+- **Compare modes** — `--compare` (IPv4 vs IPv6) and `--compare-urls` (two URLs)
+  run requests concurrently and show side-by-side metrics + deltas
 
-## Why this exists
+## Use cases
 
-This tool came from a real troubleshooting idea during the Ubuntu mirrors outage on **April 16** (notably around `security.ubuntu.com` and `archive.ubuntu.com`), where quick low-level timing visibility was useful for debugging network and mirror behavior.
+- **Scripting** — replace `/usr/bin/curl` with a symlink to curldbg for a compatible
+  CLI that handles JSON-RPC workflows (Zabbix API, etc.) with chunked encoding and
+  pipe-friendly output
+- **Network debugging** — quick visibility into DNS resolution, connect latency,
+  TTFB, redirect chains, and happy-eyeballs races
+- **Embedded/low-resource** — single ~62KB binary, no libcurl dependency, minimal
+  memory footprint
 
-## Build
+## Quick start
 
 ```bash
 make
+./curldbg https://example.com
+./curldbg -L https://httpbin.org/redirect/3
+./curldbg -X POST -d '{"json":"rpc"}' -H 'Content-Type: application/json' https://api.example.com
 ```
 
-Project layout:
+## Full flag reference
 
-- `src/main.c` - CLI flow, redirect loop, and output formatting
-- `src/curldbg.c` - networking, TLS, HTTP I/O, parsing, and timing helpers
-- `include/curldbg.h` - shared structs, constants, and function declarations
+See `man ./man/curldbg.1` or `man curldbg` after install.
 
-## Usage
+## Project layout
+
+- `src/main.c` — CLI option parsing, redirect loop, output formatting, test runner
+- `src/curldbg.c` — networking, TLS, HTTP send/receive, chunked decoding, URL parsing
+- `include/curldbg.h` — shared structs, constants, function declarations
+
+## Testing
 
 ```bash
-./curldbg <url>
-./curldbg google.com # bare hosts default to https://
-./curldbg -L <url>   # follow redirects
-./curldbg -4 <url>   # force IPv4
-./curldbg -6 <url>   # force IPv6
-./curldbg -X GET <url>
-./curldbg -X POST -d "k=v&x=1" <url>
-./curldbg -X PUT -T ./file.bin <url>
-./curldbg --connect-timeout 3000 --read-timeout 5000 <url>
-./curldbg -L --max-redirs 20 <url>
-./curldbg --compare -L -X POST -d "a=1" <url>         # compare IPv4 vs IPv6 for one URL
-./curldbg --compare-urls -X GET <url-a> <url-b>       # compare two URLs side-by-side
-./curldbg -sS -O <url>                                # save body to remote filename
-./curldbg -k -u user:pass -H "Accept: application/json" <url>
-./curldbg -v -H "Content-Type: application/json" -d '{"key":"value"}' <url>
-./curldbg -d @file.json <url>                          # read POST data from file
-./curldbg -d @- <url>                                  # read POST data from stdin
-./curldbg -d "a=1" -d "b=2" <url>                     # multiple -d concatenate with &
-./curldbg --data-binary @file.bin <url>                # binary POST data alias
-./curldbg --version
+make test
 ```
 
-Flags:
-
-- `--compare` run the same URL twice (IPv4 vs IPv6) and print diffs
-- `--compare-urls` run two URL requests and print side-by-side metrics + deltas
-- `-X, --request <GET|POST|PUT>` choose HTTP method
-- `-d, --data <body>` request body data (defaults method to POST if `-X` is not set); `@file` reads from file, `@-` reads from stdin; repeatable — values concatenate with `&`
-- `--data-binary` alias for `-d`
-- `-v, --verbose` show request headers (`> `) and response headers (`< `) on stderr
-- `-f, --fail` exit non-zero on HTTP status >= 400 (no body output)
-- `-L` follow redirects
-- `-s, --silent` suppress normal output
-- `-S, --show-error` show errors when used with `-s`
-- `-k, --insecure` skip TLS certificate verification
-- `-u, --user <user:pass>` use HTTP Basic auth
-- `-H, --header <header>` add a request header (repeatable); providing `Content-Type` or `Content-Length` skips auto-generation
-- `-4` force IPv4 DNS/connect
-- `-6` force IPv6 DNS/connect
-- `-o, --output <file>` write response body to file (single request mode only)
-- `-O, --remote-name` write response body using the URL filename (single request mode only)
-- `-T, --upload-file <file>` upload file as the PUT request body (single request mode only)
-- `--connect-timeout <ms>` timeout per connect attempt
-- `--read-timeout <ms>` timeout for read/write operations
-- `--no-happy-eyeballs` disable Happy Eyeballs and connect sequentially
-- `--max-redirs <n>` maximum redirects when `-L` is enabled (default: 10)
-- `--version` show version and author
-
-`--compare` and `--compare-urls` both reuse the same request path as normal mode, then compare: DNS, TCP, TTFB, total, final status, connected IP/family, and final URL.
-Both compare modes run the two profiles concurrently to reduce total wall-clock time.
-
-When URL scheme is omitted (for example `google.com`), `curldbg` defaults to `https://`.
-
-When stdout is not a TTY (piped or redirected), `curldbg` automatically silences normal output and writes the raw response body to stdout. Use `-S` to still see errors.
-
-By default (`auto` family), connect uses a Happy Eyeballs style strategy: IPv6 is attempted first, then IPv4 is started shortly after to reduce dual-stack stalls.
+Requires network access to httpbin.org.

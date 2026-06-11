@@ -1,63 +1,91 @@
-.TH CURLDBG 1 "May 2026" "curldbg" "User Commands"
+.TH CURLDBG 1 "June 2026" "curldbg" "User Commands"
 .SH NAME
-curldbg \- tiny HTTP/HTTPS request debugger
+curldbg \- lightweight HTTP/HTTPS client and request debugger
 .SH SYNOPSIS
 .B curldbg
 [\fIoptions\fR] \fIurl\fR
 .P
 .B curldbg
---compare [\fIoptions\fR] \fIurl\fR
+\-\-compare [\fIoptions\fR] \fIurl\fR
 .P
 .B curldbg
---compare-urls [\fIoptions\fR] \fIurl-a\fR \fIurl-b\fR
+\-\-compare-urls [\fIoptions\fR] \fIurl-a\fR \fIurl-b\fR
 .SH DESCRIPTION
 .B curldbg
-performs a single HTTP/HTTPS request (GET/POST/PUT), reports timing metrics,
-and prints a short preview of the response body. It can also compare IPv4 vs
-IPv6 or compare two URLs side-by-side.
+performs a single HTTP/HTTPS request (GET/POST/PUT/HEAD), reports per-hop timing
+metrics (DNS, TCP connect, TTFB, total), and prints a short preview of the response
+body. It can follow redirects, track the full redirect chain with per-hop timing,
+compare IPv4 vs IPv6, or compare two URLs side-by-side.
+.P
+When stdout is not a TTY, curldbg auto-silences normal output and writes the raw
+response body to stdout (pipe-friendly). If no URL scheme is given, https:// is
+assumed.
 .SH OPTIONS
+.SS "Request control"
 .TP
-.B \-L
-Follow redirects.
-.TP
-.B \-4
-Force IPv4.
-.TP
-.B \-6
-Force IPv6.
-.TP
-.B \-X, \-\-request \fIGET|POST|PUT\fR
-Choose HTTP method.
+.B \-X, \-\-request \fIGET|POST|PUT|HEAD\fR
+Choose HTTP method (default: GET).
 .TP
 .B \-d, \-\-data \fIbody\fR
-Send request body (defaults method to POST if \-X is not set).
+Send request body. Defaults method to POST if \-X is not set.
+Prefix with @ to read from a file (\fB@file\fR) or stdin (\fB@\-\fR).
+Repeatable \(em values are concatenated with &.
+.TP
+.B \-\-data-binary
+Alias for \-d.
 .TP
 .B \-T, \-\-upload-file \fIfile\fR
 Upload file as the PUT request body (single request mode only).
 .TP
+.B \-I, \-\-head
+Perform a HEAD request (headers only, no body).
+.TP
 .B \-f, \-\-fail
-Exit non-zero on HTTP status >= 400.
+Exit with non-zero status on HTTP status >= 400.
+.SS "Output control"
 .TP
 .B \-s, \-\-silent
-Suppress normal output.
+Suppress normal timing/output display.
 .TP
 .B \-S, \-\-show-error
-Show errors when used with \-s.
+Show error messages even when \-s is active.
 .TP
-.B \-k, \-\-insecure
-Skip TLS certificate verification.
-.TP
-.B \-u, \-\-user \fIuser:pass\fR
-Use HTTP Basic auth.
-.TP
-.B \-H, \-\-header \fIheader\fR
-Add a request header (repeatable).
+.B \-v, \-\-verbose
+Print request headers (> prefix) and response headers (< prefix) to stderr.
 .TP
 .B \-o, \-\-output \fIfile\fR
 Write response body to file (single request mode only).
 .TP
 .B \-O, \-\-remote-name
-Write response body using the URL filename (single request mode only).
+Write response body using the URL's filename component (single request mode only).
+.TP
+.B \-\-progress-bar
+Accepted for curl compatibility (no-op).
+.SS "TLS / Auth"
+.TP
+.B \-k, \-\-insecure
+Skip TLS certificate verification.
+.TP
+.B \-u, \-\-user \fIuser:pass\fR
+Use HTTP Basic authentication.
+.TP
+.B -A, \-\-user-agent \fIstring\fR
+Set a custom User-Agent header (default: curldbg/1.0).
+.SS "Headers"
+.TP
+.B \-H, \-\-header \fIheader\fR
+Add a request header (repeatable). Providing Content-Type, Content-Length, or
+Host via \-H skips auto-generation of those headers.
+.SS "Connectivity"
+.TP
+.B \-4
+Force IPv4 DNS resolution and connect.
+.TP
+.B \-6
+Force IPv6 DNS resolution and connect.
+.TP
+.B \-\-no-happy-eyeballs
+Disable Happy Eyeballs; connect sequentially (IPv6 then IPv4).
 .TP
 .B \-\-connect-timeout \fIms\fR
 Timeout per connect attempt in milliseconds.
@@ -65,29 +93,74 @@ Timeout per connect attempt in milliseconds.
 .B \-\-read-timeout \fIms\fR
 Timeout for read/write operations in milliseconds.
 .TP
+.B \-\-max-time \fIms\fR
+Total operation timeout in milliseconds (applied across all phases including
+redirects).
+.SS "Redirects"
+.TP
+.B \-L, \-\-location
+Follow redirects.
+.TP
 .B \-\-max-redirs \fIn\fR
-Maximum redirects when \-L is enabled.
+Maximum number of redirects when \-L is active (default: 10).
+.SS "Compare modes"
 .TP
 .B \-\-compare
-Compare IPv4 vs IPv6 for a single URL.
+Run the same URL over IPv4 and IPv6 concurrently and print side-by-side metrics
+with deltas.
 .TP
 .B \-\-compare-urls
-Compare two URLs side-by-side.
+Run two different URLs concurrently and print side-by-side metrics with deltas.
+.SS "Miscellaneous"
 .TP
 .B \-\-version
 Show version and author.
+.SH "OUTPUT FIELDS"
+When not in silent mode, curldbg prints:
+.TP
+.B dns
+DNS resolution time in ms.
+.TP
+.B tcp
+TCP connect time in ms.
+.TP
+.B ttfb
+Time to first byte of the response in ms.
+.TP
+.B total
+Total request time in ms.
+.TP
+.B connected
+Connected IP address and address family (IPv4/IPv6).
+.TP
+.B final url
+The final URL after any redirects.
 .SH EXAMPLES
 .TP
-.B curldbg \-L https://example.com
-Follow redirects and print timing.
+.B curldbg https://example.com
+Basic GET request with timing output.
+.TP
+.B curldbg \-L https://httpbin.org/redirect/3
+Follow redirects and show the full chain with per-hop timing.
 .TP
 .B curldbg \-u user:pass \-H "Accept: application/json" https://example.com
-Use Basic auth and custom header.
+Basic auth with a custom Accept header.
 .TP
-.B curldbg \-T ./file.bin https://example.com/upload
-Upload a file using PUT.
+.B curldbg \-X POST \-H "Content-Type: application/json" \-d '{"key":"value"}' https://api.example.com
+JSON POST request.
+.TP
+.B curldbg \-d @data.json https://api.example.com
+POST JSON from a file.
+.TP
+.B curldbg -sS -I https://example.com
+Silent HEAD request (check headers only).
 .TP
 .B curldbg \-\-compare https://example.com
-Compare IPv4 vs IPv6 for one URL.
+Compare IPv4 vs IPv6 performance.
+.SH "EXIT STATUS"
+.IP 0
+Success.
+.IP 1
+Generic error (DNS failure, connection refused, TLS error, timeout, etc.).
 .SH AUTHOR
 Pau Santana.
