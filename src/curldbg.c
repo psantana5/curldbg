@@ -347,6 +347,7 @@ static void parse_response_headers(char *headers, struct response_info *out) {
 
     out->status_code = 0;
     out->location[0] = '\0';
+    out->chunked = false;
 
     line_end = strstr(headers, "\r\n");
     if (line_end == NULL) {
@@ -370,7 +371,12 @@ static void parse_response_headers(char *headers, struct response_info *out) {
             trim_spaces(&value);
             strncpy(out->location, value, sizeof(out->location) - 1);
             out->location[sizeof(out->location) - 1] = '\0';
-            break;
+        } else if (strncasecmp(line, "Transfer-Encoding:", 18) == 0) {
+            const char *val = line + 18;
+            trim_spaces((char **)&val);
+            if (strcasecmp(val, "chunked") == 0) {
+                out->chunked = true;
+            }
         }
 
         line = next + 2;
@@ -1230,17 +1236,28 @@ int send_request(
 
     format_host_header(url, host_header, sizeof(host_header));
 
+    bool has_content_type = false;
+    for (size_t i = 0; i < extra_header_count; i++) {
+        if (extra_headers[i] != NULL && strncasecmp(extra_headers[i], "Content-Type:", 13) == 0) {
+            has_content_type = true;
+            break;
+        }
+    }
+
     body_headers[0] = '\0';
     if (upload_file != NULL) {
         content_len = upload_size;
         include_body_headers = true;
-        n = snprintf(
-            body_headers,
-            sizeof(body_headers),
-            "Content-Type: application/octet-stream\r\n"
-            "Content-Length: %zu\r\n",
-            content_len
-        );
+        if (has_content_type) {
+            n = snprintf(body_headers, sizeof(body_headers), "Content-Length: %zu\r\n", content_len);
+        } else {
+            n = snprintf(
+                body_headers, sizeof(body_headers),
+                "Content-Type: application/octet-stream\r\n"
+                "Content-Length: %zu\r\n",
+                content_len
+            );
+        }
         if (n < 0 || (size_t)n >= sizeof(body_headers)) {
             set_error(error, error_len, "Request body headers are too large");
             return -1;
@@ -1248,13 +1265,16 @@ int send_request(
     } else if (data != NULL || strcasecmp(verb, "POST") == 0 || strcasecmp(verb, "PUT") == 0) {
         content_len = data_len;
         include_body_headers = true;
-        n = snprintf(
-            body_headers,
-            sizeof(body_headers),
-            "Content-Type: application/x-www-form-urlencoded\r\n"
-            "Content-Length: %zu\r\n",
-            content_len
-        );
+        if (has_content_type) {
+            n = snprintf(body_headers, sizeof(body_headers), "Content-Length: %zu\r\n", content_len);
+        } else {
+            n = snprintf(
+                body_headers, sizeof(body_headers),
+                "Content-Type: application/x-www-form-urlencoded\r\n"
+                "Content-Length: %zu\r\n",
+                content_len
+            );
+        }
         if (n < 0 || (size_t)n >= sizeof(body_headers)) {
             set_error(error, error_len, "Request body headers are too large");
             return -1;
@@ -1389,6 +1409,75 @@ static char *find_header_end(char *buf, size_t len) {
     return NULL;
 }
 
+static size_t write_body_data(const char *buf, size_t len, FILE *body_out, struct response_info *out) {
+    if (body_out != NULL && len > 0) {
+        if (fwrite(buf, 1, len, body_out) != len) {
+            return (size_t)-1;
+        }
+    }
+    if (out->preview_len < PREVIEW_BYTES) {
+        size_t take = len;
+        if (take > PREVIEW_BYTES - out->preview_len) {
+            take = PREVIEW_BYTES - out->preview_len;
+        }
+        memcpy(out->preview + out->preview_len, buf, take);
+        out->preview_len += take;
+    }
+    return 0;
+}
+
+static size_t chunked_write(const char *buf, size_t len, FILE *body_out, struct response_info *out,
+                            int *state, unsigned long *chunk_rem, char *line_buf, size_t *line_len) {
+    size_t consumed = 0;
+    while (consumed < len) {
+        if (*state == 0) {
+            while (consumed < len && buf[consumed] != '\n') {
+                if (buf[consumed] != '\r' && *line_len < 31) {
+                    line_buf[(*line_len)++] = buf[consumed];
+                }
+                consumed++;
+            }
+            if (consumed < len && buf[consumed] == '\n') {
+                consumed++;
+                line_buf[*line_len] = '\0';
+                char *semi = strchr(line_buf, ';');
+                if (semi) *semi = '\0';
+                char *end = NULL;
+                *chunk_rem = (unsigned long)strtoul(line_buf, &end, 16);
+                *line_len = 0;
+                if (*chunk_rem == 0) {
+                    *state = 3;
+                } else {
+                    *state = 1;
+                }
+            }
+        } else if (*state == 1) {
+            size_t take = len - consumed;
+            if (take > *chunk_rem) take = (size_t)*chunk_rem;
+            if (write_body_data(buf + consumed, take, body_out, out) == (size_t)-1) {
+                return (size_t)-1;
+            }
+            consumed += take;
+            *chunk_rem -= (unsigned long)take;
+            if (*chunk_rem == 0) {
+                *state = 2;
+            }
+        } else if (*state == 2) {
+            if (buf[consumed] == '\r') {
+                consumed++;
+            } else if (buf[consumed] == '\n') {
+                consumed++;
+                *state = 0;
+            } else {
+                *state = 0;
+            }
+        } else {
+            break;
+        }
+    }
+    return 0;
+}
+
 /*
  * Read response until EOF.
  * - Measures TTFB from ttfb_start to first recv()/SSL_read() data
@@ -1411,6 +1500,11 @@ int receive_response(
     bool seen_first_byte = false;
     bool write_body = body_out != NULL;
     struct timespec first_byte_ts;
+    bool chunked = false;
+    int chunk_state = 0;
+    unsigned long chunk_remaining = 0;
+    char chunk_line_buf[32];
+    size_t chunk_line_len = 0;
 
     memset(out, 0, sizeof(*out));
 
@@ -1445,7 +1539,6 @@ int receive_response(
             if (body_start != NULL) {
                 size_t header_bytes = (size_t)(body_start - header_buf);
                 size_t body_available = header_len - header_bytes;
-                size_t take = body_available;
                 char headers_only[HEADER_MAX + 1];
 
                 memcpy(headers_only, header_buf, header_bytes);
@@ -1457,13 +1550,15 @@ int receive_response(
                     write_body = false;
                 }
 
-                if (take > PREVIEW_BYTES - out->preview_len) {
-                    take = PREVIEW_BYTES - out->preview_len;
-                }
-                memcpy(out->preview + out->preview_len, body_start, take);
-                out->preview_len += take;
-                if (write_body && body_available > 0) {
-                    if (fwrite(body_start, 1, body_available, body_out) != body_available) {
+                chunked = out->chunked;
+                if (chunked) {
+                    if (chunked_write(body_start, body_available, write_body ? body_out : NULL, out,
+                                      &chunk_state, &chunk_remaining, chunk_line_buf, &chunk_line_len) == (size_t)-1) {
+                        set_error(error, error_len, "Failed to write response body");
+                        return -1;
+                    }
+                } else if (body_available > 0) {
+                    if (write_body_data(body_start, body_available, write_body ? body_out : NULL, out) == (size_t)-1) {
                         set_error(error, error_len, "Failed to write response body");
                         return -1;
                     }
@@ -1473,20 +1568,17 @@ int receive_response(
             continue;
         }
 
-        if (write_body) {
-            if (fwrite(recv_buf, 1, (size_t)n, body_out) != (size_t)n) {
+        if (chunked) {
+            if (chunked_write(recv_buf, (size_t)n, write_body ? body_out : NULL, out,
+                              &chunk_state, &chunk_remaining, chunk_line_buf, &chunk_line_len) == (size_t)-1) {
                 set_error(error, error_len, "Failed to write response body");
                 return -1;
             }
-        }
-
-        if (out->preview_len < PREVIEW_BYTES) {
-            size_t take = (size_t)n;
-            if (take > PREVIEW_BYTES - out->preview_len) {
-                take = PREVIEW_BYTES - out->preview_len;
+        } else {
+            if (write_body_data(recv_buf, (size_t)n, write_body ? body_out : NULL, out) == (size_t)-1) {
+                set_error(error, error_len, "Failed to write response body");
+                return -1;
             }
-            memcpy(out->preview + out->preview_len, recv_buf, take);
-            out->preview_len += take;
         }
     }
 

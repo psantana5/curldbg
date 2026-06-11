@@ -29,6 +29,7 @@ struct response_info {
     double ttfb_ms;
     int status_code;
     char location[2048];
+    bool chunked;
 };
 
 struct hop_info {

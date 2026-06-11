@@ -717,6 +717,7 @@ int main(int argc, char **argv) {
     char request_method[8] = "GET";
     bool method_explicit = false;
     const char *request_data = NULL;
+    char *request_data_alloc = NULL;
     bool compare_family_mode = false;
     bool compare_urls_mode = false;
     bool follow_redirects = false;
@@ -755,6 +756,7 @@ int main(int argc, char **argv) {
             printf("curldbg %s\n", CURLDBG_VERSION);
             printf("Author: Pau Santana\n");
             free(extra_headers);
+            free(request_data_alloc);
             return EXIT_SUCCESS;
         }
         if (strcmp(argv[i], "--wizard") == 0) {
@@ -869,9 +871,77 @@ int main(int argc, char **argv) {
         if (strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--data") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "Missing value for %s\n", argv[i]);
+                free(request_data_alloc);
                 return EXIT_FAILURE;
             }
-            request_data = argv[++i];
+            i++;
+            if (argv[i][0] == '@') {
+                const char *spec = argv[i] + 1;
+                FILE *fp = NULL;
+                char buf[4096];
+                size_t cap = 4096;
+                size_t total = 0;
+                size_t nread;
+                char *data;
+                bool close_fp = false;
+
+                if (spec[0] == '-' && spec[1] == '\0') {
+                    fp = stdin;
+                } else {
+                    fp = fopen(spec, "rb");
+                    if (fp == NULL) {
+                        fprintf(stderr, "Unable to open data file '%s': %s\n", spec, strerror(errno));
+                        free(extra_headers);
+                        free(request_data_alloc);
+                        return EXIT_FAILURE;
+                    }
+                    close_fp = true;
+                }
+
+                data = malloc(cap);
+                if (data == NULL) {
+                    fprintf(stderr, "Out of memory reading data\n");
+                    if (close_fp) fclose(fp);
+                    free(extra_headers);
+                    free(request_data_alloc);
+                    return EXIT_FAILURE;
+                }
+
+                while ((nread = fread(buf, 1, sizeof(buf), fp)) > 0) {
+                    if (total + nread >= cap) {
+                        cap = (cap > SIZE_MAX / 2) ? SIZE_MAX : cap * 2;
+                        char *tmp = realloc(data, cap);
+                        if (tmp == NULL) {
+                            fprintf(stderr, "Out of memory reading data\n");
+                            free(data);
+                            if (close_fp) fclose(fp);
+                            free(extra_headers);
+                            free(request_data_alloc);
+                            return EXIT_FAILURE;
+                        }
+                        data = tmp;
+                    }
+                    memcpy(data + total, buf, nread);
+                    total += nread;
+                }
+
+                if (ferror(fp)) {
+                    fprintf(stderr, "Failed to read data from '%s'\n", spec);
+                    free(data);
+                    if (close_fp) fclose(fp);
+                    free(extra_headers);
+                    free(request_data_alloc);
+                    return EXIT_FAILURE;
+                }
+
+                if (close_fp) fclose(fp);
+                data[total] = '\0';
+                free(request_data_alloc);
+                request_data = data;
+                request_data_alloc = data;
+            } else {
+                request_data = argv[i];
+            }
             continue;
         }
         if (strcmp(argv[i], "-L") == 0) {
@@ -977,37 +1047,44 @@ int main(int argc, char **argv) {
     if (compare_family_mode && compare_urls_mode) {
         fprintf(stderr, "--compare and --compare-urls are mutually exclusive\n");
         free(extra_headers);
+        free(request_data_alloc);
         return EXIT_FAILURE;
     }
     if (output_path != NULL && output_remote_name) {
         fprintf(stderr, "-o and -O are mutually exclusive\n");
         free(extra_headers);
+        free(request_data_alloc);
         return EXIT_FAILURE;
     }
     if ((output_path != NULL || output_remote_name) && (compare_family_mode || compare_urls_mode)) {
         fprintf(stderr, "-o/-O are only supported in single request mode\n");
         free(extra_headers);
+        free(request_data_alloc);
         return EXIT_FAILURE;
     }
     if (upload_path != NULL && (compare_family_mode || compare_urls_mode)) {
         fprintf(stderr, "-T/--upload-file is only supported in single request mode\n");
         free(extra_headers);
+        free(request_data_alloc);
         return EXIT_FAILURE;
     }
     if (upload_path != NULL && request_data != NULL) {
         fprintf(stderr, "-T/--upload-file cannot be combined with -d/--data\n");
         free(extra_headers);
+        free(request_data_alloc);
         return EXIT_FAILURE;
     }
     if (basic_auth != NULL && strchr(basic_auth, ':') == NULL) {
         fprintf(stderr, "-u/--user must be in the form user:password\n");
         free(extra_headers);
+        free(request_data_alloc);
         return EXIT_FAILURE;
     }
     if (upload_path != NULL) {
         if (method_explicit && strcasecmp(request_method, "PUT") != 0) {
             fprintf(stderr, "-T/--upload-file requires -X PUT or no -X flag\n");
             free(extra_headers);
+        free(request_data_alloc);
             return EXIT_FAILURE;
         }
         if (!method_explicit) {
@@ -1022,6 +1099,7 @@ int main(int argc, char **argv) {
         printf("Someone wanted better timing diagnostics.\n");
         printf("Things escalated.\n");
         free(extra_headers);
+        free(request_data_alloc);
         return EXIT_SUCCESS;
     }
     if (!compare_family_mode && !compare_urls_mode && input_url == NULL && compare_url == NULL &&
@@ -1037,6 +1115,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "Segmentation fault (not really)\n");
         }
         free(extra_headers);
+        free(request_data_alloc);
         return EXIT_SUCCESS;
     }
     if (debug_chaos) {
@@ -1085,6 +1164,11 @@ int main(int argc, char **argv) {
             }
         }
 
+        if (body_out == NULL && !isatty(fileno(stdout))) {
+            body_out = stdout;
+            silent = true;
+        }
+
         opts.follow_redirects = follow_redirects;
         strcpy(opts.method, request_method);
         opts.data = request_data;
@@ -1129,6 +1213,7 @@ int main(int argc, char **argv) {
             fclose(body_out);
         }
         free(extra_headers);
+        free(request_data_alloc);
         return EXIT_SUCCESS;
     }
 
@@ -1249,6 +1334,7 @@ int main(int argc, char **argv) {
             free_run_result(&result_v6);
         }
         free(extra_headers);
+        free(request_data_alloc);
 
         return (ok_v4 && ok_v6) ? EXIT_SUCCESS : EXIT_FAILURE;
     }
@@ -1380,6 +1466,7 @@ int main(int argc, char **argv) {
             free_run_result(&result_b);
         }
         free(extra_headers);
+        free(request_data_alloc);
         return (ok_a && ok_b) ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 }
