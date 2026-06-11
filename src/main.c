@@ -27,6 +27,7 @@ struct run_options {
     size_t extra_header_count;
     const char *upload_path;
     bool happy_eyeballs;
+    bool verbose;
 };
 
 struct run_result {
@@ -397,6 +398,7 @@ static int run_request(
         conn.use_tls = url.use_tls;
         conn.ctx = NULL;
         conn.ssl = NULL;
+        conn.verbose = opts->verbose;
 
         apply_socket_timeout(conn.fd, opts->read_timeout_ms);
 
@@ -723,7 +725,7 @@ int main(int argc, char **argv) {
     bool follow_redirects = false;
     bool fail_on_http_error = false;
     bool silent = false;
-    bool show_error = true;
+    bool show_error = false;
     const char *output_path = NULL;
     bool output_remote_name = false;
     bool insecure_tls = false;
@@ -736,6 +738,7 @@ int main(int argc, char **argv) {
     bool lore_mode = false;
     bool fika_mode = false;
     bool happy_eyeballs = true;
+    bool verbose = false;
     int address_family = AF_UNSPEC;
     int connect_timeout_ms = 0;
     int read_timeout_ms = 0;
@@ -777,6 +780,10 @@ int main(int argc, char **argv) {
         }
         if (strcmp(argv[i], "--no-happy-eyeballs") == 0) {
             happy_eyeballs = false;
+            continue;
+        }
+        if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
+            verbose = true;
             continue;
         }
         if (strcmp(argv[i], "-k") == 0 || strcmp(argv[i], "--insecure") == 0) {
@@ -830,7 +837,6 @@ int main(int argc, char **argv) {
         }
         if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--silent") == 0) {
             silent = true;
-            show_error = false;
             continue;
         }
         if (strcmp(argv[i], "-S") == 0 || strcmp(argv[i], "--show-error") == 0) {
@@ -868,7 +874,7 @@ int main(int argc, char **argv) {
             method_explicit = true;
             continue;
         }
-        if (strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--data") == 0) {
+        if (strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--data") == 0 || strcmp(argv[i], "--data-binary") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "Missing value for %s\n", argv[i]);
                 free(request_data_alloc);
@@ -936,11 +942,43 @@ int main(int argc, char **argv) {
 
                 if (close_fp) fclose(fp);
                 data[total] = '\0';
-                free(request_data_alloc);
-                request_data = data;
-                request_data_alloc = data;
+
+                if (request_data != NULL) {
+                    char *combined = malloc(strlen(request_data) + 1 + total + 1);
+                    if (combined == NULL) {
+                        fprintf(stderr, "Out of memory\n");
+                        free(data);
+                        free(extra_headers);
+                        free(request_data_alloc);
+                        return EXIT_FAILURE;
+                    }
+                    snprintf(combined, strlen(request_data) + 1 + total + 1, "%s&%s", request_data, data);
+                    free(request_data_alloc);
+                    free(data);
+                    request_data = combined;
+                    request_data_alloc = combined;
+                } else {
+                    free(request_data_alloc);
+                    request_data = data;
+                    request_data_alloc = data;
+                }
             } else {
-                request_data = argv[i];
+                if (request_data != NULL) {
+                    size_t new_len = strlen(request_data) + 1 + strlen(argv[i]) + 1;
+                    char *combined = malloc(new_len);
+                    if (combined == NULL) {
+                        fprintf(stderr, "Out of memory\n");
+                        free(extra_headers);
+                        free(request_data_alloc);
+                        return EXIT_FAILURE;
+                    }
+                    snprintf(combined, new_len, "%s&%s", request_data, argv[i]);
+                    free(request_data_alloc);
+                    request_data = combined;
+                    request_data_alloc = combined;
+                } else {
+                    request_data = argv[i];
+                }
             }
             continue;
         }
@@ -1002,10 +1040,12 @@ int main(int argc, char **argv) {
                         break;
                     case 's':
                         silent = true;
-                        show_error = false;
                         break;
                     case 'S':
                         show_error = true;
+                        break;
+                    case 'v':
+                        verbose = true;
                         break;
                     case 'k':
                         insecure_tls = true;
@@ -1184,6 +1224,7 @@ int main(int argc, char **argv) {
         opts.extra_header_count = extra_header_count;
         opts.upload_path = upload_path;
         opts.happy_eyeballs = happy_eyeballs;
+        opts.verbose = verbose;
 
         if (!silent) {
             maybe_print_april_fools();
@@ -1196,7 +1237,7 @@ int main(int argc, char **argv) {
         }
 
         if (run_request(input_url, &opts, &result) != 0) {
-            if (show_error && result.error[0] != '\0') {
+            if ((!silent || show_error) && result.error[0] != '\0') {
                 fprintf(stderr, "Request failed: %s\n", result.error);
             }
             if (close_body) {
@@ -1257,6 +1298,7 @@ int main(int argc, char **argv) {
         opts_v4.extra_header_count = extra_header_count;
         opts_v4.upload_path = NULL;
         opts_v4.happy_eyeballs = happy_eyeballs;
+        opts_v4.verbose = verbose;
 
         opts_v6 = opts_v4;
         opts_v6.address_family = AF_INET6;
@@ -1318,7 +1360,7 @@ int main(int argc, char **argv) {
             } else {
                 printf("\nComparison incomplete: one or both runs failed.\n");
             }
-        } else if (show_error) {
+        } else if (!silent || show_error) {
             if (!ok_v4 && result_v4.error[0] != '\0') {
                 fprintf(stderr, "IPv4 run failed: %s\n", result_v4.error);
             }
@@ -1378,6 +1420,7 @@ int main(int argc, char **argv) {
         opts.extra_header_count = extra_header_count;
         opts.upload_path = NULL;
         opts.happy_eyeballs = happy_eyeballs;
+        opts.verbose = verbose;
 
         memset(&result_a, 0, sizeof(result_a));
         memset(&result_b, 0, sizeof(result_b));
@@ -1450,7 +1493,7 @@ int main(int argc, char **argv) {
                 }
                 printf("\nComparison incomplete: one or both profiles failed.\n");
             }
-        } else if (show_error) {
+        } else if (!silent || show_error) {
             if (!ok_a && result_a.error[0] != '\0') {
                 fprintf(stderr, "A run failed: %s\n", result_a.error);
             }

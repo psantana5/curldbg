@@ -1237,10 +1237,13 @@ int send_request(
     format_host_header(url, host_header, sizeof(host_header));
 
     bool has_content_type = false;
+    bool has_content_length = false;
     for (size_t i = 0; i < extra_header_count; i++) {
-        if (extra_headers[i] != NULL && strncasecmp(extra_headers[i], "Content-Type:", 13) == 0) {
+        if (extra_headers[i] == NULL) continue;
+        if (strncasecmp(extra_headers[i], "Content-Type:", 13) == 0) {
             has_content_type = true;
-            break;
+        } else if (strncasecmp(extra_headers[i], "Content-Length:", 15) == 0) {
+            has_content_length = true;
         }
     }
 
@@ -1248,8 +1251,13 @@ int send_request(
     if (upload_file != NULL) {
         content_len = upload_size;
         include_body_headers = true;
-        if (has_content_type) {
+        if (has_content_type && has_content_length) {
+            include_body_headers = false;
+            n = 0;
+        } else if (has_content_type) {
             n = snprintf(body_headers, sizeof(body_headers), "Content-Length: %zu\r\n", content_len);
+        } else if (has_content_length) {
+            n = snprintf(body_headers, sizeof(body_headers), "Content-Type: application/octet-stream\r\n");
         } else {
             n = snprintf(
                 body_headers, sizeof(body_headers),
@@ -1265,8 +1273,13 @@ int send_request(
     } else if (data != NULL || strcasecmp(verb, "POST") == 0 || strcasecmp(verb, "PUT") == 0) {
         content_len = data_len;
         include_body_headers = true;
-        if (has_content_type) {
+        if (has_content_type && has_content_length) {
+            include_body_headers = false;
+            n = 0;
+        } else if (has_content_type) {
             n = snprintf(body_headers, sizeof(body_headers), "Content-Length: %zu\r\n", content_len);
+        } else if (has_content_length) {
+            n = snprintf(body_headers, sizeof(body_headers), "Content-Type: application/x-www-form-urlencoded\r\n");
         } else {
             n = snprintf(
                 body_headers, sizeof(body_headers),
@@ -1363,6 +1376,33 @@ int send_request(
             free(req);
             return -1;
         }
+    }
+
+    if (conn->verbose) {
+        fprintf(stderr, "> %s %s HTTP/1.1\n", verb, url->path);
+        fprintf(stderr, "> Host: %s\n", host_header);
+        fprintf(stderr, "> User-Agent: curldbg/1.0\n");
+        fprintf(stderr, "> Connection: close\n");
+        if (include_body_headers) {
+            size_t off = 0;
+            while (off < strlen(body_headers)) {
+                const char *end = strchr(body_headers + off, '\n');
+                if (end == NULL) break;
+                fprintf(stderr, "> ");
+                fwrite(body_headers + off, 1, end - (body_headers + off) - (*(end-1)=='\r'?1:0), stderr);
+                fputc('\n', stderr);
+                off = end - body_headers + 1;
+            }
+        }
+        if (auth_len > 0) {
+            fprintf(stderr, "> Authorization: Basic <redacted>\n");
+        }
+        for (size_t i = 0; i < extra_header_count; i++) {
+            if (extra_headers[i] != NULL) {
+                fprintf(stderr, "> %s\n", extra_headers[i]);
+            }
+        }
+        fprintf(stderr, ">\n");
     }
 
     if (connection_write_all(conn, req, strlen(req), error, error_len) != 0) {
@@ -1475,7 +1515,7 @@ static size_t chunked_write(const char *buf, size_t len, FILE *body_out, struct 
             break;
         }
     }
-    return 0;
+    return consumed;
 }
 
 /*
@@ -1505,6 +1545,7 @@ int receive_response(
     unsigned long chunk_remaining = 0;
     char chunk_line_buf[32];
     size_t chunk_line_len = 0;
+    bool trailer_mode = false;
 
     memset(out, 0, sizeof(*out));
 
@@ -1526,6 +1567,29 @@ int receive_response(
             seen_first_byte = true;
         }
 
+        if (trailer_mode) {
+            size_t off = 0;
+            while (off < (size_t)n) {
+                const char *cr = memchr(recv_buf + off, '\r', (size_t)n - off);
+                if (cr == NULL) break;
+                size_t cr_off = (size_t)(cr - recv_buf);
+                if (cr_off + 1 < (size_t)n && recv_buf[cr_off + 1] == '\n') {
+                    bool empty = (cr_off == off);
+                    off = cr_off + 2;
+                    if (empty) {
+                        trailer_mode = false;
+                        break;
+                    }
+                } else if (cr_off + 1 >= (size_t)n) {
+                    break;
+                } else {
+                    off = cr_off + 1;
+                }
+            }
+            if (!trailer_mode) continue;
+            continue;
+        }
+
         if (!header_done) {
             if (header_len + (size_t)n >= sizeof(header_buf)) {
                 set_error(error, error_len, "Response headers too large");
@@ -1543,6 +1607,20 @@ int receive_response(
 
                 memcpy(headers_only, header_buf, header_bytes);
                 headers_only[header_bytes] = '\0';
+
+                if (conn->verbose) {
+                    char *line = headers_only;
+                    while (*line != '\0') {
+                        char *nl = strstr(line, "\r\n");
+                        if (nl == NULL) break;
+                        *nl = '\0';
+                        fprintf(stderr, "< %s\n", line);
+                        line = nl + 2;
+                    }
+                    memcpy(headers_only, header_buf, header_bytes);
+                    headers_only[header_bytes] = '\0';
+                }
+
                 parse_response_headers(headers_only, out);
 
                 if ((follow_redirects && is_redirect_status(out->status_code) && out->location[0] != '\0') ||
@@ -1552,10 +1630,29 @@ int receive_response(
 
                 chunked = out->chunked;
                 if (chunked) {
-                    if (chunked_write(body_start, body_available, write_body ? body_out : NULL, out,
-                                      &chunk_state, &chunk_remaining, chunk_line_buf, &chunk_line_len) == (size_t)-1) {
+                    size_t cw = chunked_write(body_start, body_available, write_body ? body_out : NULL, out,
+                                      &chunk_state, &chunk_remaining, chunk_line_buf, &chunk_line_len);
+                    if (cw == (size_t)-1) {
                         set_error(error, error_len, "Failed to write response body");
                         return -1;
+                    }
+                    if (chunk_state == 3 && cw < body_available) {
+                        size_t off = cw;
+                        while (off < body_available) {
+                            const char *cr = memchr(body_start + off, '\r', body_available - off);
+                            if (cr == NULL) break;
+                            size_t cr_off = (size_t)(cr - body_start);
+                            if (cr_off + 1 < body_available && body_start[cr_off + 1] == '\n') {
+                                bool empty = (cr_off == off);
+                                off = cr_off + 2;
+                                if (empty) break;
+                            } else if (cr_off + 1 >= body_available) {
+                                trailer_mode = true;
+                                break;
+                            } else {
+                                off = cr_off + 1;
+                            }
+                        }
                     }
                 } else if (body_available > 0) {
                     if (write_body_data(body_start, body_available, write_body ? body_out : NULL, out) == (size_t)-1) {
@@ -1569,10 +1666,29 @@ int receive_response(
         }
 
         if (chunked) {
-            if (chunked_write(recv_buf, (size_t)n, write_body ? body_out : NULL, out,
-                              &chunk_state, &chunk_remaining, chunk_line_buf, &chunk_line_len) == (size_t)-1) {
+            size_t cw = chunked_write(recv_buf, (size_t)n, write_body ? body_out : NULL, out,
+                              &chunk_state, &chunk_remaining, chunk_line_buf, &chunk_line_len);
+            if (cw == (size_t)-1) {
                 set_error(error, error_len, "Failed to write response body");
                 return -1;
+            }
+            if (chunk_state == 3 && cw < (size_t)n) {
+                size_t off = cw;
+                while (off < (size_t)n) {
+                    const char *cr = memchr(recv_buf + off, '\r', (size_t)n - off);
+                    if (cr == NULL) break;
+                    size_t cr_off = (size_t)(cr - recv_buf);
+                    if (cr_off + 1 < (size_t)n && recv_buf[cr_off + 1] == '\n') {
+                        bool empty = (cr_off == off);
+                        off = cr_off + 2;
+                        if (empty) break;
+                    } else if (cr_off + 1 >= (size_t)n) {
+                        trailer_mode = true;
+                        break;
+                    } else {
+                        off = cr_off + 1;
+                    }
+                }
             }
         } else {
             if (write_body_data(recv_buf, (size_t)n, write_body ? body_out : NULL, out) == (size_t)-1) {

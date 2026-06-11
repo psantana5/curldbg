@@ -61,6 +61,7 @@ struct connection {
     bool use_tls;
     SSL_CTX *ctx;
     SSL *ssl;
+    bool verbose;
 };
 
 void die(const char *msg);
