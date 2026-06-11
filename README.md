@@ -49,6 +49,11 @@ Project layout:
 ./curldbg --compare-urls -X GET <url-a> <url-b>       # compare two URLs side-by-side
 ./curldbg -sS -O <url>                                # save body to remote filename
 ./curldbg -k -u user:pass -H "Accept: application/json" <url>
+./curldbg -v -H "Content-Type: application/json" -d '{"key":"value"}' <url>
+./curldbg -d @file.json <url>                          # read POST data from file
+./curldbg -d @- <url>                                  # read POST data from stdin
+./curldbg -d "a=1" -d "b=2" <url>                     # multiple -d concatenate with &
+./curldbg --data-binary @file.bin <url>                # binary POST data alias
 ./curldbg --version
 ```
 
@@ -57,14 +62,16 @@ Flags:
 - `--compare` run the same URL twice (IPv4 vs IPv6) and print diffs
 - `--compare-urls` run two URL requests and print side-by-side metrics + deltas
 - `-X, --request <GET|POST|PUT>` choose HTTP method
-- `-d, --data <body>` request body data (defaults method to POST if `-X` is not set)
+- `-d, --data <body>` request body data (defaults method to POST if `-X` is not set); `@file` reads from file, `@-` reads from stdin; repeatable — values concatenate with `&`
+- `--data-binary` alias for `-d`
+- `-v, --verbose` show request headers (`> `) and response headers (`< `) on stderr
 - `-f, --fail` exit non-zero on HTTP status >= 400 (no body output)
 - `-L` follow redirects
 - `-s, --silent` suppress normal output
 - `-S, --show-error` show errors when used with `-s`
 - `-k, --insecure` skip TLS certificate verification
 - `-u, --user <user:pass>` use HTTP Basic auth
-- `-H, --header <header>` add a request header (repeatable)
+- `-H, --header <header>` add a request header (repeatable); providing `Content-Type` or `Content-Length` skips auto-generation
 - `-4` force IPv4 DNS/connect
 - `-6` force IPv6 DNS/connect
 - `-o, --output <file>` write response body to file (single request mode only)
@@ -80,5 +87,7 @@ Flags:
 Both compare modes run the two profiles concurrently to reduce total wall-clock time.
 
 When URL scheme is omitted (for example `google.com`), `curldbg` defaults to `https://`.
+
+When stdout is not a TTY (piped or redirected), `curldbg` automatically silences normal output and writes the raw response body to stdout. Use `-S` to still see errors.
 
 By default (`auto` family), connect uses a Happy Eyeballs style strategy: IPv6 is attempted first, then IPv4 is started shortly after to reduce dual-stack stalls.
