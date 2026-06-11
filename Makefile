@@ -9,7 +9,7 @@ PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man/man1
 
-.PHONY: all clean install
+.PHONY: all clean install test
 
 all: $(TARGET)
 
@@ -20,6 +20,9 @@ $(OBJS): include/curldbg.h
 
 clean:
 	rm -f $(TARGET) $(OBJS)
+
+test: $(TARGET)
+	@CURLDBG=$(CURDIR)/$(TARGET) sh tests/run.sh
 
 install: $(TARGET) $(MANPAGE)
 	install -d $(DESTDIR)$(BINDIR) $(DESTDIR)$(MANDIR)

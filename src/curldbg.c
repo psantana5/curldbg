@@ -1217,9 +1217,13 @@ int send_request(
     const char **extra_headers,
     size_t extra_header_count,
     const char *basic_auth,
+    const char *user_agent,
     char *error,
     size_t error_len
 ) {
+    if (user_agent == NULL) {
+        user_agent = "curldbg/1.0";
+    }
     char *req = NULL;
     char host_header[320];
     char body_headers[256];
@@ -1238,12 +1242,15 @@ int send_request(
 
     bool has_content_type = false;
     bool has_content_length = false;
+    bool has_host = false;
     for (size_t i = 0; i < extra_header_count; i++) {
         if (extra_headers[i] == NULL) continue;
         if (strncasecmp(extra_headers[i], "Content-Type:", 13) == 0) {
             has_content_type = true;
         } else if (strncasecmp(extra_headers[i], "Content-Length:", 15) == 0) {
             has_content_length = true;
+        } else if (strncasecmp(extra_headers[i], "Host:", 5) == 0) {
+            has_host = true;
         }
     }
 
@@ -1324,17 +1331,31 @@ int send_request(
 
     {
         size_t offset = 0;
-        n = snprintf(
-            req,
-            req_len + 1,
-            "%s %s HTTP/1.1\r\n"
-            "Host: %s\r\n"
-            "User-Agent: curldbg/1.0\r\n"
-            "Connection: close\r\n",
-            verb,
-            url->path,
-            host_header
-        );
+        if (has_host) {
+            n = snprintf(
+                req,
+                req_len + 1,
+                "%s %s HTTP/1.1\r\n"
+                "User-Agent: %s\r\n"
+                "Connection: close\r\n",
+                verb,
+                url->path,
+                user_agent
+            );
+        } else {
+            n = snprintf(
+                req,
+                req_len + 1,
+                "%s %s HTTP/1.1\r\n"
+                "Host: %s\r\n"
+                "User-Agent: %s\r\n"
+                "Connection: close\r\n",
+                verb,
+                url->path,
+                host_header,
+                user_agent
+            );
+        }
         if (n < 0 || (size_t)n >= req_len + 1) {
             set_error(error, error_len, "Request is too large");
             free(req);
@@ -1380,8 +1401,10 @@ int send_request(
 
     if (conn->verbose) {
         fprintf(stderr, "> %s %s HTTP/1.1\n", verb, url->path);
-        fprintf(stderr, "> Host: %s\n", host_header);
-        fprintf(stderr, "> User-Agent: curldbg/1.0\n");
+        if (!has_host) {
+            fprintf(stderr, "> Host: %s\n", host_header);
+        }
+        fprintf(stderr, "> User-Agent: %s\n", user_agent);
         fprintf(stderr, "> Connection: close\n");
         if (include_body_headers) {
             size_t off = 0;
@@ -1531,7 +1554,8 @@ int receive_response(
     size_t error_len,
     FILE *body_out,
     bool follow_redirects,
-    bool fail_on_http_error
+    bool fail_on_http_error,
+    bool head_method
 ) {
     char recv_buf[RESPONSE_READ_BUF];
     char header_buf[HEADER_MAX + 1];
@@ -1622,6 +1646,10 @@ int receive_response(
                 }
 
                 parse_response_headers(headers_only, out);
+
+                if (head_method) {
+                    return 0;
+                }
 
                 if ((follow_redirects && is_redirect_status(out->status_code) && out->location[0] != '\0') ||
                     (fail_on_http_error && out->status_code >= 400)) {

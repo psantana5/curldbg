@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +19,7 @@ struct run_options {
     int address_family;
     int connect_timeout_ms;
     int read_timeout_ms;
+    int max_time_ms;
     int max_redirects;
     bool fail_on_http_error;
     FILE *body_out;
@@ -28,6 +30,7 @@ struct run_options {
     const char *upload_path;
     bool happy_eyeballs;
     bool verbose;
+    const char *user_agent;
 };
 
 struct run_result {
@@ -48,6 +51,15 @@ struct run_request_task {
     struct run_result *result;
     bool ok;
 };
+
+static long deadline_remaining_ms(const struct timespec *start, int max_ms) {
+    if (max_ms <= 0) return -1;
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;
+    long elapsed = (long)ms_between(start, &now);
+    if (elapsed >= max_ms) return 0;
+    return max_ms - elapsed;
+}
 
 static int run_request(
     const char *input_url,
@@ -337,6 +349,16 @@ static int run_request(
         struct timespec ttfb_start;
         bool can_redirect = false;
 
+        if (opts->max_time_ms > 0) {
+            long rem = deadline_remaining_ms(&total_start, opts->max_time_ms);
+            if (rem <= 0) {
+                snprintf(out->error, sizeof(out->error), "Operation timed out after %d ms", opts->max_time_ms);
+                free_run_result(out);
+                close_upload_file(&upload_file);
+                return -1;
+            }
+        }
+
         if (parse_url(current_url, &url) != 0) {
             snprintf(out->error, sizeof(out->error), "Invalid URL: %s", current_url);
             free_run_result(out);
@@ -369,12 +391,26 @@ static int run_request(
         if (clock_gettime(CLOCK_MONOTONIC, &connect_start) != 0) {
             die("clock_gettime");
         }
+        int effective_connect_ms = opts->connect_timeout_ms;
+        if (opts->max_time_ms > 0) {
+            long rem = deadline_remaining_ms(&total_start, opts->max_time_ms);
+            if (rem <= 0) {
+                snprintf(out->error, sizeof(out->error), "Operation timed out after %d ms", opts->max_time_ms);
+                freeaddrinfo(addrs);
+                free_run_result(out);
+                close_upload_file(&upload_file);
+                return -1;
+            }
+            if (effective_connect_ms <= 0 || (int)rem < effective_connect_ms) {
+                effective_connect_ms = (int)rem;
+            }
+        }
         fd = connect_tcp(
             addrs,
             out->hops[out->hop_count].connected_ip,
             sizeof(out->hops[out->hop_count].connected_ip),
             &out->hops[out->hop_count].connected_family,
-            opts->connect_timeout_ms,
+            effective_connect_ms,
             &race_info,
             opts->happy_eyeballs
         );
@@ -400,7 +436,22 @@ static int run_request(
         conn.ssl = NULL;
         conn.verbose = opts->verbose;
 
-        apply_socket_timeout(conn.fd, opts->read_timeout_ms);
+        int effective_read_ms = opts->read_timeout_ms;
+        if (opts->max_time_ms > 0) {
+            long rem = deadline_remaining_ms(&total_start, opts->max_time_ms);
+            if (rem <= 0) {
+                snprintf(out->error, sizeof(out->error), "Operation timed out after %d ms", opts->max_time_ms);
+                close_connection(&conn);
+                freeaddrinfo(addrs);
+                free_run_result(out);
+                close_upload_file(&upload_file);
+                return -1;
+            }
+            if (effective_read_ms <= 0 || (int)rem < effective_read_ms) {
+                effective_read_ms = (int)rem;
+            }
+        }
+        apply_socket_timeout(conn.fd, effective_read_ms);
 
         if (url.use_tls) {
             if (init_tls(&conn, url.host, opts->insecure_tls, out->error, sizeof(out->error)) != 0) {
@@ -435,6 +486,7 @@ static int run_request(
                 opts->extra_headers,
                 opts->extra_header_count,
                 opts->basic_auth,
+                opts->user_agent,
                 out->error,
                 sizeof(out->error)
             ) != 0) {
@@ -444,6 +496,7 @@ static int run_request(
             close_upload_file(&upload_file);
             return -1;
         }
+        bool head_method = (strcasecmp(opts->method, "HEAD") == 0);
         if (receive_response(
                 &conn,
                 &ttfb_start,
@@ -452,7 +505,8 @@ static int run_request(
                 sizeof(out->error),
                 opts->body_out,
                 opts->follow_redirects,
-                opts->fail_on_http_error
+                opts->fail_on_http_error,
+                head_method
             ) != 0) {
             close_connection(&conn);
             freeaddrinfo(addrs);
@@ -739,11 +793,14 @@ int main(int argc, char **argv) {
     bool fika_mode = false;
     bool happy_eyeballs = true;
     bool verbose = false;
+    const char *user_agent = NULL;
     int address_family = AF_UNSPEC;
     int connect_timeout_ms = 0;
     int read_timeout_ms = 0;
+    int max_time_ms = 0;
     int max_redirects = DEFAULT_MAX_REDIRECTS;
 
+    signal(SIGPIPE, SIG_IGN);
     configure_output_buffering();
 
     for (int i = 1; i < argc; i++) {
@@ -796,6 +853,14 @@ int main(int argc, char **argv) {
                 return EXIT_FAILURE;
             }
             basic_auth = argv[++i];
+            continue;
+        }
+        if (strcmp(argv[i], "-A") == 0 || strcmp(argv[i], "--user-agent") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Missing value for %s\n", argv[i]);
+                return EXIT_FAILURE;
+            }
+            user_agent = argv[++i];
             continue;
         }
         if (strcmp(argv[i], "-H") == 0 || strcmp(argv[i], "--header") == 0) {
@@ -1030,6 +1095,14 @@ int main(int argc, char **argv) {
             read_timeout_ms = parse_non_negative_int(argv[++i], "--read-timeout");
             continue;
         }
+        if (strcmp(argv[i], "--max-time") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Missing value for --max-time\n");
+                return EXIT_FAILURE;
+            }
+            max_time_ms = parse_non_negative_int(argv[++i], "--max-time");
+            continue;
+        }
         if (strcmp(argv[i], "--max-redirs") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "Missing value for --max-redirs\n");
@@ -1227,6 +1300,7 @@ int main(int argc, char **argv) {
         opts.address_family = address_family;
         opts.connect_timeout_ms = connect_timeout_ms;
         opts.read_timeout_ms = read_timeout_ms;
+        opts.max_time_ms = max_time_ms;
         opts.max_redirects = max_redirects;
         opts.fail_on_http_error = fail_on_http_error;
         opts.body_out = body_out;
@@ -1237,6 +1311,7 @@ int main(int argc, char **argv) {
         opts.upload_path = upload_path;
         opts.happy_eyeballs = happy_eyeballs;
         opts.verbose = verbose;
+        opts.user_agent = user_agent;
 
         if (!silent) {
             maybe_print_april_fools();
@@ -1301,6 +1376,7 @@ int main(int argc, char **argv) {
         opts_v4.address_family = AF_INET;
         opts_v4.connect_timeout_ms = connect_timeout_ms;
         opts_v4.read_timeout_ms = read_timeout_ms;
+        opts_v4.max_time_ms = max_time_ms;
         opts_v4.max_redirects = max_redirects;
         opts_v4.fail_on_http_error = fail_on_http_error;
         opts_v4.body_out = NULL;
@@ -1311,6 +1387,7 @@ int main(int argc, char **argv) {
         opts_v4.upload_path = NULL;
         opts_v4.happy_eyeballs = happy_eyeballs;
         opts_v4.verbose = verbose;
+        opts_v4.user_agent = user_agent;
 
         opts_v6 = opts_v4;
         opts_v6.address_family = AF_INET6;
@@ -1423,6 +1500,7 @@ int main(int argc, char **argv) {
         opts.address_family = address_family;
         opts.connect_timeout_ms = connect_timeout_ms;
         opts.read_timeout_ms = read_timeout_ms;
+        opts.max_time_ms = max_time_ms;
         opts.max_redirects = max_redirects;
         opts.fail_on_http_error = fail_on_http_error;
         opts.body_out = NULL;
@@ -1433,6 +1511,7 @@ int main(int argc, char **argv) {
         opts.upload_path = NULL;
         opts.happy_eyeballs = happy_eyeballs;
         opts.verbose = verbose;
+        opts.user_agent = user_agent;
 
         memset(&result_a, 0, sizeof(result_a));
         memset(&result_b, 0, sizeof(result_b));

@@ -105,6 +105,7 @@ int send_request(
     const char **extra_headers,
     size_t extra_header_count,
     const char *basic_auth,
+    const char *user_agent,
     char *error,
     size_t error_len
 );
@@ -116,7 +117,8 @@ int receive_response(
     size_t error_len,
     FILE *body_out,
     bool follow_redirects,
-    bool fail_on_http_error
+    bool fail_on_http_error,
+    bool head_method
 );
 
 #endif
