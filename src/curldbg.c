@@ -1909,6 +1909,7 @@ int receive_response(
                 return -1;
             }
             if (chunk_state == 3 && cw < (size_t)n) {
+                break;
                 size_t off = cw;
                 while (off < (size_t)n) {
                     const char *cr = memchr(recv_buf + off, '\r', (size_t)n - off);
