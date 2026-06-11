@@ -12,6 +12,8 @@
 #include <time.h>
 #include <unistd.h>
 
+
+
 struct run_options {
     char method[8];
     const char *data;
@@ -289,6 +291,7 @@ static int run_request(
     FILE *upload_file = NULL;
     size_t upload_size = 0;
     struct timespec total_start, total_end;
+    int preferred_family = AF_INET;
 
     memset(out, 0, sizeof(*out));
     out->ttfb_ms = -1.0;
@@ -412,7 +415,8 @@ static int run_request(
             &out->hops[out->hop_count].connected_family,
             effective_connect_ms,
             &race_info,
-            opts->happy_eyeballs
+            opts->happy_eyeballs,
+            preferred_family
         );
         if (clock_gettime(CLOCK_MONOTONIC, &connect_end) != 0) {
             die("clock_gettime");
@@ -424,6 +428,7 @@ static int run_request(
             close_upload_file(&upload_file);
             return -1;
         }
+        preferred_family = out->hops[out->hop_count].connected_family;
         if (race_info.winner_connect_ms > 0.0) {
             out->connect_ms += race_info.winner_connect_ms;
         } else {
@@ -586,6 +591,7 @@ static int run_request(
     }
     out->total_ms = ms_between(&total_start, &total_end);
     close_upload_file(&upload_file);
+
     return 0;
 }
 

@@ -84,7 +84,8 @@ int connect_tcp(
     int *connected_family,
     int connect_timeout_ms,
     struct connect_race_info *race_info,
-    bool happy_eyeballs
+    bool happy_eyeballs,
+    int preferred_family
 );
 void apply_socket_timeout(int fd, int timeout_ms);
 void close_connection(struct connection *conn);

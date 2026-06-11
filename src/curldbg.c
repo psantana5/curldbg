@@ -17,7 +17,7 @@
 
 #include <openssl/err.h>
 
-#define HAPPY_EYEBALLS_DELAY_MS 250
+#define HAPPY_EYEBALLS_DELAY_MS 100
 
 void die(const char *msg) {
     perror(msg);
@@ -113,11 +113,13 @@ static void init_shared_tls_ctx_once(void) {
 #endif
 
     SSL_CTX_set_verify(g_shared_tls_ctx, SSL_VERIFY_PEER, NULL);
-    if (SSL_CTX_set_default_verify_paths(g_shared_tls_ctx) != 1) {
-        set_ssl_error(g_tls_ctx_init_error, sizeof(g_tls_ctx_init_error), "Could not load system CA certificates");
-        SSL_CTX_free(g_shared_tls_ctx);
-        g_shared_tls_ctx = NULL;
-        return;
+    if (SSL_CTX_load_verify_file(g_shared_tls_ctx, X509_get_default_cert_file()) != 1) {
+        if (SSL_CTX_set_default_verify_paths(g_shared_tls_ctx) != 1) {
+            set_ssl_error(g_tls_ctx_init_error, sizeof(g_tls_ctx_init_error), "Could not load system CA certificates");
+            SSL_CTX_free(g_shared_tls_ctx);
+            g_shared_tls_ctx = NULL;
+            return;
+        }
     }
 
     g_tls_ctx_init_status = 0;
@@ -965,6 +967,16 @@ static int connect_tcp_happy_eyeballs(
     return -1;
 }
 
+static int connect_tcp_preferred_first(
+    const struct addrinfo *addrs,
+    char *connected_ip,
+    size_t connected_ip_size,
+    int *connected_family,
+    int connect_timeout_ms,
+    struct connect_race_info *race_info,
+    int preferred_family
+);
+
 /* Try each resolved address until one connect() succeeds. */
 int connect_tcp(
     const struct addrinfo *addrs,
@@ -973,8 +985,15 @@ int connect_tcp(
     int *connected_family,
     int connect_timeout_ms,
     struct connect_race_info *race_info,
-    bool happy_eyeballs
+    bool happy_eyeballs,
+    int preferred_family
 ) {
+    if (preferred_family != AF_UNSPEC) {
+        return connect_tcp_preferred_first(
+            addrs, connected_ip, connected_ip_size, connected_family,
+            connect_timeout_ms, race_info, preferred_family
+        );
+    }
     if (!happy_eyeballs) {
         return connect_tcp_sequential(
             addrs,
@@ -993,6 +1012,49 @@ int connect_tcp(
         connect_timeout_ms,
         race_info
     );
+}
+
+static int connect_tcp_preferred_first(
+    const struct addrinfo *addrs,
+    char *connected_ip,
+    size_t connected_ip_size,
+    int *connected_family,
+    int connect_timeout_ms,
+    struct connect_race_info *race_info,
+    int preferred_family
+) {
+    const struct addrinfo *ai;
+    int last_errno = 0;
+    int fallback_af = (preferred_family == AF_INET) ? AF_INET6 : AF_INET;
+    int per_attempt_ms = (connect_timeout_ms > 0) ? connect_timeout_ms : 5000;
+
+    clear_race_info(race_info);
+
+    for (int pass = 0; pass < 2; pass++) {
+        int target_af = (pass == 0) ? preferred_family : fallback_af;
+        for (ai = addrs; ai != NULL; ai = ai->ai_next) {
+            if (ai->ai_family != target_af) continue;
+
+            struct timespec start_ts, end_ts;
+            int fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+            if (fd < 0) { last_errno = errno; continue; }
+
+            clock_gettime(CLOCK_MONOTONIC, &start_ts);
+            if (connect_with_timeout(fd, ai->ai_addr, ai->ai_addrlen, per_attempt_ms) == 0) {
+                clock_gettime(CLOCK_MONOTONIC, &end_ts);
+                if (race_info != NULL)
+                    race_info->winner_connect_ms = ms_between(&start_ts, &end_ts);
+                fill_connected_endpoint(ai, connected_ip, connected_ip_size, connected_family);
+                return fd;
+            }
+            last_errno = errno;
+            close(fd);
+        }
+    }
+
+    if (last_errno != 0) errno = last_errno;
+    else errno = ECONNREFUSED;
+    return -1;
 }
 
 void apply_socket_timeout(int fd, int timeout_ms) {
@@ -1653,7 +1715,7 @@ int receive_response(
 
                 if ((follow_redirects && is_redirect_status(out->status_code) && out->location[0] != '\0') ||
                     (fail_on_http_error && out->status_code >= 400)) {
-                    write_body = false;
+                    return 0;
                 }
 
                 chunked = out->chunked;
