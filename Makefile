@@ -2,7 +2,7 @@ CC := gcc
 CFLAGS := -O2 -Wall -Wextra -pthread -Iinclude
 LDLIBS := -pthread -lssl -lcrypto
 TARGET := curldbg
-SRCS := src/main.c src/curldbg.c
+SRCS := src/main.c src/util.c src/url.c src/dns.c src/tls.c src/connect.c src/http.c src/proxy.c src/cookie.c
 OBJS := $(SRCS:.c=.o)
 MANPAGE := man/curldbg.1
 PREFIX ?= /usr/local
@@ -22,7 +22,7 @@ clean:
 	rm -f $(TARGET) $(OBJS)
 
 test: $(TARGET)
-	@CURLDBG=$(CURDIR)/$(TARGET) sh tests/run.sh
+	@CURLDBG=$(CURDIR)/$(TARGET) sh tests/flags.sh
 
 install: $(TARGET) $(MANPAGE)
 	install -d $(DESTDIR)$(BINDIR) $(DESTDIR)$(MANDIR)
