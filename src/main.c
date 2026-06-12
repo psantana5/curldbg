@@ -295,6 +295,11 @@ static int run_request(const char *input_url, const struct run_options *opts, st
 
     if (clock_gettime(CLOCK_MONOTONIC, &total_start) != 0) die("clock_gettime");
 
+    char method[8];
+    const char *data;
+    strcpy(method, opts->method);
+    data = opts->data;
+
     for (;;) {
         struct url_info url, redirected_url;
         struct addrinfo *addrs = NULL;
@@ -522,7 +527,7 @@ static int run_request(const char *input_url, const struct run_options *opts, st
             }
         }
 
-        int sr = send_request(&conn, &url, opts->method, opts->data,
+        int sr = send_request(&conn, &url, method, data,
                 upload_file, upload_size, send_headers, send_header_count,
                 opts->basic_auth, opts->user_agent, out->error, sizeof(out->error),
                 use_proxy && !url.use_tls, chunked_upload);
@@ -583,6 +588,13 @@ static int run_request(const char *input_url, const struct run_options *opts, st
                      "%s", redirected_url.host);
             out->hops[out->hop_count].has_redirect_target = true;
             can_redirect = true;
+            if (out->resp.status_code == 303) {
+                strcpy(method, "GET");
+                data = NULL;
+                close_upload_file(&upload_file);
+                upload_size = 0;
+                chunked_upload = false;
+            }
         }
 
         out->hop_count++;

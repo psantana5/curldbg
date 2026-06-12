@@ -139,10 +139,8 @@ for i in $(seq 1 $ITERATIONS); do
     run_check_stderr "Location:" "-L" "-v" "-o" "/dev/null" "$LOCAL/redirect/2"
 done
 
-# 303 should change POST to GET per HTTP spec, but curldbg doesn't implement this yet.
-# Verify it stays POST (current behavior).
-echo "--- Redirect 303 (curr behavior: preserves POST) ---"
-run_iters $ITERATIONS "METHOD:POST" "-L" "-X" "POST" "-d" "body=1" "$LOCAL/redirect-to?url=$LOCAL/echo&status_code=303"
+echo "--- Redirect 303 changes POST to GET ---"
+run_iters $ITERATIONS "METHOD:GET" "-L" "-X" "POST" "-d" "body=1" "$LOCAL/redirect-to?url=$LOCAL/echo&status_code=303"
 
 echo
 # ============================================================
