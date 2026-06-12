@@ -994,7 +994,10 @@ static int run_single_request(const struct cmdline_opts *c, struct run_options *
         opts->proxy_port = strdup(proxy_ui.port);
     }
 
-    if (run_request(c->input_url, opts, result) != 0) {
+    int rc = run_request(c->input_url, opts, result);
+    free(opts->proxy_host);
+    free(opts->proxy_port);
+    if (rc != 0) {
         if ((!c->silent || c->show_error) && result->error[0] != '\0')
             fprintf(stderr, "Request failed: %s\n", result->error);
         return -1;
@@ -1241,16 +1244,17 @@ int main(int argc, char **argv) {
     }
 
     /* Add cookie data from -b as an extra header */
+    char *cookie_header_alloc = NULL;
     if (c.cookie_data != NULL && c.cookie_data[0] != '\0') {
         size_t hlen = strlen(c.cookie_data) + 10;
-        char *cookie_header = malloc(hlen);
-        if (cookie_header != NULL) {
-            size_t n = snprintf(cookie_header, hlen, "Cookie: %s", c.cookie_data);
+        cookie_header_alloc = malloc(hlen);
+        if (cookie_header_alloc != NULL) {
+            size_t n = snprintf(cookie_header_alloc, hlen, "Cookie: %s", c.cookie_data);
             if (n < hlen) {
                 const char **new_headers = realloc(c.extra_headers, (c.extra_header_count + 1) * sizeof(*c.extra_headers));
                 if (new_headers != NULL) {
                     c.extra_headers = new_headers;
-                    c.extra_headers[c.extra_header_count++] = cookie_header;
+                    c.extra_headers[c.extra_header_count++] = cookie_header_alloc;
                 }
             }
         }
@@ -1378,6 +1382,7 @@ int main(int argc, char **argv) {
     }
 
 cleanup:
+    free(cookie_header_alloc);
     free(c.extra_headers);
     free(c.request_data_alloc);
     free(c.cookie_data_alloc);
