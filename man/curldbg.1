@@ -23,8 +23,8 @@ assumed.
 .SH OPTIONS
 .SS "Request control"
 .TP
-.B \-X, \-\-request \fIGET|POST|PUT|HEAD\fR
-Choose HTTP method (default: GET).
+.B \-X, \-\-request \fIMETHOD\fR
+Choose HTTP method (default: GET). Supports GET, POST, PUT, DELETE, HEAD, PATCH, OPTIONS, PURGE, and others.
 .TP
 .B \-d, \-\-data \fIbody\fR
 Send request body. Defaults method to POST if \-X is not set.
@@ -103,6 +103,17 @@ Follow redirects.
 .TP
 .B \-\-max-redirs \fIn\fR
 Maximum number of redirects when \-L is active (default: 10).
+.SS "Proxy"
+.TP
+.B \-\-proxy \fIurl\fR
+Use an HTTP proxy (e.g. http://proxy:8080). Supports CONNECT tunneling for HTTPS targets.
+.SS "Cookies"
+.TP
+.B \-b, \-\-cookie \fIstring\fR
+Send cookies. Repeatable (values accumulate). Prefix with @ to load from a Netscape-format cookie file.
+.TP
+.B \-c, \-\-cookie-jar \fIfile\fR
+Write Set-Cookie response headers to a file in Netscape cookie format.
 .SS "Compare modes"
 .TP
 .B \-\-compare
@@ -115,6 +126,18 @@ Run two different URLs concurrently and print side-by-side metrics with deltas.
 .TP
 .B \-\-version
 Show version and author.
+.TP
+.B \-\-wizard
+Display a wizard ASCII banner.
+.TP
+.B \-\-lore
+Print the origin story.
+.TP
+.B \-\-fika
+Print a Swedish coffee-break notification.
+.TP
+.B \-\-debug-chaos
+Simulate intermittent failures for testing.
 .SH "OUTPUT FIELDS"
 When not in silent mode, curldbg prints:
 .TP

@@ -16,8 +16,8 @@ actually failing and where.
   IP and address family for each hop
 - **curl-compatible CLI** — supports common curl flags (`-d`, `-L`, `-f`, `-sS`,
   `-I`, `-A`, `-H`, `-u`, `-X`, `-o`, `-O`, `-T`, `-k`, `-4`/`-6`, `-v`,
-  `--max-time`, `--connect-timeout`, `--read-timeout`, `--no-happy-eyeballs`) for
-  drop-in use in scripts
+  `-b`/`-c`, `--proxy`, `--max-time`, `--connect-timeout`, `--read-timeout`,
+  `--max-redirs`, `--no-happy-eyeballs`) for drop-in use in scripts
 - **Redirect following** — tracks the full redirect chain with per-hop timing
 - **Post data from files/stdin** — `-d @file` and `-d @-` avoid shell escaping
 - **Chunked decoding** — decodes chunked Transfer-Encoding on the fly so piped
@@ -34,7 +34,7 @@ actually failing and where.
   pipe-friendly output
 - **Network debugging** — quick visibility into DNS resolution, connect latency,
   TTFB, redirect chains, and happy-eyeballs races
-- **Embedded/low-resource** — single ~62KB binary, no libcurl dependency, minimal
+- **Embedded/low-resource** — single ~83KB binary, no libcurl dependency, minimal
   memory footprint
 
 ## Quick start
@@ -52,8 +52,15 @@ See `man ./man/curldbg.1` or `man curldbg` after install.
 
 ## Project layout
 
-- `src/main.c` — CLI option parsing, redirect loop, output formatting, test runner
-- `src/curldbg.c` — networking, TLS, HTTP send/receive, chunked decoding, URL parsing
+- `src/main.c` — CLI option parsing, redirect loop, output formatting
+- `src/connect.c` — TCP connection with Happy Eyeballs
+- `src/http.c` — HTTP send/receive, chunked decoding
+- `src/tls.c` — TLS handshake via OpenSSL
+- `src/dns.c` — DNS resolution with thread-based timeout
+- `src/url.c` — URL parsing and redirect URL construction
+- `src/proxy.c` — HTTP CONNECT proxy handshake
+- `src/cookie.c` — Cookie jar for -b/-c flags
+- `src/util.c` — Timers and helpers
 - `include/curldbg.h` — shared structs, constants, function declarations
 
 ## Testing
@@ -62,4 +69,4 @@ See `man ./man/curldbg.1` or `man curldbg` after install.
 make test
 ```
 
-Requires network access to httpbin.org.
+Runs 190 tests against a local test server (Python, no network required).
