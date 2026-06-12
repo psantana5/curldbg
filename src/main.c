@@ -1250,19 +1250,20 @@ int main(int argc, char **argv) {
     }
 
     /* Add cookie data from -b as an extra header */
-    char *cookie_header_alloc = NULL;
     if (c.cookie_data != NULL && c.cookie_data[0] != '\0') {
         size_t hlen = strlen(c.cookie_data) + 10;
-        cookie_header_alloc = malloc(hlen);
-        if (cookie_header_alloc != NULL) {
-            size_t n = snprintf(cookie_header_alloc, hlen, "Cookie: %s", c.cookie_data);
+        char *ch = malloc(hlen);
+        if (ch != NULL) {
+            size_t n = snprintf(ch, hlen, "Cookie: %s", c.cookie_data);
             if (n < hlen) {
                 const char **new_headers = realloc(c.extra_headers, (c.extra_header_count + 1) * sizeof(*c.extra_headers));
                 if (new_headers != NULL) {
                     c.extra_headers = new_headers;
-                    c.extra_headers[c.extra_header_count++] = cookie_header_alloc;
+                    c.extra_headers[c.extra_header_count++] = ch;
+                    ch = NULL;
                 }
             }
+            free(ch);
         }
     }
 
@@ -1388,7 +1389,6 @@ int main(int argc, char **argv) {
     }
 
 cleanup:
-    free(cookie_header_alloc);
     free(c.extra_headers);
     free(c.request_data_alloc);
     free(c.cookie_data_alloc);
