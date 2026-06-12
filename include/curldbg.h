@@ -15,7 +15,7 @@
 #define DEFAULT_MAX_REDIRECTS 10
 #define MAX_COOKIES 256
 #define MAX_COOKIE_LEN 4096
-#define CURLDBG_VERSION "0.6.0"
+#define CURLDBG_VERSION "1.0.0"
 
 struct url_info {
     char host[256];

@@ -323,8 +323,6 @@ static int run_request(const char *input_url, const struct run_options *opts, st
             free_run_result(out); close_upload_file(&upload_file);
             close_connection(&conn); freeaddrinfo(conn_addrs); return -1;
         }
-        if (url.use_tls) warmup_tls();
-
         if (out->hop_count >= opts->max_redirects + 1) {
             snprintf(out->error, sizeof(out->error), "Too many hops");
             free_run_result(out); close_upload_file(&upload_file);
@@ -492,8 +490,6 @@ static int run_request(const char *input_url, const struct run_options *opts, st
             }
         }
 
-        const char **dynamic_headers = NULL;
-        size_t dynamic_header_count = 0;
         char cookie_header_buf[8192] = "";
         const char *cookie_header_str = NULL;
 
@@ -505,6 +501,7 @@ static int run_request(const char *input_url, const struct run_options *opts, st
 
         const char **send_headers = opts->extra_headers;
         size_t send_header_count = opts->extra_header_count;
+        const char *stack_headers[32];
 
         if (cookie_header_str != NULL) {
             bool has_cookie = false;
@@ -515,15 +512,23 @@ static int run_request(const char *input_url, const struct run_options *opts, st
                 }
             }
             if (!has_cookie) {
-                dynamic_header_count = opts->extra_header_count + 1;
-                dynamic_headers = malloc(dynamic_header_count * sizeof(*dynamic_headers));
-                if (dynamic_headers != NULL) {
+                size_t total = opts->extra_header_count + 1;
+                if (total <= sizeof(stack_headers) / sizeof(stack_headers[0])) {
                     for (size_t i = 0; i < opts->extra_header_count; i++)
-                        dynamic_headers[i] = opts->extra_headers[i];
-                    dynamic_headers[opts->extra_header_count] = cookie_header_str;
-                    send_headers = dynamic_headers;
-                    send_header_count = dynamic_header_count;
+                        stack_headers[i] = opts->extra_headers[i];
+                    stack_headers[opts->extra_header_count] = cookie_header_str;
+                    send_headers = stack_headers;
+                } else {
+                    const char **dh = malloc(total * sizeof(*dh));
+                    if (dh != NULL) {
+                        for (size_t i = 0; i < opts->extra_header_count; i++)
+                            dh[i] = opts->extra_headers[i];
+                        dh[opts->extra_header_count] = cookie_header_str;
+                        send_headers = dh;
+                        send_header_count = total;
+                    }
                 }
+                send_header_count = total;
             }
         }
 
@@ -531,7 +536,8 @@ static int run_request(const char *input_url, const struct run_options *opts, st
                 upload_file, upload_size, send_headers, send_header_count,
                 opts->basic_auth, opts->user_agent, out->error, sizeof(out->error),
                 use_proxy && !url.use_tls, chunked_upload);
-        free(dynamic_headers);
+        if (send_headers != opts->extra_headers && send_headers != stack_headers)
+            free((void *)send_headers);
 
         if (sr != 0) {
             close_connection(&conn); freeaddrinfo(conn_addrs); conn_addrs = NULL;
@@ -995,8 +1001,8 @@ static int run_single_request(const struct cmdline_opts *c, struct run_options *
     }
 
     int rc = run_request(c->input_url, opts, result);
-    free(opts->proxy_host);
-    free(opts->proxy_port);
+    free((void *)opts->proxy_host);
+    free((void *)opts->proxy_port);
     if (rc != 0) {
         if ((!c->silent || c->show_error) && result->error[0] != '\0')
             fprintf(stderr, "Request failed: %s\n", result->error);

@@ -1,5 +1,6 @@
 CC := gcc
-CFLAGS := -O2 -Wall -Wextra -pthread -Iinclude
+OPT ?= -O2
+CFLAGS := $(OPT) -Wall -Wextra -pthread -Iinclude
 LDLIBS := -pthread -lssl -lcrypto
 TARGET := curldbg
 OBJDIR := obj
@@ -10,12 +11,12 @@ PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man/man1
 
-.PHONY: all clean install test
+.PHONY: all clean install test static
 
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $(OBJS) $(LDLIBS)
+	$(CC) $(CFLAGS) -s -o $@ $(OBJS) $(LDLIBS)
 
 $(OBJDIR)/%.o: src/%.c include/curldbg.h | $(OBJDIR)
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -28,6 +29,12 @@ clean:
 
 test: $(TARGET)
 	@CURLDBG=$(CURDIR)/$(TARGET) sh tests/flags.sh
+
+static: CFLAGS += -no-pie
+static: LDLIBS = -pthread /usr/lib/x86_64-linux-gnu/libssl.a /usr/lib/x86_64-linux-gnu/libcrypto.a
+static: $(OBJS)
+	$(CC) $(CFLAGS) -s -static-libgcc -o $(TARGET)-static $(OBJS) $(LDLIBS)
+	@echo "Built $(TARGET)-static (statically linked)"
 
 install: $(TARGET) $(MANPAGE)
 	install -d $(DESTDIR)$(BINDIR) $(DESTDIR)$(MANDIR)
