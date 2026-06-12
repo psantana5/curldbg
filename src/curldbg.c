@@ -1656,7 +1656,10 @@ static char *find_header_end(char *buf, size_t len) {
 
 static size_t write_body_data(const char *buf, size_t len, FILE *body_out, struct response_info *out) {
     if (body_out != NULL && len > 0) {
-        if (fwrite(buf, 1, len, body_out) != len) {
+        int fd = fileno(body_out);
+        if (fd < 0) return (size_t)-1;
+        ssize_t written = write(fd, buf, len);
+        if (written < 0 || (size_t)written != len) {
             return (size_t)-1;
         }
     }
@@ -1910,22 +1913,6 @@ int receive_response(
             }
             if (chunk_state == 3 && cw < (size_t)n) {
                 break;
-                size_t off = cw;
-                while (off < (size_t)n) {
-                    const char *cr = memchr(recv_buf + off, '\r', (size_t)n - off);
-                    if (cr == NULL) break;
-                    size_t cr_off = (size_t)(cr - recv_buf);
-                    if (cr_off + 1 < (size_t)n && recv_buf[cr_off + 1] == '\n') {
-                        bool empty = (cr_off == off);
-                        off = cr_off + 2;
-                        if (empty) break;
-                    } else if (cr_off + 1 >= (size_t)n) {
-                        trailer_mode = true;
-                        break;
-                    } else {
-                        off = cr_off + 1;
-                    }
-                }
             }
         } else {
             size_t take = (size_t)n;
