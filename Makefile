@@ -2,8 +2,9 @@ CC := gcc
 CFLAGS := -O2 -Wall -Wextra -pthread -Iinclude
 LDLIBS := -pthread -lssl -lcrypto
 TARGET := curldbg
+OBJDIR := obj
 SRCS := src/main.c src/util.c src/url.c src/dns.c src/tls.c src/connect.c src/http.c src/proxy.c src/cookie.c
-OBJS := $(SRCS:.c=.o)
+OBJS := $(SRCS:src/%.c=$(OBJDIR)/%.o)
 MANPAGE := man/curldbg.1
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
@@ -16,10 +17,14 @@ all: $(TARGET)
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $(OBJS) $(LDLIBS)
 
-$(OBJS): include/curldbg.h
+$(OBJDIR)/%.o: src/%.c include/curldbg.h | $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(OBJDIR):
+	mkdir -p $(OBJDIR)
 
 clean:
-	rm -f $(TARGET) $(OBJS)
+	rm -rf $(TARGET) $(OBJDIR)
 
 test: $(TARGET)
 	@CURLDBG=$(CURDIR)/$(TARGET) sh tests/flags.sh
