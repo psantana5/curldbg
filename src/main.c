@@ -12,6 +12,8 @@
 #include <time.h>
 #include <unistd.h>
 #include <netinet/tcp.h>
+#include <arpa/inet.h>
+#include <poll.h>
 
 struct run_options {
     char method[8];
@@ -37,6 +39,14 @@ struct run_options {
     const char *cookie_data;
     const char *cookie_jar_path;
     struct cookie_jar *cookie_jar;
+    const struct resolve_entry *resolve_entries;
+    int resolve_count;
+    const char *referer;
+    const char *bind_interface;
+    int tls_min_version;
+    int tls_max_version;
+    int retry_count;
+    int retry_delay_ms;
 };
 
 struct run_result {
@@ -87,6 +97,7 @@ struct cmdline_opts {
     const char *user_agent;
     const char *cookie_data;
     char *cookie_data_alloc;
+    char *cookie_header_alloc;
     const char *cookie_jar_path;
     const char *cookie_file_to_load;
     const char *proxy_url;
@@ -95,6 +106,14 @@ struct cmdline_opts {
     int read_timeout_ms;
     int max_time_ms;
     int max_redirects;
+    struct resolve_entry resolve_entries[MAX_RESOLVE_ENTRIES];
+    int resolve_count;
+    const char *referer;
+    const char *bind_interface;
+    int tls_min_version;
+    int tls_max_version;
+    int retry_count;
+    int retry_delay_ms;
 };
 
 static int run_request(const char *input_url, const struct run_options *opts, struct run_result *out);
@@ -104,6 +123,31 @@ static void run_two_requests_parallel(const char *url_a, const struct run_option
                                        const char *url_b, const struct run_options *opts_b,
                                        struct run_result *result_b, bool *ok_b);
 static int output_filename_from_url(const char *input_url, char *out, size_t out_size);
+
+static const struct resolve_entry *find_resolve_entry(
+    const struct resolve_entry *entries, int count, const char *host, const char *port)
+{
+    for (int i = 0; i < count; i++) {
+        if (strcmp(entries[i].host, host) == 0 && strcmp(entries[i].port, port) == 0)
+            return &entries[i];
+    }
+    return NULL;
+}
+
+static struct addrinfo *build_addrinfo_from_resolve(const struct resolve_entry *re) {
+    size_t total = sizeof(struct addrinfo) + re->ss_len;
+    struct addrinfo *ai = calloc(1, total);
+    if (ai == NULL) return NULL;
+    struct sockaddr *sa = (struct sockaddr *)((char *)ai + sizeof(struct addrinfo));
+    memcpy(sa, &re->ss, re->ss_len);
+    ai->ai_family = re->family;
+    ai->ai_socktype = SOCK_STREAM;
+    ai->ai_protocol = IPPROTO_TCP;
+    ai->ai_addr = sa;
+    ai->ai_addrlen = re->ss_len;
+    ai->ai_next = NULL;
+    return ai;
+}
 
 static int parse_non_negative_int(const char *value, const char *flag_name) {
     char *end = NULL;
@@ -354,9 +398,17 @@ static int run_request(const char *input_url, const struct run_options *opts, st
             conn_addrs = NULL;
             conn_host[0] = '\0'; conn_port[0] = '\0';
 
-            clock_gettime(CLOCK_MONOTONIC, &dns_start);
-            addrs = resolve_dns_timeout(&url, opts->address_family, &gai_error, 5000);
-            clock_gettime(CLOCK_MONOTONIC, &dns_end);
+            const struct resolve_entry *re = find_resolve_entry(opts->resolve_entries, opts->resolve_count, url.host, url.port);
+            if (re != NULL) {
+                addrs = build_addrinfo_from_resolve(re);
+                gai_error = (addrs != NULL) ? 0 : EAI_FAIL;
+                clock_gettime(CLOCK_MONOTONIC, &dns_start);
+                dns_end = dns_start;
+            } else {
+                clock_gettime(CLOCK_MONOTONIC, &dns_start);
+                addrs = resolve_dns_timeout(&url, opts->address_family, &gai_error, 5000);
+                clock_gettime(CLOCK_MONOTONIC, &dns_end);
+            }
             if (addrs == NULL) {
                 snprintf(out->error, sizeof(out->error), "DNS resolution failed: %s", gai_strerror(gai_error));
                 free_run_result(out); close_upload_file(&upload_file); return -1;
@@ -405,7 +457,8 @@ static int run_request(const char *input_url, const struct run_options *opts, st
                     sizeof(out->hops[out->hop_count].connected_ip),
                     &out->hops[out->hop_count].connected_family,
                     effective_connect_ms, &race_info,
-                    opts->happy_eyeballs, preferred_family);
+                    opts->happy_eyeballs, preferred_family,
+                    opts->bind_interface);
                 clock_gettime(CLOCK_MONOTONIC, &connect_end);
                 if (fd < 0) {
                     snprintf(out->error, sizeof(out->error), "Proxy TCP connect failed: %s", strerror(errno));
@@ -428,7 +481,9 @@ static int run_request(const char *input_url, const struct run_options *opts, st
                         close_connection(&conn); freeaddrinfo(addrs); conn_addrs = NULL;
                         free_run_result(out); close_upload_file(&upload_file); return -1;
                     }
-                    if (init_tls(&conn, url.host, opts->insecure_tls, out->error, sizeof(out->error)) != 0) {
+                    if (init_tls(&conn, url.host, opts->insecure_tls,
+                                 opts->tls_min_version, opts->tls_max_version,
+                                 out->error, sizeof(out->error)) != 0) {
                         close_connection(&conn); freeaddrinfo(addrs); conn_addrs = NULL;
                         free_run_result(out); close_upload_file(&upload_file); return -1;
                     }
@@ -439,7 +494,8 @@ static int run_request(const char *input_url, const struct run_options *opts, st
                     sizeof(out->hops[out->hop_count].connected_ip),
                     &out->hops[out->hop_count].connected_family,
                     effective_connect_ms, &race_info,
-                    opts->happy_eyeballs, preferred_family);
+                    opts->happy_eyeballs, preferred_family,
+                    opts->bind_interface);
                 clock_gettime(CLOCK_MONOTONIC, &connect_end);
                 if (fd < 0) {
                     snprintf(out->error, sizeof(out->error), "TCP connect failed: %s", strerror(errno));
@@ -471,7 +527,9 @@ static int run_request(const char *input_url, const struct run_options *opts, st
             apply_socket_timeout(conn.fd, effective_read_ms);
 
             if (!use_proxy && url.use_tls) {
-                if (init_tls(&conn, url.host, opts->insecure_tls, out->error, sizeof(out->error)) != 0) {
+                if (init_tls(&conn, url.host, opts->insecure_tls,
+                             opts->tls_min_version, opts->tls_max_version,
+                             out->error, sizeof(out->error)) != 0) {
                     close_connection(&conn); freeaddrinfo(addrs); conn_addrs = NULL;
                     free_run_result(out); close_upload_file(&upload_file); return -1;
                 }
@@ -499,6 +557,21 @@ static int run_request(const char *input_url, const struct run_options *opts, st
             if (cookie_header_buf[0] != '\0') cookie_header_str = cookie_header_buf;
         }
 
+        char referer_header_buf[2048] = "";
+        if (opts->referer != NULL) {
+            bool has_referer = false;
+            for (size_t i = 0; i < opts->extra_header_count; i++) {
+                if (opts->extra_headers[i] != NULL &&
+                    strncasecmp(opts->extra_headers[i], "Referer:", 8) == 0) {
+                    has_referer = true; break;
+                }
+            }
+            if (!has_referer) {
+                int n = snprintf(referer_header_buf, sizeof(referer_header_buf), "Referer: %s", opts->referer);
+                if (n < 0 || (size_t)n >= sizeof(referer_header_buf)) referer_header_buf[0] = '\0';
+            }
+        }
+
         const char **send_headers = opts->extra_headers;
         size_t send_header_count = opts->extra_header_count;
         const char *stack_headers[32];
@@ -512,11 +585,13 @@ static int run_request(const char *input_url, const struct run_options *opts, st
                 }
             }
             if (!has_cookie) {
-                size_t total = opts->extra_header_count + 1;
+                size_t total = opts->extra_header_count + (referer_header_buf[0] != '\0' ? 2 : 1);
                 if (total <= sizeof(stack_headers) / sizeof(stack_headers[0])) {
                     for (size_t i = 0; i < opts->extra_header_count; i++)
                         stack_headers[i] = opts->extra_headers[i];
                     stack_headers[opts->extra_header_count] = cookie_header_str;
+                    if (referer_header_buf[0] != '\0')
+                        stack_headers[opts->extra_header_count + 1] = referer_header_buf;
                     send_headers = stack_headers;
                 } else {
                     const char **dh = malloc(total * sizeof(*dh));
@@ -524,11 +599,32 @@ static int run_request(const char *input_url, const struct run_options *opts, st
                         for (size_t i = 0; i < opts->extra_header_count; i++)
                             dh[i] = opts->extra_headers[i];
                         dh[opts->extra_header_count] = cookie_header_str;
+                        if (referer_header_buf[0] != '\0')
+                            dh[opts->extra_header_count + 1] = referer_header_buf;
                         send_headers = dh;
-                        send_header_count = total;
                     }
                 }
                 send_header_count = total;
+            }
+        }
+
+        if (send_headers == opts->extra_headers && referer_header_buf[0] != '\0') {
+            size_t total = opts->extra_header_count + 1;
+            if (total <= sizeof(stack_headers) / sizeof(stack_headers[0])) {
+                for (size_t i = 0; i < opts->extra_header_count; i++)
+                    stack_headers[i] = opts->extra_headers[i];
+                stack_headers[opts->extra_header_count] = referer_header_buf;
+                send_headers = stack_headers;
+                send_header_count = total;
+            } else {
+                const char **dh = malloc(total * sizeof(*dh));
+                if (dh != NULL) {
+                    for (size_t i = 0; i < opts->extra_header_count; i++)
+                        dh[i] = opts->extra_headers[i];
+                    dh[opts->extra_header_count] = referer_header_buf;
+                    send_headers = dh;
+                    send_header_count = total;
+                }
             }
         }
 
@@ -935,6 +1031,74 @@ static void parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
             }
             continue;
         }
+        if (strcmp(argv[i], "--resolve") == 0) {
+            if (i + 1 >= argc) { fprintf(stderr, "Missing value for --resolve\n"); exit(EXIT_FAILURE); }
+            if (c->resolve_count >= MAX_RESOLVE_ENTRIES) { fprintf(stderr, "Too many --resolve entries (max %d)\n", MAX_RESOLVE_ENTRIES); exit(EXIT_FAILURE); }
+            const char *val = argv[++i];
+            const char *last_colon = strrchr(val, ':');
+            if (last_colon == NULL || last_colon == val) {
+                fprintf(stderr, "Invalid --resolve format (expected host:port:address)\n"); exit(EXIT_FAILURE);
+            }
+            const char *addr = last_colon + 1;
+            size_t hostport_len = (size_t)(last_colon - val);
+            char hostport[512];
+            if (hostport_len >= sizeof(hostport)) { fprintf(stderr, "--resolve host:port too long\n"); exit(EXIT_FAILURE); }
+            memcpy(hostport, val, hostport_len);
+            hostport[hostport_len] = '\0';
+            const char *port_colon = strrchr(hostport, ':');
+            if (port_colon == NULL) {
+                fprintf(stderr, "Invalid --resolve format (expected host:port:address)\n"); exit(EXIT_FAILURE);
+            }
+            *((char *)port_colon) = '\0';
+            const char *host = hostport;
+            const char *port = port_colon + 1;
+            struct resolve_entry *re = &c->resolve_entries[c->resolve_count];
+            memset(re, 0, sizeof(*re));
+            if (strlen(host) >= sizeof(re->host) || strlen(port) >= sizeof(re->port)) {
+                fprintf(stderr, "--resolve host or port too long\n"); exit(EXIT_FAILURE);
+            }
+            strcpy(re->host, host);
+            strcpy(re->port, port);
+            if (inet_pton(AF_INET, addr, &((struct sockaddr_in *)&re->ss)->sin_addr) == 1) {
+                re->family = AF_INET;
+                re->ss_len = sizeof(struct sockaddr_in);
+                ((struct sockaddr_in *)&re->ss)->sin_family = AF_INET;
+            } else if (inet_pton(AF_INET6, addr, &((struct sockaddr_in6 *)&re->ss)->sin6_addr) == 1) {
+                re->family = AF_INET6;
+                re->ss_len = sizeof(struct sockaddr_in6);
+                ((struct sockaddr_in6 *)&re->ss)->sin6_family = AF_INET6;
+            } else {
+                fprintf(stderr, "Invalid address in --resolve: %s\n", addr); exit(EXIT_FAILURE);
+            }
+            c->resolve_count++;
+            continue;
+        }
+        if (strcmp(argv[i], "-e") == 0 || strcmp(argv[i], "--referer") == 0) {
+            if (i + 1 >= argc) { fprintf(stderr, "Missing value for %s\n", argv[i]); exit(EXIT_FAILURE); }
+            c->referer = argv[++i]; continue;
+        }
+        if (strcmp(argv[i], "--interface") == 0) {
+            if (i + 1 >= argc) { fprintf(stderr, "Missing value for --interface\n"); exit(EXIT_FAILURE); }
+            c->bind_interface = argv[++i]; continue;
+        }
+        if (strcmp(argv[i], "--tlsv1.2") == 0) {
+            c->tls_min_version = TLS1_2_VERSION;
+            c->tls_max_version = TLS1_2_VERSION;
+            continue;
+        }
+        if (strcmp(argv[i], "--tlsv1.3") == 0) {
+            c->tls_min_version = TLS1_3_VERSION;
+            c->tls_max_version = TLS1_3_VERSION;
+            continue;
+        }
+        if (strcmp(argv[i], "--retry") == 0) {
+            if (i + 1 >= argc) { fprintf(stderr, "Missing value for --retry\n"); exit(EXIT_FAILURE); }
+            c->retry_count = parse_non_negative_int(argv[++i], "--retry"); continue;
+        }
+        if (strcmp(argv[i], "--retry-delay") == 0) {
+            if (i + 1 >= argc) { fprintf(stderr, "Missing value for --retry-delay\n"); exit(EXIT_FAILURE); }
+            c->retry_delay_ms = parse_non_negative_int(argv[++i], "--retry-delay") * 1000; continue;
+        }
 
         if (argv[i][0] == '-' && argv[i][1] != '\0' && argv[i][1] != '-' && argv[i][2] != '\0') {
             bool handled = true;
@@ -997,6 +1161,14 @@ static int run_single_request(const struct cmdline_opts *c, struct run_options *
     opts->cookie_data = c->cookie_data;
     opts->cookie_jar_path = c->cookie_jar_path;
     opts->cookie_jar = NULL;
+    opts->resolve_entries = c->resolve_entries;
+    opts->resolve_count = c->resolve_count;
+    opts->referer = c->referer;
+    opts->bind_interface = c->bind_interface;
+    opts->tls_min_version = c->tls_min_version;
+    opts->tls_max_version = c->tls_max_version;
+    opts->retry_count = c->retry_count;
+    opts->retry_delay_ms = c->retry_delay_ms;
 
     if (c->proxy_url != NULL) {
         struct url_info proxy_ui;
@@ -1008,12 +1180,25 @@ static int run_single_request(const struct cmdline_opts *c, struct run_options *
         opts->proxy_port = strdup(proxy_ui.port);
     }
 
-    int rc = run_request(c->input_url, opts, result);
+    int max_attempts = 1 + opts->retry_count;
+    int rc = -1;
+    for (int attempt = 0; attempt < max_attempts; attempt++) {
+        rc = run_request(c->input_url, opts, result);
+        if (rc == 0) break;
+        if (attempt + 1 < max_attempts && opts->retry_delay_ms > 0)
+            (void)poll(NULL, 0, opts->retry_delay_ms);
+    }
+
     free((void *)opts->proxy_host);
     free((void *)opts->proxy_port);
     if (rc != 0) {
-        if ((!c->silent || c->show_error) && result->error[0] != '\0')
-            fprintf(stderr, "Request failed: %s\n", result->error);
+        if (opts->retry_count > 0) {
+            if ((!c->silent || c->show_error) && result->error[0] != '\0')
+                fprintf(stderr, "Request failed after %d retries: %s\n", opts->retry_count, result->error);
+        } else {
+            if ((!c->silent || c->show_error) && result->error[0] != '\0')
+                fprintf(stderr, "Request failed: %s\n", result->error);
+        }
         return -1;
     }
     return 0;
@@ -1046,6 +1231,14 @@ static int run_compare_family(const struct cmdline_opts *c, struct run_options *
     opts->cookie_data = c->cookie_data;
     opts->cookie_jar_path = c->cookie_jar_path;
     opts->cookie_jar = NULL;
+    opts->resolve_entries = c->resolve_entries;
+    opts->resolve_count = c->resolve_count;
+    opts->referer = c->referer;
+    opts->bind_interface = c->bind_interface;
+    opts->tls_min_version = c->tls_min_version;
+    opts->tls_max_version = c->tls_max_version;
+    opts->retry_count = 0;
+    opts->retry_delay_ms = 0;
 
     opts->address_family = AF_INET;
     struct run_options opts_v4 = *opts;
@@ -1133,6 +1326,14 @@ static int run_compare_urls(const struct cmdline_opts *c, struct run_options *op
     opts->cookie_data = c->cookie_data;
     opts->cookie_jar_path = c->cookie_jar_path;
     opts->cookie_jar = NULL;
+    opts->resolve_entries = c->resolve_entries;
+    opts->resolve_count = c->resolve_count;
+    opts->referer = c->referer;
+    opts->bind_interface = c->bind_interface;
+    opts->tls_min_version = c->tls_min_version;
+    opts->tls_max_version = c->tls_max_version;
+    opts->retry_count = 0;
+    opts->retry_delay_ms = 0;
 
     memset(&result_a, 0, sizeof(result_a));
     memset(&result_b, 0, sizeof(result_b));
@@ -1260,18 +1461,22 @@ int main(int argc, char **argv) {
     /* Add cookie data from -b as an extra header */
     if (c.cookie_data != NULL && c.cookie_data[0] != '\0') {
         size_t hlen = strlen(c.cookie_data) + 10;
-        char *ch = malloc(hlen);
-        if (ch != NULL) {
-            size_t n = snprintf(ch, hlen, "Cookie: %s", c.cookie_data);
+        c.cookie_header_alloc = malloc(hlen);
+        if (c.cookie_header_alloc != NULL) {
+            size_t n = snprintf(c.cookie_header_alloc, hlen, "Cookie: %s", c.cookie_data);
             if (n < hlen) {
                 const char **new_headers = realloc(c.extra_headers, (c.extra_header_count + 1) * sizeof(*c.extra_headers));
                 if (new_headers != NULL) {
                     c.extra_headers = new_headers;
-                    c.extra_headers[c.extra_header_count++] = ch;
-                    ch = NULL;
+                    c.extra_headers[c.extra_header_count++] = c.cookie_header_alloc;
+                } else {
+                    free(c.cookie_header_alloc);
+                    c.cookie_header_alloc = NULL;
                 }
+            } else {
+                free(c.cookie_header_alloc);
+                c.cookie_header_alloc = NULL;
             }
-            free(ch);
         }
     }
 
@@ -1400,5 +1605,6 @@ cleanup:
     free(c.extra_headers);
     free(c.request_data_alloc);
     free(c.cookie_data_alloc);
+    free(c.cookie_header_alloc);
     return exit_code;
 }

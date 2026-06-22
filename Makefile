@@ -16,7 +16,7 @@ MANDIR ?= $(PREFIX)/share/man/man1
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) -s -o $@ $(OBJS) $(LDLIBS)
+	$(CC) $(CFLAGS) -s $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
 
 $(OBJDIR)/%.o: src/%.c include/curldbg.h | $(OBJDIR)
 	$(CC) $(CFLAGS) -c -o $@ $<

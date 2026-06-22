@@ -62,12 +62,25 @@ void warmup_tls(void) {
     (void)get_shared_tls_ctx(&ctx, err, sizeof(err));
 }
 
-int init_tls(struct connection *conn, const char *hostname, bool insecure, char *error, size_t error_len) {
+int init_tls(struct connection *conn, const char *hostname, bool insecure,
+             int tls_min_version, int tls_max_version,
+             char *error, size_t error_len) {
     SSL_CTX *shared_ctx = NULL;
     if (get_shared_tls_ctx(&shared_ctx, error, error_len) != 0) return -1;
 
     conn->ssl = SSL_new(shared_ctx);
     if (conn->ssl == NULL) { set_ssl_error(error, error_len, "SSL_new failed"); return -1; }
+
+    if (tls_min_version > 0) {
+        if (SSL_set_min_proto_version(conn->ssl, tls_min_version) != 1) {
+            set_ssl_error(error, error_len, "Failed to set TLS min version"); return -1;
+        }
+    }
+    if (tls_max_version > 0) {
+        if (SSL_set_max_proto_version(conn->ssl, tls_max_version) != 1) {
+            set_ssl_error(error, error_len, "Failed to set TLS max version"); return -1;
+        }
+    }
 
     if (SSL_set_tlsext_host_name(conn->ssl, hostname) != 1) {
         set_ssl_error(error, error_len, "Failed to set TLS SNI hostname"); return -1;

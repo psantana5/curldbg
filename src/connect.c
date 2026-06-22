@@ -11,8 +11,40 @@
 
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <net/if.h>
+#include <arpa/inet.h>
 
 #define HAPPY_EYEBALLS_DELAY_MS 25
+
+static int bind_to_interface(int fd, const char *bind_interface) {
+    if (bind_interface == NULL) return 0;
+
+    struct in_addr a4;
+    struct in6_addr a6;
+    if (inet_pton(AF_INET, bind_interface, &a4) == 1) {
+        struct sockaddr_in sin;
+        memset(&sin, 0, sizeof(sin));
+        sin.sin_family = AF_INET;
+        sin.sin_addr = a4;
+        sin.sin_port = 0;
+        if (bind(fd, (struct sockaddr *)&sin, sizeof(sin)) != 0) return -1;
+        return 0;
+    }
+    if (inet_pton(AF_INET6, bind_interface, &a6) == 1) {
+        struct sockaddr_in6 sin6;
+        memset(&sin6, 0, sizeof(sin6));
+        sin6.sin6_family = AF_INET6;
+        sin6.sin6_addr = a6;
+        sin6.sin6_port = 0;
+        if (bind(fd, (struct sockaddr *)&sin6, sizeof(sin6)) != 0) return -1;
+        return 0;
+    }
+#ifdef SO_BINDTODEVICE
+    if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, bind_interface, strlen(bind_interface)) != 0)
+        return -1;
+#endif
+    return 0;
+}
 
 static int connect_with_timeout(int fd, const struct sockaddr *addr, socklen_t addrlen, int timeout_ms) {
     int flags;
@@ -66,7 +98,8 @@ static int connect_tcp_sequential(
     char *connected_ip, size_t connected_ip_size,
     int *connected_family,
     int connect_timeout_ms,
-    struct connect_race_info *race_info
+    struct connect_race_info *race_info,
+    const char *bind_interface
 ) {
     const struct addrinfo *ai;
     int last_errno = 0;
@@ -76,6 +109,8 @@ static int connect_tcp_sequential(
         struct timespec start_ts, end_ts;
         int fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd < 0) { last_errno = errno; continue; }
+
+        if (bind_to_interface(fd, bind_interface) != 0) { last_errno = errno; close(fd); continue; }
 
         clock_gettime(CLOCK_MONOTONIC, &start_ts);
         if (connect_with_timeout(fd, ai->ai_addr, ai->ai_addrlen, connect_timeout_ms) == 0) {
@@ -109,7 +144,8 @@ static int connect_tcp_happy_eyeballs(
     char *connected_ip, size_t connected_ip_size,
     int *connected_family,
     int connect_timeout_ms,
-    struct connect_race_info *race_info
+    struct connect_race_info *race_info,
+    const char *bind_interface
 ) {
     const struct addrinfo *ai;
     size_t total = 0, v4_total = 0, v6_total = 0;
@@ -131,7 +167,7 @@ static int connect_tcp_happy_eyeballs(
 
     if (v4_total == 0 || v6_total == 0 || total == 0) {
         return connect_tcp_sequential(addrs, connected_ip, connected_ip_size,
-                                       connected_family, connect_timeout_ms, race_info);
+                                        connected_family, connect_timeout_ms, race_info, bind_interface);
     }
 
     clear_race_info(race_info);
@@ -166,7 +202,8 @@ static int connect_tcp_happy_eyeballs(
         if (next_index < total && now >= next_start_ms) {
             int fd = socket(attempts[next_index].ai->ai_family, SOCK_STREAM, attempts[next_index].ai->ai_protocol);
             if (fd >= 0) {
-                if (set_nonblocking(fd, true) != 0) {
+                if (bind_to_interface(fd, bind_interface) != 0) { last_errno = errno; close(fd); }
+                else if (set_nonblocking(fd, true) != 0) {
                     last_errno = errno; close(fd);
                 } else {
                     int rc = connect(fd, attempts[next_index].ai->ai_addr, attempts[next_index].ai->ai_addrlen);
@@ -355,7 +392,8 @@ static int connect_tcp_preferred_first(
     int *connected_family,
     int connect_timeout_ms,
     struct connect_race_info *race_info,
-    int preferred_family
+    int preferred_family,
+    const char *bind_interface
 ) {
     const struct addrinfo *ai;
     int last_errno = 0;
@@ -371,6 +409,7 @@ static int connect_tcp_preferred_first(
             struct timespec start_ts, end_ts;
             int fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
             if (fd < 0) { last_errno = errno; continue; }
+            if (bind_to_interface(fd, bind_interface) != 0) { last_errno = errno; close(fd); continue; }
 
             clock_gettime(CLOCK_MONOTONIC, &start_ts);
             if (connect_with_timeout(fd, ai->ai_addr, ai->ai_addrlen, per_attempt_ms) == 0) {
@@ -396,16 +435,17 @@ int connect_tcp(
     int connect_timeout_ms,
     struct connect_race_info *race_info,
     bool happy_eyeballs,
-    int preferred_family
+    int preferred_family,
+    const char *bind_interface
 ) {
     if (preferred_family != AF_UNSPEC)
         return connect_tcp_preferred_first(addrs, connected_ip, connected_ip_size, connected_family,
-                                            connect_timeout_ms, race_info, preferred_family);
+                                            connect_timeout_ms, race_info, preferred_family, bind_interface);
     if (!happy_eyeballs)
         return connect_tcp_sequential(addrs, connected_ip, connected_ip_size, connected_family,
-                                       connect_timeout_ms, race_info);
+                                       connect_timeout_ms, race_info, bind_interface);
     return connect_tcp_happy_eyeballs(addrs, connected_ip, connected_ip_size, connected_family,
-                                       connect_timeout_ms, race_info);
+                                       connect_timeout_ms, race_info, bind_interface);
 }
 
 void apply_socket_timeout(int fd, int timeout_ms) {

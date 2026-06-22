@@ -2,6 +2,7 @@
 *.o
 src/*.o
 curldbg
+curldbg_dbg
 
 # Test/benchmark scripts
 tests/*.py
