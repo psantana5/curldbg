@@ -947,6 +947,14 @@ static void parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
                     case 'k': c->insecure_tls = true; break;
                     case 'L': c->follow_redirects = true; break;
                     case 'I': strcpy(c->request_method, "HEAD"); c->method_explicit = true; break;
+                    case 'o':
+                        if (argv[i][j + 1] != '\0') {
+                            c->output_path = argv[i] + j + 1;
+                            while (argv[i][j + 1] != '\0') j++;
+                        } else {
+                            handled = false;
+                        }
+                        break;
                     default: handled = false; break;
                 }
                 if (!handled) break;
