@@ -8,15 +8,13 @@ int parse_url(const char *url, struct url_info *out) {
     const char *authority_start, *path_start;
     char authority[512];
     size_t authority_len;
-    const char *http_prefix = "http://";
-    const char *https_prefix = "https://";
 
-    if (strncmp(url, http_prefix, strlen(http_prefix)) == 0) {
-        authority_start = url + strlen(http_prefix);
+    if (strncmp(url, "http://", 7) == 0) {
+        authority_start = url + 7;
         out->use_tls = false;
         strcpy(out->port, "80");
-    } else if (strncmp(url, https_prefix, strlen(https_prefix)) == 0) {
-        authority_start = url + strlen(https_prefix);
+    } else if (strncmp(url, "https://", 8) == 0) {
+        authority_start = url + 8;
         out->use_tls = true;
         strcpy(out->port, "443");
     } else {

@@ -27,6 +27,7 @@ static void init_shared_tls_ctx_once(void) {
 #ifdef SSL_OP_IGNORE_UNEXPECTED_EOF
     SSL_CTX_set_options(g_shared_tls_ctx, SSL_OP_IGNORE_UNEXPECTED_EOF);
 #endif
+    SSL_CTX_set_session_cache_mode(g_shared_tls_ctx, SSL_SESS_CACHE_CLIENT);
     SSL_CTX_set_verify(g_shared_tls_ctx, SSL_VERIFY_PEER, NULL);
     if (SSL_CTX_load_verify_file(g_shared_tls_ctx, X509_get_default_cert_file()) != 1) {
         if (SSL_CTX_set_default_verify_paths(g_shared_tls_ctx) != 1) {

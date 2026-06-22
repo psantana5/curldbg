@@ -171,13 +171,17 @@ static int connect_tcp_happy_eyeballs(
     }
 
     clear_race_info(race_info);
-    v4 = calloc(v4_total, sizeof(*v4));
-    v6 = calloc(v6_total, sizeof(*v6));
-    attempts = calloc(total, sizeof(*attempts));
-    pfds = calloc(total, sizeof(*pfds));
-    if (v4 == NULL || v6 == NULL || attempts == NULL || pfds == NULL) {
-        free(v4); free(v6); free(attempts); free(pfds);
-        errno = ENOMEM; return -1;
+    {
+        size_t sz_v4 = v4_total * sizeof(*v4);
+        size_t sz_v6 = v6_total * sizeof(*v6);
+        size_t sz_att = total * sizeof(*attempts);
+        size_t sz_pfd = total * sizeof(*pfds);
+        char *mem = calloc(1, sz_v4 + sz_v6 + sz_att + sz_pfd);
+        if (mem == NULL) { errno = ENOMEM; return -1; }
+        v4 = (const struct addrinfo **)mem;
+        v6 = (const struct addrinfo **)(mem + sz_v4);
+        attempts = (struct he_attempt *)(mem + sz_v4 + sz_v6);
+        pfds = (struct pollfd *)(mem + sz_v4 + sz_v6 + sz_att);
     }
 
     {
@@ -238,7 +242,6 @@ static int connect_tcp_happy_eyeballs(
 
         if (active_count == 0) {
             if (next_index >= total) break;
-            now = now_ms_monotonic();
             if (next_start_ms > now) (void)poll(NULL, 0, (int)(next_start_ms - now));
             continue;
         }
@@ -246,7 +249,6 @@ static int connect_tcp_happy_eyeballs(
         {
             nfds_t nfds = 0;
             int poll_timeout = -1;
-            now = now_ms_monotonic();
 
             if (next_index < total && next_start_ms > now)
                 poll_timeout = (int)(next_start_ms - now);
@@ -380,7 +382,7 @@ static int connect_tcp_happy_eyeballs(
         }
     }
 
-    free(v4); free(v6); free(pfds); free(attempts);
+    free(v4);
     if (winner_fd >= 0) return winner_fd;
     errno = (last_errno != 0) ? last_errno : ECONNREFUSED;
     return -1;
