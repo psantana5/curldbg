@@ -8,6 +8,8 @@
 
 #include <openssl/err.h>
 
+struct tls_params g_tls_params = {NULL, NULL};
+
 static SSL_CTX *g_shared_tls_ctx = NULL;
 static pthread_once_t g_tls_ctx_once = PTHREAD_ONCE_INIT;
 static int g_tls_ctx_init_status = -1;
@@ -29,12 +31,21 @@ static void init_shared_tls_ctx_once(void) {
 #endif
     SSL_CTX_set_session_cache_mode(g_shared_tls_ctx, SSL_SESS_CACHE_CLIENT);
     SSL_CTX_set_verify(g_shared_tls_ctx, SSL_VERIFY_PEER, NULL);
-    if (SSL_CTX_load_verify_file(g_shared_tls_ctx, X509_get_default_cert_file()) != 1) {
-        if (SSL_CTX_set_default_verify_paths(g_shared_tls_ctx) != 1) {
-            set_ssl_error(g_tls_ctx_init_error, sizeof(g_tls_ctx_init_error), "Could not load system CA certificates");
+    if (g_tls_params.cacert != NULL || g_tls_params.capath != NULL) {
+        if (SSL_CTX_load_verify_locations(g_shared_tls_ctx, g_tls_params.cacert, g_tls_params.capath) != 1) {
+            set_ssl_error(g_tls_ctx_init_error, sizeof(g_tls_ctx_init_error), "Could not load CA certificates");
             SSL_CTX_free(g_shared_tls_ctx);
             g_shared_tls_ctx = NULL;
             return;
+        }
+    } else {
+        if (SSL_CTX_load_verify_file(g_shared_tls_ctx, X509_get_default_cert_file()) != 1) {
+            if (SSL_CTX_set_default_verify_paths(g_shared_tls_ctx) != 1) {
+                set_ssl_error(g_tls_ctx_init_error, sizeof(g_tls_ctx_init_error), "Could not load system CA certificates");
+                SSL_CTX_free(g_shared_tls_ctx);
+                g_shared_tls_ctx = NULL;
+                return;
+            }
         }
     }
     g_tls_ctx_init_status = 0;

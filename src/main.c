@@ -47,6 +47,8 @@ struct run_options {
     int tls_max_version;
     int retry_count;
     int retry_delay_ms;
+    bool compressed;
+    const char *unix_socket_path;
 };
 
 struct run_result {
@@ -75,6 +77,7 @@ struct cmdline_opts {
     bool method_explicit;
     const char *request_data;
     char *request_data_alloc;
+    char *request_data_urlencode_alloc;
     bool compare_family_mode;
     bool compare_urls_mode;
     bool follow_redirects;
@@ -114,6 +117,13 @@ struct cmdline_opts {
     int tls_max_version;
     int retry_count;
     int retry_delay_ms;
+    bool compressed;
+    const char *unix_socket_path;
+    const char *write_out_format;
+    const char *cacert;
+    const char *capath;
+    const char **urls;
+    int url_count;
 };
 
 static int run_request(const char *input_url, const struct run_options *opts, struct run_result *out);
@@ -348,7 +358,7 @@ static int run_request(const char *input_url, const struct run_options *opts, st
         struct url_info url, redirected_url;
         struct addrinfo *addrs = NULL;
         struct connect_race_info race_info;
-        struct timespec dns_start, dns_end;
+        struct timespec dns_start = {0, 0}, dns_end = {0, 0};
         struct timespec connect_start, connect_end;
         struct timespec ttfb_start;
         bool can_redirect = false, reuse_connection = false;
@@ -398,22 +408,25 @@ static int run_request(const char *input_url, const struct run_options *opts, st
             conn_addrs = NULL;
             conn_host[0] = '\0'; conn_port[0] = '\0';
 
-            const struct resolve_entry *re = find_resolve_entry(opts->resolve_entries, opts->resolve_count, url.host, url.port);
-            if (re != NULL) {
-                addrs = build_addrinfo_from_resolve(re);
-                gai_error = (addrs != NULL) ? 0 : EAI_FAIL;
-                clock_gettime(CLOCK_MONOTONIC, &dns_start);
-                dns_end = dns_start;
-            } else {
-                clock_gettime(CLOCK_MONOTONIC, &dns_start);
-                addrs = resolve_dns_timeout(&url, opts->address_family, &gai_error, 5000);
-                clock_gettime(CLOCK_MONOTONIC, &dns_end);
+            bool use_unix = (opts->unix_socket_path != NULL);
+            if (!use_unix) {
+                const struct resolve_entry *re = find_resolve_entry(opts->resolve_entries, opts->resolve_count, url.host, url.port);
+                if (re != NULL) {
+                    addrs = build_addrinfo_from_resolve(re);
+                    gai_error = (addrs != NULL) ? 0 : EAI_FAIL;
+                    clock_gettime(CLOCK_MONOTONIC, &dns_start);
+                    dns_end = dns_start;
+                } else {
+                    clock_gettime(CLOCK_MONOTONIC, &dns_start);
+                    addrs = resolve_dns_timeout(&url, opts->address_family, &gai_error, 5000);
+                    clock_gettime(CLOCK_MONOTONIC, &dns_end);
+                }
+                if (addrs == NULL) {
+                    snprintf(out->error, sizeof(out->error), "DNS resolution failed: %s", gai_strerror(gai_error));
+                    free_run_result(out); close_upload_file(&upload_file); return -1;
+                }
+                out->dns_ms += ms_between(&dns_start, &dns_end);
             }
-            if (addrs == NULL) {
-                snprintf(out->error, sizeof(out->error), "DNS resolution failed: %s", gai_strerror(gai_error));
-                free_run_result(out); close_upload_file(&upload_file); return -1;
-            }
-            out->dns_ms += ms_between(&dns_start, &dns_end);
             conn_addrs = addrs;
             strcpy(conn_host, url.host);
             strcpy(conn_port, url.port);
@@ -433,7 +446,23 @@ static int run_request(const char *input_url, const struct run_options *opts, st
             }
 
             int fd;
-            if (use_proxy) {
+            if (opts->unix_socket_path != NULL) {
+                clock_gettime(CLOCK_MONOTONIC, &connect_start);
+                fd = connect_unix_socket(opts->unix_socket_path, out->error, sizeof(out->error));
+                clock_gettime(CLOCK_MONOTONIC, &connect_end);
+                if (fd < 0) {
+                    free_run_result(out); close_upload_file(&upload_file); return -1;
+                }
+                snprintf(out->hops[out->hop_count].connected_ip,
+                         sizeof(out->hops[out->hop_count].connected_ip),
+                         "%s", opts->unix_socket_path);
+                out->hops[out->hop_count].connected_family = AF_UNIX;
+                out->connect_ms += ms_between(&connect_start, &connect_end);
+                conn.fd = fd;
+                conn.use_tls = url.use_tls;
+                conn.ctx = NULL; conn.ssl = NULL;
+                conn.verbose = opts->verbose;
+            } else if (use_proxy) {
                 struct url_info proxy_ui;
                 memset(&proxy_ui, 0, sizeof(proxy_ui));
                 strncpy(proxy_ui.host, opts->proxy_host, sizeof(proxy_ui.host) - 1);
@@ -631,7 +660,7 @@ static int run_request(const char *input_url, const struct run_options *opts, st
         int sr = send_request(&conn, &url, method, data,
                 upload_file, upload_size, send_headers, send_header_count,
                 opts->basic_auth, opts->user_agent, out->error, sizeof(out->error),
-                use_proxy && !url.use_tls, chunked_upload);
+                use_proxy && !url.use_tls, chunked_upload, opts->compressed);
         if (send_headers != opts->extra_headers && send_headers != stack_headers)
             free((void *)send_headers);
 
@@ -955,9 +984,11 @@ static void parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
                     snprintf(combined, strlen(c->request_data) + 1 + total + 1, "%s&%s", c->request_data, data);
                     free(c->request_data_alloc); free(data);
                     c->request_data = combined; c->request_data_alloc = combined;
+                    c->request_data_urlencode_alloc = NULL;
                 } else {
                     free(c->request_data_alloc);
                     c->request_data = data; c->request_data_alloc = data;
+                    c->request_data_urlencode_alloc = NULL;
                 }
             } else {
                 if (c->request_data != NULL) {
@@ -967,6 +998,7 @@ static void parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
                     snprintf(combined, new_len, "%s&%s", c->request_data, argv[i]);
                     free(c->request_data_alloc);
                     c->request_data = combined; c->request_data_alloc = combined;
+                    c->request_data_urlencode_alloc = NULL;
                 } else {
                     c->request_data = argv[i];
                 }
@@ -1099,6 +1131,138 @@ static void parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
             if (i + 1 >= argc) { fprintf(stderr, "Missing value for --retry-delay\n"); exit(EXIT_FAILURE); }
             c->retry_delay_ms = parse_non_negative_int(argv[++i], "--retry-delay") * 1000; continue;
         }
+        if (strcmp(argv[i], "--cacert") == 0) {
+            if (i + 1 >= argc) { fprintf(stderr, "Missing value for --cacert\n"); exit(EXIT_FAILURE); }
+            c->cacert = argv[++i]; continue;
+        }
+        if (strcmp(argv[i], "--capath") == 0) {
+            if (i + 1 >= argc) { fprintf(stderr, "Missing value for --capath\n"); exit(EXIT_FAILURE); }
+            c->capath = argv[++i]; continue;
+        }
+        if (strcmp(argv[i], "--compressed") == 0) { c->compressed = true; continue; }
+        if (strcmp(argv[i], "--data-urlencode") == 0) {
+            if (i + 1 >= argc) { fprintf(stderr, "Missing value for --data-urlencode\n"); exit(EXIT_FAILURE); }
+            i++;
+            const char *arg = argv[i];
+            const char *content = NULL;
+            const char *name = NULL;
+            char *encoded = NULL;
+            char *file_buf = NULL;
+            /* Determine if we need to URL-encode and handle @file / name@file / name=content */
+            if (arg[0] == '@') {
+                /* @file */
+                const char *fpath = arg + 1;
+                FILE *fp = NULL;
+                if (fpath[0] == '-' && fpath[1] == '\0') fp = stdin;
+                else fp = fopen(fpath, "rb");
+                if (fp == NULL) { fprintf(stderr, "Cannot open '%s' for --data-urlencode\n", fpath); exit(EXIT_FAILURE); }
+                size_t cap = 4096, total = 0;
+                file_buf = malloc(cap);
+                if (file_buf == NULL) { fprintf(stderr, "Out of memory\n"); if (fp != stdin) fclose(fp); exit(EXIT_FAILURE); }
+                char tmp[4096]; size_t nread;
+                while ((nread = fread(tmp, 1, sizeof(tmp), fp)) > 0) {
+                    if (total + nread >= cap) { cap = (cap > SIZE_MAX / 2) ? SIZE_MAX : cap * 2; char *t = realloc(file_buf, cap); if (t == NULL) { free(file_buf); if (fp != stdin) fclose(fp); fprintf(stderr, "Out of memory\n"); exit(EXIT_FAILURE); } file_buf = t; }
+                    memcpy(file_buf + total, tmp, nread); total += nread;
+                }
+                if (ferror(fp)) { free(file_buf); if (fp != stdin) fclose(fp); fprintf(stderr, "Failed to read '%s'\n", fpath); exit(EXIT_FAILURE); }
+                if (fp != stdin) fclose(fp);
+                file_buf[total] = '\0';
+                content = file_buf;
+            } else if (arg[0] == '=') {
+                /* =content */
+                content = arg + 1;
+            } else {
+                /* Check for name@file or name=content */
+                const char *at = strchr(arg, '@');
+                const char *eq = strchr(arg, '=');
+                if (eq != NULL && (at == NULL || eq < at)) {
+                    /* name=content */
+                    size_t nlen = (size_t)(eq - arg);
+                    char *n = malloc(nlen + 1);
+                    if (n == NULL) { fprintf(stderr, "Out of memory\n"); exit(EXIT_FAILURE); }
+                    memcpy(n, arg, nlen); n[nlen] = '\0';
+                    name = n;
+                    content = eq + 1;
+                } else if (at != NULL) {
+                    /* name@file */
+                    size_t nlen = (size_t)(at - arg);
+                    if (nlen > 0) {
+                        char *n = malloc(nlen + 1);
+                        if (n == NULL) { fprintf(stderr, "Out of memory\n"); exit(EXIT_FAILURE); }
+                        memcpy(n, arg, nlen); n[nlen] = '\0';
+                        name = n;
+                    }
+                    const char *fpath = at + 1;
+                    FILE *fp = NULL;
+                    if (fpath[0] == '-' && fpath[1] == '\0') fp = stdin;
+                    else fp = fopen(fpath, "rb");
+                    if (fp == NULL) { fprintf(stderr, "Cannot open '%s' for --data-urlencode\n", fpath); exit(EXIT_FAILURE); }
+                    size_t cap = 4096, total = 0;
+                    file_buf = malloc(cap);
+                    if (file_buf == NULL) { fprintf(stderr, "Out of memory\n"); if (fp != stdin) fclose(fp); exit(EXIT_FAILURE); }
+                    char tmp[4096]; size_t nread;
+                    while ((nread = fread(tmp, 1, sizeof(tmp), fp)) > 0) {
+                        if (total + nread >= cap) { cap = (cap > SIZE_MAX / 2) ? SIZE_MAX : cap * 2; char *t = realloc(file_buf, cap); if (t == NULL) { free(file_buf); if (fp != stdin) fclose(fp); fprintf(stderr, "Out of memory\n"); exit(EXIT_FAILURE); } file_buf = t; }
+                        memcpy(file_buf + total, tmp, nread); total += nread;
+                    }
+                    if (ferror(fp)) { free(file_buf); if (fp != stdin) fclose(fp); fprintf(stderr, "Failed to read '%s'\n", fpath); exit(EXIT_FAILURE); }
+                    if (fp != stdin) fclose(fp);
+                    file_buf[total] = '\0';
+                    content = file_buf;
+                } else {
+                    /* plain content */
+                    content = arg;
+                }
+            }
+            /* URL-encode content */
+            size_t clen = strlen(content);
+            size_t max_encoded = clen * 3 + 1;
+            encoded = malloc(max_encoded);
+            if (encoded == NULL) { fprintf(stderr, "Out of memory\n"); free(file_buf); exit(EXIT_FAILURE); }
+            if (url_encode(content, encoded, max_encoded) != 0) {
+                fprintf(stderr, "URL-encoding failed\n"); free(encoded); free(file_buf); exit(EXIT_FAILURE);
+            }
+            /* Build final value: [name=]encoded */
+            size_t name_len = (name != NULL) ? strlen(name) : 0;
+            size_t need = name_len + 1 + strlen(encoded) + 1;
+            char *final = malloc(need);
+            if (final == NULL) { fprintf(stderr, "Out of memory\n"); free(encoded); free(file_buf); exit(EXIT_FAILURE); }
+            if (name != NULL)
+                snprintf(final, need, "%s=%s", name, encoded);
+            else
+                snprintf(final, need, "%s", encoded);
+            free(encoded);
+            free(file_buf);
+            /* Accumulate with existing data */
+            if (c->request_data != NULL) {
+                size_t new_len = strlen(c->request_data) + 1 + strlen(final) + 1;
+                char *combined = malloc(new_len);
+                if (combined == NULL) { fprintf(stderr, "Out of memory\n"); free(final); exit(EXIT_FAILURE); }
+                snprintf(combined, new_len, "%s&%s", c->request_data, final);
+                free(c->request_data_alloc);
+                if (c->request_data_urlencode_alloc != NULL && c->request_data_urlencode_alloc != c->request_data_alloc) {
+                    free(c->request_data_urlencode_alloc);
+                }
+                c->request_data = combined;
+                c->request_data_alloc = combined;
+                c->request_data_urlencode_alloc = NULL;
+                free(final);
+            } else {
+                c->request_data = final;
+                c->request_data_alloc = final;
+                /* request_data_urlencode_alloc stays NULL, tracked by request_data_alloc */
+            }
+            if (name != NULL) free((void *)name);
+            continue;
+        }
+        if (strcmp(argv[i], "-w") == 0 || strcmp(argv[i], "--write-out") == 0) {
+            if (i + 1 >= argc) { fprintf(stderr, "Missing value for %s\n", argv[i]); exit(EXIT_FAILURE); }
+            c->write_out_format = argv[++i]; continue;
+        }
+        if (strcmp(argv[i], "--unix-socket") == 0) {
+            if (i + 1 >= argc) { fprintf(stderr, "Missing value for --unix-socket\n"); exit(EXIT_FAILURE); }
+            c->unix_socket_path = argv[++i]; continue;
+        }
 
         if (argv[i][0] == '-' && argv[i][1] != '\0' && argv[i][1] != '-' && argv[i][2] != '\0') {
             bool handled = true;
@@ -1128,10 +1292,15 @@ static void parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
 
         if (argv[i][0] == '-') { fprintf(stderr, "Unknown option: %s\n", argv[i]); exit(EXIT_FAILURE); }
 
-        if (c->input_url == NULL) { c->input_url = argv[i]; continue; }
-        if (c->compare_urls_mode && c->compare_url == NULL) { c->compare_url = argv[i]; continue; }
-
-        fprintf(stderr, "Too many URL arguments\n"); exit(EXIT_FAILURE);
+        /* Collect all URL arguments */
+        const char **new_urls = realloc(c->urls, (c->url_count + 1) * sizeof(*c->urls));
+        if (new_urls == NULL) { fprintf(stderr, "Out of memory\n"); exit(EXIT_FAILURE); }
+        c->urls = new_urls;
+        c->urls[c->url_count++] = argv[i];
+        if (c->input_url == NULL) c->input_url = argv[i];
+        if (c->compare_urls_mode && c->compare_url == NULL && c->url_count >= 2)
+            c->compare_url = argv[i];
+        continue;
     }
 }
 
@@ -1169,6 +1338,8 @@ static int run_single_request(const struct cmdline_opts *c, struct run_options *
     opts->tls_max_version = c->tls_max_version;
     opts->retry_count = c->retry_count;
     opts->retry_delay_ms = c->retry_delay_ms;
+    opts->compressed = c->compressed;
+    opts->unix_socket_path = c->unix_socket_path;
 
     if (c->proxy_url != NULL) {
         struct url_info proxy_ui;
@@ -1239,6 +1410,8 @@ static int run_compare_family(const struct cmdline_opts *c, struct run_options *
     opts->tls_max_version = c->tls_max_version;
     opts->retry_count = 0;
     opts->retry_delay_ms = 0;
+    opts->compressed = c->compressed;
+    opts->unix_socket_path = c->unix_socket_path;
 
     opts->address_family = AF_INET;
     struct run_options opts_v4 = *opts;
@@ -1334,6 +1507,8 @@ static int run_compare_urls(const struct cmdline_opts *c, struct run_options *op
     opts->tls_max_version = c->tls_max_version;
     opts->retry_count = 0;
     opts->retry_delay_ms = 0;
+    opts->compressed = c->compressed;
+    opts->unix_socket_path = c->unix_socket_path;
 
     memset(&result_a, 0, sizeof(result_a));
     memset(&result_b, 0, sizeof(result_b));
@@ -1393,10 +1568,68 @@ static int run_compare_urls(const struct cmdline_opts *c, struct run_options *op
     return (ok_a && ok_b) ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
+/* --- write-out expansion --- */
+static void write_out_expand(const char *fmt, const struct run_result *result) {
+    while (*fmt != '\0') {
+        if (fmt[0] == '%' && fmt[1] == '{') {
+            const char *start = fmt + 2;
+            const char *end = strchr(start, '}');
+            if (end != NULL) {
+                size_t varlen = (size_t)(end - start);
+                char varname[64];
+                size_t cplen = varlen;
+                if (cplen >= sizeof(varname)) cplen = sizeof(varname) - 1;
+                memcpy(varname, start, cplen);
+                varname[cplen] = '\0';
+
+                if (strcmp(varname, "http_code") == 0) {
+                    printf("%d", final_status_code(result));
+                } else if (strcmp(varname, "time_total") == 0) {
+                    printf("%.3f", result->total_ms / 1000.0);
+                } else if (strcmp(varname, "time_namelookup") == 0) {
+                    printf("%.3f", result->dns_ms / 1000.0);
+                } else if (strcmp(varname, "time_connect") == 0) {
+                    printf("%.3f", result->connect_ms / 1000.0);
+                } else if (strcmp(varname, "time_starttransfer") == 0) {
+                    printf("%.3f", result->ttfb_ms >= 0.0 ? result->ttfb_ms / 1000.0 : 0.0);
+                } else if (strcmp(varname, "url_effective") == 0) {
+                    printf("%s", result->final_url);
+                } else if (strcmp(varname, "num_redirects") == 0) {
+                    printf("%d", result->hop_count > 0 ? result->hop_count - 1 : 0);
+                } else if (strcmp(varname, "redirect_url") == 0) {
+                    if (result->hop_count > 0) {
+                        const struct hop_info *h = &result->hops[result->hop_count - 1];
+                        if (h->has_redirect_target)
+                            printf("%s", h->redirect_to_host);
+                    }
+                } else {
+                    printf("%%{%s}", varname);
+                }
+                fmt = end + 1;
+                continue;
+            }
+        }
+        if (*fmt == '\\') {
+            switch (fmt[1]) {
+                case 'n': putchar('\n'); fmt += 2; continue;
+                case 'r': putchar('\r'); fmt += 2; continue;
+                case 't': putchar('\t'); fmt += 2; continue;
+                default: break;
+            }
+        }
+        putchar(*fmt);
+        fmt++;
+    }
+}
+
 /* --- main --- */
 int main(int argc, char **argv) {
     struct cmdline_opts c;
     parse_cmdline(argc, argv, &c);
+
+    /* Apply TLS params globally before any TLS operation */
+    g_tls_params.cacert = c.cacert;
+    g_tls_params.capath = c.capath;
 
     /* Free allocated memory on exit */
     int exit_code = EXIT_SUCCESS;
@@ -1503,7 +1736,9 @@ int main(int argc, char **argv) {
             fprintf(stderr, "Usage: %s [-L] [-4|-6] [-X GET|POST|PUT] [-d data] [-f] [-s] [-S] [-k] "
                     "[-u user:pass] [-H header] [-o file | -O] [-T file] "
                     "[--connect-timeout ms] [--read-timeout ms] [--no-happy-eyeballs] "
-                    "[--max-redirs n] <url>\n  URL may be http://..., https://..., or bare host/path (defaults to https)\n",
+                    "[--max-redirs n] [--compressed] [--data-urlencode data] "
+                    "[--cacert file] [--capath dir] [--unix-socket path] [-w fmt] "
+                    "<url> [url2...]\n",
                     argv[0]);
             exit_code = EXIT_FAILURE; goto cleanup;
         }
@@ -1534,24 +1769,50 @@ int main(int argc, char **argv) {
         opts.proxy_port = proxy_port;
         opts.cookie_jar = cookie_jar_ptr;
 
-        if (!c.silent) {
+        if (!c.silent && c.url_count > 0) {
             maybe_print_april_fools();
             if (c.wizard_mode) print_wizard_banner();
             if (c.fika_mode) print_fika_banner();
         }
 
-        if (run_single_request(&c, &opts, &result, body_out) != 0) {
-            if (!c.silent) print_single_output(&result);
-            if (close_body) fclose(body_out);
-            exit_code = EXIT_FAILURE; goto cleanup;
-        }
+        if (c.url_count > 1 && !c.silent)
+            printf("=== Multi-URL mode: %d URLs ===\n", c.url_count);
 
-        if (!c.silent) print_single_output(&result);
+        for (int ui = 0; ui < c.url_count; ui++) {
+            c.input_url = c.urls[ui];
+            memset(&result, 0, sizeof(result));
+
+            if (c.url_count > 1 && !c.silent)
+                printf("\n--- URL %d/%d: %s ---\n", ui + 1, c.url_count, c.input_url);
+
+            int rc = run_single_request(&c, &opts, &result, body_out);
+
+            if (c.write_out_format != NULL) {
+                if (!c.silent || rc != 0) {
+                    /* write-out output goes to stdout regardless of silent mode */
+                }
+                write_out_expand(c.write_out_format, &result);
+            }
+
+            if (!c.silent) {
+                if (rc != 0)
+                    print_single_output(&result);
+                else
+                    print_single_output(&result);
+            }
+
+            free_run_result(&result);
+
+            if (rc != 0) {
+                if (close_body) fclose(body_out);
+                exit_code = EXIT_FAILURE;
+                goto cleanup;
+            }
+        }
 
         if (cookie_jar_ptr != NULL && c.cookie_jar_path != NULL)
             cookie_jar_save(cookie_jar_ptr, c.cookie_jar_path);
 
-        free_run_result(&result);
         if (close_body) fclose(body_out);
         goto cleanup;
     }
@@ -1604,7 +1865,11 @@ int main(int argc, char **argv) {
 cleanup:
     free(c.extra_headers);
     free(c.request_data_alloc);
+    if (c.request_data_urlencode_alloc != NULL && c.request_data_urlencode_alloc != c.request_data_alloc) {
+        free(c.request_data_urlencode_alloc);
+    }
     free(c.cookie_data_alloc);
     free(c.cookie_header_alloc);
+    free(c.urls);
     return exit_code;
 }

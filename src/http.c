@@ -7,6 +7,8 @@
 #include <strings.h>
 #include <unistd.h>
 
+#include <zlib.h>
+
 bool is_redirect_status(int status_code) {
     return status_code == 301 || status_code == 302 || status_code == 303 ||
            status_code == 307 || status_code == 308;
@@ -52,6 +54,11 @@ void parse_response_headers(char *headers, struct response_info *out) {
             const char *val = line + 18;
             trim_spaces((char **)&val);
             if (strcasecmp(val, "chunked") == 0) out->chunked = true;
+        } else if (line_len >= 16 && strncasecmp(line, "Content-Encoding:", 16) == 0) {
+            const char *val = line + 16;
+            trim_spaces((char **)&val);
+            strncpy(out->content_encoding, val, sizeof(out->content_encoding) - 1);
+            out->content_encoding[sizeof(out->content_encoding) - 1] = '\0';
         } else if (line_len >= 12 && strncasecmp(line, "Set-Cookie:", 11) == 0) {
             const char *val = line + 11;
             trim_spaces((char **)&val);
@@ -94,8 +101,37 @@ static size_t write_body_data(const char *buf, size_t len, FILE *body_out, struc
     return 0;
 }
 
+static size_t write_body_maybe_decomp(const char *buf, size_t len, FILE *body_out,
+                                       struct response_info *out, z_stream *strm,
+                                       bool decompress, char *error, size_t error_len) {
+    if (!decompress || strm == NULL)
+        return write_body_data(buf, len, body_out, out);
+
+    strm->next_in = (unsigned char *)buf;
+    strm->avail_in = (unsigned int)len;
+    do {
+        unsigned char obuf[RESPONSE_READ_BUF];
+        strm->next_out = obuf;
+        strm->avail_out = sizeof(obuf);
+        int ret = inflate(strm, Z_NO_FLUSH);
+        if (ret < 0 && ret != Z_BUF_ERROR) {
+            set_error(error, error_len, "Decompression failed");
+            return (size_t)-1;
+        }
+        size_t have = sizeof(obuf) - strm->avail_out;
+        if (have > 0) {
+            if (write_body_data((char *)obuf, have, body_out, out) == (size_t)-1) {
+                set_error(error, error_len, "Failed to write response body");
+                return (size_t)-1;
+            }
+        }
+    } while (strm->avail_out == 0);
+    return 0;
+}
+
 static size_t chunked_write(const char *buf, size_t len, FILE *body_out, struct response_info *out,
-                            int *state, unsigned long *chunk_rem, char *line_buf, size_t *line_len) {
+                            int *state, unsigned long *chunk_rem, char *line_buf, size_t *line_len,
+                            z_stream *decomp_strm, bool decompress, char *error, size_t error_len) {
     size_t consumed = 0;
     while (consumed < len) {
         if (*state == 0) {
@@ -118,7 +154,9 @@ static size_t chunked_write(const char *buf, size_t len, FILE *body_out, struct 
         } else if (*state == 1) {
             size_t take = len - consumed;
             if (take > *chunk_rem) take = (size_t)*chunk_rem;
-            if (write_body_data(buf + consumed, take, body_out, out) == (size_t)-1) return (size_t)-1;
+            if (write_body_maybe_decomp(buf + consumed, take, body_out, out,
+                                         decomp_strm, decompress, error, error_len) == (size_t)-1)
+                return (size_t)-1;
             consumed += take;
             *chunk_rem -= (unsigned long)take;
             if (*chunk_rem == 0) *state = 2;
@@ -148,7 +186,8 @@ int send_request(
     char *error,
     size_t error_len,
     bool use_proxy,
-    bool chunked_upload
+    bool chunked_upload,
+    bool compressed
 ) {
     if (user_agent == NULL) user_agent = "curldbg/1.0";
 
@@ -161,12 +200,13 @@ int send_request(
 
     format_host_header(url, host_header, sizeof(host_header));
 
-    bool has_content_type = false, has_content_length = false, has_host = false;
+    bool has_content_type = false, has_content_length = false, has_host = false, has_accept_encoding = false;
     for (size_t i = 0; i < extra_header_count; i++) {
         if (extra_headers[i] == NULL) continue;
         if (strncasecmp(extra_headers[i], "Content-Type:", 13) == 0) has_content_type = true;
         else if (strncasecmp(extra_headers[i], "Content-Length:", 15) == 0) has_content_length = true;
         else if (strncasecmp(extra_headers[i], "Host:", 5) == 0) has_host = true;
+        else if (strncasecmp(extra_headers[i], "Accept-Encoding:", 16) == 0) has_accept_encoding = true;
     }
 
     body_headers[0] = '\0';
@@ -256,6 +296,10 @@ int send_request(
         size_t ualen = strlen(user_agent);
         memcpy(req + offset, user_agent, ualen); offset += ualen;
         memcpy(req + offset, "\r\n", 2); offset += 2;
+
+        if (compressed && !has_accept_encoding) {
+            memcpy(req + offset, "Accept-Encoding: gzip, deflate\r\n", 32); offset += 32;
+        }
 
         if (include_body_headers && body_headers[0] != '\0') {
             if (append_str(req, req_len + 1, &offset, body_headers) != 0) {
@@ -365,6 +409,9 @@ int receive_response(
     size_t chunk_line_len = 0;
     bool trailer_mode = false;
     long body_remaining = -1;
+    bool need_decompress = false;
+    z_stream decomp_strm;
+    bool decomp_init = false;
 
     memset(out, 0, sizeof(*out));
 
@@ -441,12 +488,26 @@ int receive_response(
 
                 if (head_method) return 0;
 
+                if (out->content_encoding[0] != '\0' &&
+                    (strcasecmp(out->content_encoding, "gzip") == 0 ||
+                     strcasecmp(out->content_encoding, "deflate") == 0)) {
+                    memset(&decomp_strm, 0, sizeof(decomp_strm));
+                    if (inflateInit2(&decomp_strm, 15 + 32) != Z_OK) {
+                        set_error(error, error_len, "Failed to init decompression");
+                        return -1;
+                    }
+                    need_decompress = true;
+                    decomp_init = true;
+                }
+
                 chunked = out->chunked;
                 body_remaining = out->content_length;
                 if (chunked) {
                     size_t cw = chunked_write(pending_body, pending_len, write_body ? body_out : NULL, out,
-                                      &chunk_state, &chunk_remaining, chunk_line_buf, &chunk_line_len);
-                    if (cw == (size_t)-1) { set_error(error, error_len, "Failed to write response body"); return -1; }
+                                      &chunk_state, &chunk_remaining, chunk_line_buf, &chunk_line_len,
+                                      need_decompress ? &decomp_strm : NULL, need_decompress,
+                                      error, error_len);
+                    if (cw == (size_t)-1) { if (decomp_init) inflateEnd(&decomp_strm); return -1; }
                     if (chunk_state == 3 && cw < pending_len) {
                         size_t off = cw;
                         while (off < pending_len) {
@@ -465,8 +526,10 @@ int receive_response(
                         }
                     }
                 } else if (pending_len > 0) {
-                    if (write_body_data(pending_body, pending_len, write_body ? body_out : NULL, out) == (size_t)-1) {
-                        set_error(error, error_len, "Failed to write response body"); return -1;
+                    if (write_body_maybe_decomp(pending_body, pending_len, write_body ? body_out : NULL, out,
+                                                 need_decompress ? &decomp_strm : NULL, need_decompress,
+                                                 error, error_len) == (size_t)-1) {
+                        if (decomp_init) { inflateEnd(&decomp_strm); } return -1;
                     }
                     if (body_remaining > 0) body_remaining -= (long)pending_len;
                 }
@@ -480,14 +543,18 @@ int receive_response(
 
         if (chunked) {
             size_t cw = chunked_write(recv_buf, (size_t)n, write_body ? body_out : NULL, out,
-                              &chunk_state, &chunk_remaining, chunk_line_buf, &chunk_line_len);
-            if (cw == (size_t)-1) { set_error(error, error_len, "Failed to write response body"); return -1; }
+                              &chunk_state, &chunk_remaining, chunk_line_buf, &chunk_line_len,
+                              need_decompress ? &decomp_strm : NULL, need_decompress,
+                              error, error_len);
+            if (cw == (size_t)-1) { if (decomp_init) inflateEnd(&decomp_strm); return -1; }
             if (chunk_state == 3 && cw < (size_t)n) break;
         } else {
             size_t take = (size_t)n;
             if (body_remaining >= 0 && (long)take > body_remaining) take = (size_t)body_remaining;
-            if (write_body_data(recv_buf, take, write_body ? body_out : NULL, out) == (size_t)-1) {
-                set_error(error, error_len, "Failed to write response body"); return -1;
+            if (write_body_maybe_decomp(recv_buf, take, write_body ? body_out : NULL, out,
+                                         need_decompress ? &decomp_strm : NULL, need_decompress,
+                                         error, error_len) == (size_t)-1) {
+                if (decomp_init) { inflateEnd(&decomp_strm); } return -1;
             }
             if (body_remaining >= 0) {
                 body_remaining -= (long)take;
@@ -498,5 +565,6 @@ int receive_response(
 
     out->preview[out->preview_len] = '\0';
     if (!seen_first_byte) out->ttfb_ms = -1.0;
+    if (decomp_init) inflateEnd(&decomp_strm);
     return 0;
 }

@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "curldbg.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
@@ -130,4 +131,26 @@ long deadline_remaining_ms(const struct timespec *start, int max_ms) {
     long elapsed = (long)ms_between(start, &now);
     if (elapsed >= max_ms) return 0;
     return max_ms - elapsed;
+}
+
+int url_encode(const char *input, char *output, size_t output_size) {
+    static const char hex[] = "0123456789ABCDEF";
+    size_t o = 0;
+    for (const char *p = input; *p != '\0'; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (isalnum(c) || c == '-' || c == '.' || c == '_' || c == '~') {
+            if (o + 1 >= output_size) return -1;
+            output[o++] = c;
+        } else if (c == ' ') {
+            if (o + 3 >= output_size) return -1;
+            output[o++] = '%'; output[o++] = '2'; output[o++] = '0';
+        } else {
+            if (o + 3 >= output_size) return -1;
+            output[o++] = '%';
+            output[o++] = hex[c >> 4];
+            output[o++] = hex[c & 0xf];
+        }
+    }
+    output[o] = '\0';
+    return 0;
 }

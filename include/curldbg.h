@@ -8,6 +8,7 @@
 
 #include <netdb.h>
 #include <netinet/in.h>
+#include <sys/un.h>
 #include <openssl/ssl.h>
 #include <openssl/tls1.h>
 
@@ -18,7 +19,13 @@
 #define DEFAULT_MAX_REDIRECTS 10
 #define MAX_COOKIES 256
 #define MAX_COOKIE_LEN 4096
-#define CURLDBG_VERSION "1.1.0"
+#define WRITE_OUT_VAR_MAX 64
+#define CURLDBG_VERSION "1.2.0"
+
+struct tls_params {
+    const char *cacert;
+    const char *capath;
+};
 
 struct resolve_entry {
     char host[256];
@@ -46,6 +53,7 @@ struct response_info {
     long content_length;
     char set_cookie_buf[4096];
     size_t set_cookie_len;
+    char content_encoding[32];
 };
 
 struct cookie_entry {
@@ -76,6 +84,7 @@ struct hop_info {
     char loser_ip[NI_MAXHOST];
     int loser_family;
     double loser_connect_ms;
+    char content_type[128];
 };
 
 struct connect_race_info {
@@ -94,9 +103,12 @@ struct connection {
     bool verbose;
 };
 
+extern struct tls_params g_tls_params;
+
 /* --- util.c --- */
 void die(const char *msg);
 void set_error(char *error, size_t error_len, const char *fmt, ...);
+int url_encode(const char *input, char *output, size_t output_size);
 void set_ssl_error(char *error, size_t error_len, const char *prefix);
 double ms_between(const struct timespec *start, const struct timespec *end);
 const char *family_name(int family);
@@ -128,6 +140,7 @@ int init_tls(struct connection *conn, const char *hostname, bool insecure,
              char *error, size_t error_len);
 
 /* --- connect.c --- */
+int connect_unix_socket(const char *path, char *error, size_t error_len);
 int connect_tcp(const struct addrinfo *addrs, char *connected_ip, size_t connected_ip_size,
                 int *connected_family, int connect_timeout_ms,
                 struct connect_race_info *race_info, bool happy_eyeballs, int preferred_family,
@@ -144,7 +157,8 @@ int send_request(struct connection *conn, const struct url_info *url, const char
                  const char *data, FILE *upload_file, size_t upload_size,
                  const char **extra_headers, size_t extra_header_count,
                  const char *basic_auth, const char *user_agent,
-                 char *error, size_t error_len, bool use_proxy, bool chunked_upload);
+                 char *error, size_t error_len, bool use_proxy, bool chunked_upload,
+                 bool compressed);
 int receive_response(struct connection *conn, const struct timespec *ttfb_start,
                      struct response_info *out, char *error, size_t error_len,
                      FILE *body_out, bool follow_redirects, bool fail_on_http_error, bool head_method);

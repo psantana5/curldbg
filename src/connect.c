@@ -459,6 +459,29 @@ void apply_socket_timeout(int fd, int timeout_ms) {
     if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) != 0) die("setsockopt SO_SNDTIMEO");
 }
 
+int connect_unix_socket(const char *path, char *error, size_t error_len) {
+    struct sockaddr_un addr;
+    if (strlen(path) >= sizeof(addr.sun_path)) {
+        set_error(error, error_len, "Unix socket path too long");
+        return -1;
+    }
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        set_error(error, error_len, "Failed to create Unix socket: %s", strerror(errno));
+        return -1;
+    }
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        int saved = errno;
+        close(fd);
+        set_error(error, error_len, "Failed to connect Unix socket '%s': %s", path, strerror(saved));
+        return -1;
+    }
+    return fd;
+}
+
 void close_connection(struct connection *conn) {
     if (conn->ssl != NULL) { SSL_shutdown(conn->ssl); SSL_free(conn->ssl); conn->ssl = NULL; }
     if (conn->ctx != NULL) { SSL_CTX_free(conn->ctx); conn->ctx = NULL; }
