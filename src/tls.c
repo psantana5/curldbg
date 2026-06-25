@@ -30,6 +30,7 @@ static void init_shared_tls_ctx_once(void) {
     SSL_CTX_set_options(g_shared_tls_ctx, SSL_OP_IGNORE_UNEXPECTED_EOF);
 #endif
     SSL_CTX_set_session_cache_mode(g_shared_tls_ctx, SSL_SESS_CACHE_CLIENT);
+    SSL_CTX_set_read_ahead(g_shared_tls_ctx, 1);
     SSL_CTX_set_verify(g_shared_tls_ctx, SSL_VERIFY_PEER, NULL);
     if (g_tls_params.cacert != NULL || g_tls_params.capath != NULL) {
         if (SSL_CTX_load_verify_locations(g_shared_tls_ctx, g_tls_params.cacert, g_tls_params.capath) != 1) {
