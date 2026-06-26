@@ -4,7 +4,7 @@ CFLAGS := $(OPT) -Wall -Wextra -pthread -Iinclude
 LDLIBS := -pthread -lssl -lcrypto -lz
 TARGET := curldbg
 OBJDIR := obj
-SRCS := src/main.c src/util.c src/url.c src/dns.c src/tls.c src/connect.c src/http.c src/proxy.c src/cookie.c
+SRCS := src/main.c src/request.c src/results.c src/util.c src/url.c src/dns.c src/tls.c src/connect.c src/http.c src/proxy.c src/cookie.c src/cli.c src/output.c
 OBJS := $(SRCS:src/%.c=$(OBJDIR)/%.o)
 MANPAGE := man/curldbg.1
 PREFIX ?= /usr/local

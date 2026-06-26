@@ -103,7 +103,136 @@ struct connection {
     bool verbose;
 };
 
+struct run_options {
+    char method[8];
+    const char *data;
+    bool follow_redirects;
+    int address_family;
+    int connect_timeout_ms;
+    int read_timeout_ms;
+    int max_time_ms;
+    int max_redirects;
+    bool fail_on_http_error;
+    FILE *body_out;
+    bool insecure_tls;
+    const char *basic_auth;
+    const char **extra_headers;
+    size_t extra_header_count;
+    const char *upload_path;
+    bool happy_eyeballs;
+    bool verbose;
+    const char *user_agent;
+    const char *proxy_host;
+    const char *proxy_port;
+    const char *cookie_data;
+    const char *cookie_jar_path;
+    struct cookie_jar *cookie_jar;
+    const struct resolve_entry *resolve_entries;
+    int resolve_count;
+    const char *referer;
+    const char *bind_interface;
+    int tls_min_version;
+    int tls_max_version;
+    int retry_count;
+    int retry_delay_ms;
+    bool compressed;
+    const char *unix_socket_path;
+};
+
+struct run_result {
+    struct hop_info *hops;
+    int hop_count;
+    struct response_info resp;
+    double dns_ms;
+    double connect_ms;
+    double ttfb_ms;
+    double total_ms;
+    char final_url[2048];
+    char error[256];
+};
+
+struct cmdline_opts {
+    const char *input_url;
+    const char *compare_url;
+    char request_method[8];
+    bool method_explicit;
+    const char *request_data;
+    char *request_data_alloc;
+    char *request_data_urlencode_alloc;
+    bool compare_family_mode;
+    bool compare_urls_mode;
+    bool follow_redirects;
+    bool fail_on_http_error;
+    bool silent;
+    bool show_error;
+    const char *output_path;
+    bool output_remote_name;
+    bool insecure_tls;
+    const char *basic_auth;
+    const char *upload_path;
+    const char **extra_headers;
+    size_t extra_header_count;
+    bool wizard_mode;
+    bool debug_chaos;
+    bool lore_mode;
+    bool fika_mode;
+    bool happy_eyeballs;
+    bool verbose;
+    const char *user_agent;
+    const char *cookie_data;
+    char *cookie_data_alloc;
+    char *cookie_header_alloc;
+    const char *cookie_jar_path;
+    const char *cookie_file_to_load;
+    const char *proxy_url;
+    int address_family;
+    int connect_timeout_ms;
+    int read_timeout_ms;
+    int max_time_ms;
+    int max_redirects;
+    struct resolve_entry resolve_entries[MAX_RESOLVE_ENTRIES];
+    int resolve_count;
+    const char *referer;
+    const char *bind_interface;
+    int tls_min_version;
+    int tls_max_version;
+    int retry_count;
+    int retry_delay_ms;
+    bool compressed;
+    const char *unix_socket_path;
+    const char *write_out_format;
+    const char *cacert;
+    const char *capath;
+    const char **urls;
+    int url_count;
+};
+
 extern struct tls_params g_tls_params;
+
+/* --- cli.c --- */
+void parse_cmdline(int argc, char **argv, struct cmdline_opts *c);
+
+/* --- request.c --- */
+int run_single_request(const struct cmdline_opts *c, struct run_options *opts,
+                       struct run_result *result, FILE *body_out);
+void init_run_options(struct run_options *opts, const struct cmdline_opts *c);
+void run_two_requests_parallel(const char *url_a, const struct run_options *opts_a,
+                               struct run_result *result_a, bool *ok_a,
+                               const char *url_b, const struct run_options *opts_b,
+                               struct run_result *result_b, bool *ok_b);
+void free_run_result(struct run_result *result);
+
+/* --- results.c --- */
+void print_single_output(const struct run_result *result);
+int final_status_code(const struct run_result *result);
+void final_endpoint(const struct run_result *result, char *out, size_t out_size);
+void print_compare_family_run(const char *name, const struct run_result *result, bool ok);
+void print_compare_metric_row(const char *metric, double a, double b);
+void print_compare_text_row(const char *metric, const char *a, const char *b);
+void print_compare_family_metric(const char *label, double v4, double v6);
+
+/* --- output.c --- */
+void write_out_expand(const char *fmt, const struct run_result *result);
 
 /* --- util.c --- */
 void die(const char *msg);
