@@ -1304,9 +1304,8 @@ static void parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
     }
 }
 
-/* --- Single request mode --- */
-static int run_single_request(const struct cmdline_opts *c, struct run_options *opts,
-                               struct run_result *result, FILE *body_out) {
+static void init_run_options(struct run_options *opts, const struct cmdline_opts *c) {
+    memset(opts, 0, sizeof(*opts));
     opts->follow_redirects = c->follow_redirects;
     strcpy(opts->method, c->request_method);
     opts->data = c->request_data;
@@ -1316,7 +1315,6 @@ static int run_single_request(const struct cmdline_opts *c, struct run_options *
     opts->max_time_ms = c->max_time_ms;
     opts->max_redirects = c->max_redirects;
     opts->fail_on_http_error = c->fail_on_http_error;
-    opts->body_out = body_out;
     opts->insecure_tls = c->insecure_tls;
     opts->basic_auth = c->basic_auth;
     opts->extra_headers = c->extra_headers;
@@ -1325,11 +1323,8 @@ static int run_single_request(const struct cmdline_opts *c, struct run_options *
     opts->happy_eyeballs = c->happy_eyeballs;
     opts->verbose = c->verbose;
     opts->user_agent = c->user_agent;
-    opts->proxy_host = NULL;
-    opts->proxy_port = NULL;
     opts->cookie_data = c->cookie_data;
     opts->cookie_jar_path = c->cookie_jar_path;
-    opts->cookie_jar = NULL;
     opts->resolve_entries = c->resolve_entries;
     opts->resolve_count = c->resolve_count;
     opts->referer = c->referer;
@@ -1340,6 +1335,16 @@ static int run_single_request(const struct cmdline_opts *c, struct run_options *
     opts->retry_delay_ms = c->retry_delay_ms;
     opts->compressed = c->compressed;
     opts->unix_socket_path = c->unix_socket_path;
+}
+
+/* --- Single request mode --- */
+static int run_single_request(const struct cmdline_opts *c, struct run_options *opts,
+                               struct run_result *result, FILE *body_out) {
+    init_run_options(opts, c);
+    opts->body_out = body_out;
+    opts->proxy_host = NULL;
+    opts->proxy_port = NULL;
+    opts->cookie_jar = NULL;
 
     if (c->proxy_url != NULL) {
         struct url_info proxy_ui;
@@ -1380,43 +1385,19 @@ static int run_compare_family(const struct cmdline_opts *c, struct run_options *
     struct run_result result_v4, result_v6;
     bool ok_v4, ok_v6;
 
-    opts->follow_redirects = c->follow_redirects;
-    strcpy(opts->method, c->request_method);
-    opts->data = c->request_data;
-    opts->connect_timeout_ms = c->connect_timeout_ms;
-    opts->read_timeout_ms = c->read_timeout_ms;
-    opts->max_time_ms = c->max_time_ms;
-    opts->max_redirects = c->max_redirects;
-    opts->fail_on_http_error = c->fail_on_http_error;
+    init_run_options(opts, c);
     opts->body_out = NULL;
-    opts->insecure_tls = c->insecure_tls;
-    opts->basic_auth = c->basic_auth;
-    opts->extra_headers = c->extra_headers;
-    opts->extra_header_count = c->extra_header_count;
     opts->upload_path = NULL;
-    opts->happy_eyeballs = c->happy_eyeballs;
-    opts->verbose = c->verbose;
-    opts->user_agent = c->user_agent;
     opts->proxy_host = NULL;
     opts->proxy_port = NULL;
-    opts->cookie_data = c->cookie_data;
-    opts->cookie_jar_path = c->cookie_jar_path;
     opts->cookie_jar = NULL;
-    opts->resolve_entries = c->resolve_entries;
-    opts->resolve_count = c->resolve_count;
-    opts->referer = c->referer;
-    opts->bind_interface = c->bind_interface;
-    opts->tls_min_version = c->tls_min_version;
-    opts->tls_max_version = c->tls_max_version;
     opts->retry_count = 0;
     opts->retry_delay_ms = 0;
-    opts->compressed = c->compressed;
-    opts->unix_socket_path = c->unix_socket_path;
 
     opts->address_family = AF_INET;
     struct run_options opts_v4 = *opts;
-    opts_v4.address_family = AF_INET6;
-    struct run_options opts_v6 = opts_v4;
+    opts->address_family = AF_INET6;
+    struct run_options opts_v6 = *opts;
 
     run_two_requests_parallel(c->input_url, &opts_v4, &result_v4, &ok_v4,
                                c->input_url, &opts_v6, &result_v6, &ok_v6);
@@ -1476,39 +1457,14 @@ static int run_compare_urls(const struct cmdline_opts *c, struct run_options *op
     char status_a[32], status_b[32];
     bool ok_a, ok_b;
 
-    opts->follow_redirects = c->follow_redirects;
-    strcpy(opts->method, c->request_method);
-    opts->data = c->request_data;
-    opts->address_family = c->address_family;
-    opts->connect_timeout_ms = c->connect_timeout_ms;
-    opts->read_timeout_ms = c->read_timeout_ms;
-    opts->max_time_ms = c->max_time_ms;
-    opts->max_redirects = c->max_redirects;
-    opts->fail_on_http_error = c->fail_on_http_error;
+    init_run_options(opts, c);
     opts->body_out = NULL;
-    opts->insecure_tls = c->insecure_tls;
-    opts->basic_auth = c->basic_auth;
-    opts->extra_headers = c->extra_headers;
-    opts->extra_header_count = c->extra_header_count;
     opts->upload_path = NULL;
-    opts->happy_eyeballs = c->happy_eyeballs;
-    opts->verbose = c->verbose;
-    opts->user_agent = c->user_agent;
     opts->proxy_host = NULL;
     opts->proxy_port = NULL;
-    opts->cookie_data = c->cookie_data;
-    opts->cookie_jar_path = c->cookie_jar_path;
     opts->cookie_jar = NULL;
-    opts->resolve_entries = c->resolve_entries;
-    opts->resolve_count = c->resolve_count;
-    opts->referer = c->referer;
-    opts->bind_interface = c->bind_interface;
-    opts->tls_min_version = c->tls_min_version;
-    opts->tls_max_version = c->tls_max_version;
     opts->retry_count = 0;
     opts->retry_delay_ms = 0;
-    opts->compressed = c->compressed;
-    opts->unix_socket_path = c->unix_socket_path;
 
     memset(&result_a, 0, sizeof(result_a));
     memset(&result_b, 0, sizeof(result_b));
