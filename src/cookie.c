@@ -168,7 +168,7 @@ void cookie_jar_load(struct cookie_jar *jar, const char *filepath) {
         if (jar->count >= MAX_COOKIES) break;
         struct cookie_entry *e = &jar->entries[jar->count];
         memset(e, 0, sizeof(*e));
-        snprintf(e->domain, sizeof(e->domain), "%s", domain);
+        snprintf(e->domain, sizeof(e->domain), "%.255s", domain);
         e->include_subdomains = (strcasecmp(subdomains, "TRUE") == 0);
         strncpy(e->path, path, sizeof(e->path) - 1);
         e->secure = false;

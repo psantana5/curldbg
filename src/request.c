@@ -174,7 +174,7 @@ static int run_request(const char *input_url, const struct run_options *opts, st
         }
 
         if (parse_url(current_url, &url) != 0) {
-            snprintf(out->error, sizeof(out->error), "Invalid URL: %s", current_url);
+            snprintf(out->error, sizeof(out->error), "Invalid URL: %.240s", current_url);
             free_run_result(out); close_upload_file(&upload_file);
             close_connection(&conn); freeaddrinfo(conn_addrs); return -1;
         }
