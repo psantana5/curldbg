@@ -403,6 +403,7 @@ void parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
                     case 'v': c->verbose = true; break;
                     case 'k': c->insecure_tls = true; break;
                     case 'L': c->follow_redirects = true; break;
+                    case 'O': c->output_remote_name = true; break;
                     case 'I': strcpy(c->request_method, "HEAD"); c->method_explicit = true; break;
                     case 'o':
                         if (argv[i][j + 1] != '\0') {
