@@ -59,9 +59,10 @@ int base64_encode(const unsigned char *input, size_t len, char *out, size_t out_
     if (out_len < out_needed + 1) return -1;
     while (i < len) {
         size_t rem = len - i;
-        unsigned int octet_a = input[i++];
-        unsigned int octet_b = (rem > 1) ? input[i++] : 0;
-        unsigned int octet_c = (rem > 2) ? input[i++] : 0;
+        unsigned int octet_a = input[i];
+        unsigned int octet_b = (rem > 1) ? input[i + 1] : 0;
+        unsigned int octet_c = (rem > 2) ? input[i + 2] : 0;
+        i += (rem >= 3) ? 3 : rem;
         unsigned int triple = (octet_a << 16) | (octet_b << 8) | octet_c;
         out[o++] = table[(triple >> 18) & 0x3F];
         out[o++] = table[(triple >> 12) & 0x3F];

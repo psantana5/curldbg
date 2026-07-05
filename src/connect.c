@@ -455,8 +455,8 @@ void apply_socket_timeout(int fd, int timeout_ms) {
     if (timeout_ms <= 0) return;
     tv.tv_sec = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
-    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) != 0) die("setsockopt SO_RCVTIMEO");
-    if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) != 0) die("setsockopt SO_SNDTIMEO");
+    (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    (void)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 }
 
 int connect_unix_socket(const char *path, char *error, size_t error_len) {
@@ -483,9 +483,15 @@ int connect_unix_socket(const char *path, char *error, size_t error_len) {
 }
 
 void close_connection(struct connection *conn) {
-    if (conn->ssl != NULL) { SSL_shutdown(conn->ssl); SSL_free(conn->ssl); conn->ssl = NULL; }
-    if (conn->ctx != NULL) { SSL_CTX_free(conn->ctx); conn->ctx = NULL; }
-    if (conn->fd >= 0) { close(conn->fd); conn->fd = -1; }
+    if (conn->ssl != NULL) {
+        SSL_shutdown(conn->ssl);
+        SSL_free(conn->ssl);
+        conn->ssl = NULL;
+    }
+    if (conn->fd >= 0) {
+        close(conn->fd);
+        conn->fd = -1;
+    }
 }
 
 ssize_t connection_read(struct connection *conn, void *buf, size_t len, char *error, size_t error_len) {

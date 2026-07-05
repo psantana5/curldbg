@@ -87,10 +87,7 @@ static char *find_header_end(char *buf, size_t len) {
 
 static size_t write_body_data(const char *buf, size_t len, FILE *body_out, struct response_info *out) {
     if (body_out != NULL && len > 0) {
-        int fd = fileno(body_out);
-        if (fd < 0) return (size_t)-1;
-        ssize_t written = write(fd, buf, len);
-        if (written < 0 || (size_t)written != len) return (size_t)-1;
+        if (fwrite(buf, 1, len, body_out) != len) return (size_t)-1;
     }
     if (out->preview_len < PREVIEW_BYTES) {
         size_t take = len;
@@ -171,7 +168,147 @@ static size_t chunked_write(const char *buf, size_t len, FILE *body_out, struct 
     return consumed;
 }
 
-/* Send a minimal HTTP/1.1 request (GET/POST/PUT). */
+static int build_body_headers(char *body_headers, size_t body_headers_size,
+                               const char *verb, const char *data, size_t data_len,
+                               FILE *upload_file, size_t upload_size,
+                               bool has_content_type, bool has_content_length,
+                               bool chunked_upload, size_t *content_len_out,
+                               bool *include_body_headers_out,
+                               char *error, size_t error_len) {
+    int n;
+    *include_body_headers_out = false;
+    *content_len_out = 0;
+    body_headers[0] = '\0';
+
+    if (upload_file != NULL) {
+        *content_len_out = upload_size;
+        *include_body_headers_out = true;
+        if (chunked_upload) {
+            if (has_content_type)
+                n = snprintf(body_headers, body_headers_size, "Transfer-Encoding: chunked\r\n");
+            else
+                n = snprintf(body_headers, body_headers_size,
+                    "Content-Type: application/octet-stream\r\n"
+                    "Transfer-Encoding: chunked\r\n");
+        } else if (has_content_type && has_content_length) {
+            *include_body_headers_out = false;
+            n = 0;
+        } else if (has_content_type) {
+            n = snprintf(body_headers, body_headers_size, "Content-Length: %zu\r\n", *content_len_out);
+        } else if (has_content_length) {
+            n = snprintf(body_headers, body_headers_size, "Content-Type: application/octet-stream\r\n");
+        } else {
+            n = snprintf(body_headers, body_headers_size,
+                "Content-Type: application/octet-stream\r\n"
+                "Content-Length: %zu\r\n", *content_len_out);
+        }
+        if (n < 0 || (size_t)n >= body_headers_size) {
+            set_error(error, error_len, "Request body headers are too large"); return -1;
+        }
+    } else if (data != NULL || strcasecmp(verb, "POST") == 0 || strcasecmp(verb, "PUT") == 0) {
+        *content_len_out = data_len;
+        *include_body_headers_out = true;
+        if (has_content_type && has_content_length) { *include_body_headers_out = false; n = 0; }
+        else if (has_content_type) n = snprintf(body_headers, body_headers_size, "Content-Length: %zu\r\n", *content_len_out);
+        else if (has_content_length) n = snprintf(body_headers, body_headers_size, "Content-Type: application/x-www-form-urlencoded\r\n");
+        else n = snprintf(body_headers, body_headers_size,
+            "Content-Type: application/x-www-form-urlencoded\r\n"
+            "Content-Length: %zu\r\n", *content_len_out);
+        if (n < 0 || (size_t)n >= body_headers_size) {
+            set_error(error, error_len, "Request body headers are too large"); return -1;
+        }
+    }
+    return 0;
+}
+
+static int build_request_buffer(const char *verb, const char *request_target,
+                                 const char *host_header, const char *user_agent,
+                                 const char *body_headers, bool include_body_headers,
+                                 const char *auth_header, size_t auth_len,
+                                 const char **extra_headers, size_t extra_header_count,
+                                 bool has_host, bool compressed, bool has_accept_encoding,
+                                 char *req, size_t req_size,
+                                 char *error, size_t error_len) {
+    size_t offset = 0;
+    if (append_str(req, req_size, &offset, verb) != 0) {
+        set_error(error, error_len, "Request is too large"); return -1;
+    }
+    req[offset++] = ' ';
+    if (append_str(req, req_size, &offset, request_target) != 0) {
+        set_error(error, error_len, "Request is too large"); return -1;
+    }
+    if (append_str(req, req_size, &offset, " HTTP/1.1\r\n") != 0) {
+        set_error(error, error_len, "Request is too large"); return -1;
+    }
+    if (!has_host) {
+        if (append_str(req, req_size, &offset, "Host: ") != 0 ||
+            append_str(req, req_size, &offset, host_header) != 0 ||
+            append_str(req, req_size, &offset, "\r\n") != 0) {
+            set_error(error, error_len, "Request is too large"); return -1;
+        }
+    }
+    if (append_str(req, req_size, &offset, "User-Agent: ") != 0 ||
+        append_str(req, req_size, &offset, user_agent) != 0 ||
+        append_str(req, req_size, &offset, "\r\n") != 0) {
+        set_error(error, error_len, "Request is too large"); return -1;
+    }
+
+    if (compressed && !has_accept_encoding) {
+        if (append_str(req, req_size, &offset, "Accept-Encoding: gzip, deflate\r\n") != 0) {
+            set_error(error, error_len, "Request is too large"); return -1;
+        }
+    }
+
+    if (include_body_headers && body_headers[0] != '\0') {
+        if (append_str(req, req_size, &offset, body_headers) != 0) {
+            set_error(error, error_len, "Request is too large"); return -1;
+        }
+    }
+    if (auth_len > 0) {
+        if (append_str(req, req_size, &offset, auth_header) != 0) {
+            set_error(error, error_len, "Request is too large"); return -1;
+        }
+    }
+    for (size_t i = 0; i < extra_header_count; i++) {
+        if (extra_headers[i] == NULL) continue;
+        if (append_str(req, req_size, &offset, extra_headers[i]) != 0 ||
+            append_str(req, req_size, &offset, "\r\n") != 0) {
+            set_error(error, error_len, "Request is too large"); return -1;
+        }
+    }
+    if (append_str(req, req_size, &offset, "\r\n") != 0) {
+        set_error(error, error_len, "Request is too large"); return -1;
+    }
+    return 0;
+}
+
+static int write_upload_body(struct connection *conn, FILE *upload_file,
+                              bool chunked_upload, char *error, size_t error_len) {
+    char buf[4096];
+    for (;;) {
+        size_t nread = fread(buf, 1, sizeof(buf), upload_file);
+        if (nread > 0) {
+            if (chunked_upload) {
+                char chunk_hdr[32];
+                int hn = snprintf(chunk_hdr, sizeof(chunk_hdr), "%zx\r\n", nread);
+                if (connection_write_all(conn, chunk_hdr, (size_t)hn, error, error_len) != 0) return -1;
+            }
+            if (connection_write_all(conn, buf, nread, error, error_len) != 0) return -1;
+            if (chunked_upload) {
+                if (connection_write_all(conn, "\r\n", 2, error, error_len) != 0) return -1;
+            }
+        }
+        if (nread < sizeof(buf)) {
+            if (ferror(upload_file)) { set_error(error, error_len, "Failed to read upload file"); return -1; }
+            break;
+        }
+    }
+    if (chunked_upload) {
+        if (connection_write_all(conn, "0\r\n\r\n", 5, error, error_len) != 0) return -1;
+    }
+    return 0;
+}
+
 int send_request(
     struct connection *conn,
     const struct url_info *url,
@@ -194,7 +331,7 @@ int send_request(
     char host_header[320], body_headers[256], auth_header[1024], auth_b64[512];
     const char *verb = (method != NULL) ? method : "GET";
     size_t data_len = (data != NULL) ? strlen(data) : 0;
-    size_t req_len, extra_len = 0, auth_len = 0, content_len = 0;
+    size_t extra_len = 0, auth_len = 0, content_len = 0, req_len;
     bool include_body_headers = false;
     int n;
 
@@ -209,45 +346,11 @@ int send_request(
         else if (strncasecmp(extra_headers[i], "Accept-Encoding:", 16) == 0) has_accept_encoding = true;
     }
 
-    body_headers[0] = '\0';
-    if (upload_file != NULL) {
-        content_len = upload_size;
-        include_body_headers = true;
-        if (chunked_upload) {
-            if (has_content_type)
-                n = snprintf(body_headers, sizeof(body_headers), "Transfer-Encoding: chunked\r\n");
-            else
-                n = snprintf(body_headers, sizeof(body_headers),
-                    "Content-Type: application/octet-stream\r\n"
-                    "Transfer-Encoding: chunked\r\n");
-        } else if (has_content_type && has_content_length) {
-            include_body_headers = false;
-            n = 0;
-        } else if (has_content_type) {
-            n = snprintf(body_headers, sizeof(body_headers), "Content-Length: %zu\r\n", content_len);
-        } else if (has_content_length) {
-            n = snprintf(body_headers, sizeof(body_headers), "Content-Type: application/octet-stream\r\n");
-        } else {
-            n = snprintf(body_headers, sizeof(body_headers),
-                "Content-Type: application/octet-stream\r\n"
-                "Content-Length: %zu\r\n", content_len);
-        }
-        if (n < 0 || (size_t)n >= sizeof(body_headers)) {
-            set_error(error, error_len, "Request body headers are too large"); return -1;
-        }
-    } else if (data != NULL || strcasecmp(verb, "POST") == 0 || strcasecmp(verb, "PUT") == 0) {
-        content_len = data_len;
-        include_body_headers = true;
-        if (has_content_type && has_content_length) { include_body_headers = false; n = 0; }
-        else if (has_content_type) n = snprintf(body_headers, sizeof(body_headers), "Content-Length: %zu\r\n", content_len);
-        else if (has_content_length) n = snprintf(body_headers, sizeof(body_headers), "Content-Type: application/x-www-form-urlencoded\r\n");
-        else n = snprintf(body_headers, sizeof(body_headers),
-            "Content-Type: application/x-www-form-urlencoded\r\n"
-            "Content-Length: %zu\r\n", content_len);
-        if (n < 0 || (size_t)n >= sizeof(body_headers)) {
-            set_error(error, error_len, "Request body headers are too large"); return -1;
-        }
-    }
+    if (build_body_headers(body_headers, sizeof(body_headers), verb,
+                           data, data_len, upload_file, upload_size,
+                           has_content_type, has_content_length, chunked_upload,
+                           &content_len, &include_body_headers,
+                           error, error_len) != 0) return -1;
 
     if (basic_auth != NULL && basic_auth[0] != '\0') {
         if (base64_encode((const unsigned char *)basic_auth, strlen(basic_auth), auth_b64, sizeof(auth_b64)) != 0) {
@@ -278,49 +381,13 @@ int send_request(
         request_target = url->path;
     }
 
-    {
-        size_t offset = 0;
-        size_t vlen = strlen(verb);
-        memcpy(req + offset, verb, vlen); offset += vlen;
-        req[offset++] = ' ';
-        size_t plen = strlen(request_target);
-        memcpy(req + offset, request_target, plen); offset += plen;
-        memcpy(req + offset, " HTTP/1.1\r\n", 11); offset += 11;
-        if (!has_host) {
-            memcpy(req + offset, "Host: ", 6); offset += 6;
-            size_t hlen = strlen(host_header);
-            memcpy(req + offset, host_header, hlen); offset += hlen;
-            memcpy(req + offset, "\r\n", 2); offset += 2;
-        }
-        memcpy(req + offset, "User-Agent: ", 12); offset += 12;
-        size_t ualen = strlen(user_agent);
-        memcpy(req + offset, user_agent, ualen); offset += ualen;
-        memcpy(req + offset, "\r\n", 2); offset += 2;
-
-        if (compressed && !has_accept_encoding) {
-            memcpy(req + offset, "Accept-Encoding: gzip, deflate\r\n", 32); offset += 32;
-        }
-
-        if (include_body_headers && body_headers[0] != '\0') {
-            if (append_str(req, req_len + 1, &offset, body_headers) != 0) {
-                set_error(error, error_len, "Request is too large"); free(req); return -1;
-            }
-        }
-        if (auth_len > 0) {
-            if (append_str(req, req_len + 1, &offset, auth_header) != 0) {
-                set_error(error, error_len, "Request is too large"); free(req); return -1;
-            }
-        }
-        for (size_t i = 0; i < extra_header_count; i++) {
-            if (extra_headers[i] == NULL) continue;
-            if (append_str(req, req_len + 1, &offset, extra_headers[i]) != 0 ||
-                append_str(req, req_len + 1, &offset, "\r\n") != 0) {
-                set_error(error, error_len, "Request is too large"); free(req); return -1;
-            }
-        }
-        if (append_str(req, req_len + 1, &offset, "\r\n") != 0) {
-            set_error(error, error_len, "Request is too large"); free(req); return -1;
-        }
+    if (build_request_buffer(verb, request_target, host_header, user_agent,
+                             body_headers, include_body_headers,
+                             auth_header, auth_len,
+                             extra_headers, extra_header_count,
+                             has_host, compressed, has_accept_encoding,
+                             req, req_len + 1, error, error_len) != 0) {
+        free(req); return -1;
     }
 
     if (conn->verbose) {
@@ -350,30 +417,9 @@ int send_request(
 
     if (data_len > 0) return connection_write_all(conn, data, data_len, error, error_len);
 
-    if (upload_file != NULL) {
-        char buf[4096];
-        for (;;) {
-            size_t nread = fread(buf, 1, sizeof(buf), upload_file);
-            if (nread > 0) {
-                if (chunked_upload) {
-                    char chunk_hdr[32];
-                    int hn = snprintf(chunk_hdr, sizeof(chunk_hdr), "%zx\r\n", nread);
-                    if (connection_write_all(conn, chunk_hdr, (size_t)hn, error, error_len) != 0) return -1;
-                }
-                if (connection_write_all(conn, buf, nread, error, error_len) != 0) return -1;
-                if (chunked_upload) {
-                    if (connection_write_all(conn, "\r\n", 2, error, error_len) != 0) return -1;
-                }
-            }
-            if (nread < sizeof(buf)) {
-                if (ferror(upload_file)) { set_error(error, error_len, "Failed to read upload file"); return -1; }
-                break;
-            }
-        }
-        if (chunked_upload) {
-            if (connection_write_all(conn, "0\r\n\r\n", 5, error, error_len) != 0) return -1;
-        }
-    }
+    if (upload_file != NULL)
+        return write_upload_body(conn, upload_file, chunked_upload, error, error_len);
+
     return 0;
 }
 

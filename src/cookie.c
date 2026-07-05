@@ -142,6 +142,12 @@ void cookie_jar_load(struct cookie_jar *jar, const char *filepath) {
         if (len == 0) continue;
 
         char *domain = line;
+        int tab_count = 0;
+        for (const char *p = line; *p != '\0'; p++) {
+            if (*p == '\t') tab_count++;
+        }
+        if (tab_count != 6) continue;
+
         char *tab = strchr(domain, '\t');
         if (tab == NULL) continue;
         *tab = '\0'; tab++;

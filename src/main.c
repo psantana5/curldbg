@@ -52,6 +52,13 @@ static void print_fika_banner(void) {
     printf("Pausing requests for mandatory Swedish coffee break...\n");
 }
 
+static void print_easter_eggs(const struct cmdline_opts *c) {
+    maybe_print_april_fools();
+    if (c->wizard_mode) print_wizard_banner();
+    if (c->fika_mode) print_fika_banner();
+    if (c->debug_chaos) fprintf(stderr, "Segmentation fault (not really)\n");
+}
+
 static int output_filename_from_url(const char *input_url, char *out, size_t out_size) {
     struct url_info url;
     if (parse_url(input_url, &url) != 0) return -1;
@@ -93,10 +100,6 @@ static int run_compare_family(const struct cmdline_opts *c, struct run_options *
 
     run_two_requests_parallel(c->input_url, &opts_v4, &result_v4, &ok_v4,
                                c->input_url, &opts_v6, &result_v6, &ok_v6);
-
-    maybe_print_april_fools();
-    if (c->wizard_mode) print_wizard_banner();
-    if (c->fika_mode) print_fika_banner();
 
     printf("Compare mode:      IPv4 vs IPv6\n");
     printf("Input URL:         %s\n", c->input_url);
@@ -162,25 +165,6 @@ static int run_compare_urls(const struct cmdline_opts *c, struct run_options *op
     memset(&result_b, 0, sizeof(result_b));
     run_two_requests_parallel(c->input_url, opts, &result_a, &ok_a,
                                c->compare_url, opts, &result_b, &ok_b);
-
-    if (ok_a) {
-        final_endpoint(&result_a, endpoint_a, sizeof(endpoint_a));
-        snprintf(status_a, sizeof(status_a), "%d", final_status_code(&result_a));
-    } else {
-        snprintf(endpoint_a, sizeof(endpoint_a), "n/a");
-        snprintf(status_a, sizeof(status_a), "failed");
-    }
-    if (ok_b) {
-        final_endpoint(&result_b, endpoint_b, sizeof(endpoint_b));
-        snprintf(status_b, sizeof(status_b), "%d", final_status_code(&result_b));
-    } else {
-        snprintf(endpoint_b, sizeof(endpoint_b), "n/a");
-        snprintf(status_b, sizeof(status_b), "failed");
-    }
-
-    maybe_print_april_fools();
-    if (c->wizard_mode) print_wizard_banner();
-    if (c->fika_mode) print_fika_banner();
 
     printf("Compare mode:      request profile A vs B\n");
     printf("Profile A URL:     %s\n", c->input_url);
@@ -262,13 +246,9 @@ int main(int argc, char **argv) {
     }
     if (!c.compare_family_mode && !c.compare_urls_mode && c.input_url == NULL &&
         (c.wizard_mode || c.fika_mode || c.debug_chaos)) {
-        maybe_print_april_fools();
-        if (c.wizard_mode) print_wizard_banner();
-        if (c.fika_mode) print_fika_banner();
-        if (c.debug_chaos) fprintf(stderr, "Segmentation fault (not really)\n");
+        print_easter_eggs(&c);
         goto cleanup;
     }
-    if (c.debug_chaos) fprintf(stderr, "Segmentation fault (not really)\n");
 
     /* Parse proxy URL */
     char proxy_host_buf[256] = "", proxy_port_buf[16] = "";
@@ -363,11 +343,8 @@ int main(int argc, char **argv) {
         opts.proxy_port = proxy_port;
         opts.cookie_jar = cookie_jar_ptr;
 
-        if (!c.silent && c.url_count > 0) {
-            maybe_print_april_fools();
-            if (c.wizard_mode) print_wizard_banner();
-            if (c.fika_mode) print_fika_banner();
-        }
+        if (!c.silent && c.url_count > 0)
+            print_easter_eggs(&c);
 
         if (c.url_count > 1 && !c.silent)
             printf("=== Multi-URL mode: %d URLs ===\n", c.url_count);
@@ -419,11 +396,8 @@ int main(int argc, char **argv) {
             fprintf(stderr, "--compare cannot be combined with -4 or -6\n"); exit_code = EXIT_FAILURE; goto cleanup;
         }
 
-        if (!c.silent) {
-            maybe_print_april_fools();
-            if (c.wizard_mode) print_wizard_banner();
-            if (c.fika_mode) print_fika_banner();
-        }
+        if (!c.silent)
+            print_easter_eggs(&c);
 
         exit_code = run_compare_family(&c, &opts);
         goto cleanup;
@@ -440,11 +414,8 @@ int main(int argc, char **argv) {
             fprintf(stderr, "Usage: %s --compare-urls <url-a> <url-b>\n", argv[0]); exit_code = EXIT_FAILURE; goto cleanup;
         }
 
-        if (!c.silent) {
-            maybe_print_april_fools();
-            if (c.wizard_mode) print_wizard_banner();
-            if (c.fika_mode) print_fika_banner();
-        }
+        if (!c.silent)
+            print_easter_eggs(&c);
 
         exit_code = run_compare_urls(&c, &opts);
         goto cleanup;
