@@ -354,8 +354,10 @@ static int run_request(const char *input_url, const struct run_options *opts, st
 
     char method[32];
     const char *data;
+    size_t data_len;
     strcpy(method, opts->method);
     data = opts->data;
+    data_len = opts->data_len;
 
     for (;;) {
         struct url_info url, redirected_url;
@@ -506,7 +508,7 @@ static int run_request(const char *input_url, const struct run_options *opts, st
             }
         }
 
-        int sr = send_request(&conn, &url, method, data, opts->data_len,
+        int sr = send_request(&conn, &url, method, data, data_len,
                 upload_file, upload_size, send_headers, send_header_count,
                 opts->basic_auth, opts->user_agent, out->error, sizeof(out->error),
                 use_proxy && !url.use_tls, chunked_upload, opts->compressed);
@@ -565,6 +567,7 @@ static int run_request(const char *input_url, const struct run_options *opts, st
                 out->resp.status_code == 303) {
                 strcpy(method, "GET");
                 data = NULL;
+                data_len = 0;
                 close_upload_file(&upload_file);
                 upload_size = 0;
                 chunked_upload = false;
