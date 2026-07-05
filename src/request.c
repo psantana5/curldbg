@@ -635,11 +635,12 @@ void init_run_options(struct run_options *opts, const struct cmdline_opts *c) {
 /* --- Single request mode --- */
 int run_single_request(const struct cmdline_opts *c, struct run_options *opts,
                                struct run_result *result, FILE *body_out) {
+    struct cookie_jar *cookie_jar = opts->cookie_jar;
     init_run_options(opts, c);
     opts->body_out = body_out;
     opts->proxy_host = NULL;
     opts->proxy_port = NULL;
-    opts->cookie_jar = NULL;
+    opts->cookie_jar = cookie_jar;
 
     if (c->proxy_url != NULL) {
         struct url_info proxy_ui;
