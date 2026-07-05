@@ -318,6 +318,7 @@ int send_request(
     const struct url_info *url,
     const char *method,
     const char *data,
+    size_t data_len,
     FILE *upload_file,
     size_t upload_size,
     const char **extra_headers,
@@ -334,7 +335,6 @@ int send_request(
 
     char host_header[320], body_headers[256], auth_header[1024], auth_b64[512];
     const char *verb = (method != NULL) ? method : "GET";
-    size_t data_len = (data != NULL) ? strlen(data) : 0;
     size_t extra_len = 0, auth_len = 0, content_len = 0, req_len;
     bool include_body_headers = false;
     int n;

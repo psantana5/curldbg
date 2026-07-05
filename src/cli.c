@@ -157,30 +157,42 @@ void parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
                 }
                 if (ferror(fp)) { free(data); if (close_fp) fclose(fp); fprintf(stderr, "Failed to read data from '%s'\n", spec); exit(EXIT_FAILURE); }
                 if (close_fp) fclose(fp);
-                data[total] = '\0';
                 if (c->request_data != NULL) {
-                    char *combined = malloc(strlen(c->request_data) + 1 + total + 1);
+                    size_t old_len = c->request_data_len;
+                    char *combined = malloc(old_len + 1 + total + 1);
                     if (combined == NULL) { free(data); fprintf(stderr, "Out of memory\n"); exit(EXIT_FAILURE); }
-                    snprintf(combined, strlen(c->request_data) + 1 + total + 1, "%s&%s", c->request_data, data);
+                    memcpy(combined, c->request_data, old_len);
+                    combined[old_len] = '&';
+                    memcpy(combined + old_len + 1, data, total);
+                    combined[old_len + 1 + total] = '\0';
                     free(c->request_data_alloc); free(data);
                     c->request_data = combined; c->request_data_alloc = combined;
+                    c->request_data_len = old_len + 1 + total;
                     c->request_data_urlencode_alloc = NULL;
                 } else {
                     free(c->request_data_alloc);
                     c->request_data = data; c->request_data_alloc = data;
+                    c->request_data_len = total;
                     c->request_data_urlencode_alloc = NULL;
                 }
             } else {
+                size_t arg_len = strlen(argv[i]);
                 if (c->request_data != NULL) {
-                    size_t new_len = strlen(c->request_data) + 1 + strlen(argv[i]) + 1;
+                    size_t old_len = c->request_data_len;
+                    size_t new_len = old_len + 1 + arg_len + 1;
                     char *combined = malloc(new_len);
                     if (combined == NULL) { fprintf(stderr, "Out of memory\n"); exit(EXIT_FAILURE); }
-                    snprintf(combined, new_len, "%s&%s", c->request_data, argv[i]);
+                    memcpy(combined, c->request_data, old_len);
+                    combined[old_len] = '&';
+                    memcpy(combined + old_len + 1, argv[i], arg_len);
+                    combined[old_len + 1 + arg_len] = '\0';
                     free(c->request_data_alloc);
                     c->request_data = combined; c->request_data_alloc = combined;
+                    c->request_data_len = old_len + 1 + arg_len;
                     c->request_data_urlencode_alloc = NULL;
                 } else {
                     c->request_data = argv[i];
+                    c->request_data_len = arg_len;
                 }
             }
             continue;

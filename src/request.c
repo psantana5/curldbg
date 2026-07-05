@@ -494,7 +494,7 @@ static int run_request(const char *input_url, const struct run_options *opts, st
             }
         }
 
-        int sr = send_request(&conn, &url, method, data,
+        int sr = send_request(&conn, &url, method, data, opts->data_len,
                 upload_file, upload_size, send_headers, send_header_count,
                 opts->basic_auth, opts->user_agent, out->error, sizeof(out->error),
                 use_proxy && !url.use_tls, chunked_upload, opts->compressed);
@@ -605,6 +605,7 @@ void init_run_options(struct run_options *opts, const struct cmdline_opts *c) {
     opts->follow_redirects = c->follow_redirects;
     strcpy(opts->method, c->request_method);
     opts->data = c->request_data;
+    opts->data_len = c->request_data_len;
     opts->address_family = c->address_family;
     opts->connect_timeout_ms = c->connect_timeout_ms;
     opts->read_timeout_ms = c->read_timeout_ms;

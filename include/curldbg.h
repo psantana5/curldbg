@@ -106,6 +106,7 @@ struct connection {
 struct run_options {
     char method[8];
     const char *data;
+    size_t data_len;
     bool follow_redirects;
     int address_family;
     int connect_timeout_ms;
@@ -157,6 +158,7 @@ struct cmdline_opts {
     char request_method[8];
     bool method_explicit;
     const char *request_data;
+    size_t request_data_len;
     char *request_data_alloc;
     char *request_data_urlencode_alloc;
     bool compare_family_mode;
@@ -283,7 +285,7 @@ int connection_write_all(struct connection *conn, const char *buf, size_t len, c
 bool is_redirect_status(int status_code);
 void parse_response_headers(char *headers, struct response_info *out);
 int send_request(struct connection *conn, const struct url_info *url, const char *method,
-                 const char *data, FILE *upload_file, size_t upload_size,
+                 const char *data, size_t data_len, FILE *upload_file, size_t upload_size,
                  const char **extra_headers, size_t extra_header_count,
                  const char *basic_auth, const char *user_agent,
                  char *error, size_t error_len, bool use_proxy, bool chunked_upload,
