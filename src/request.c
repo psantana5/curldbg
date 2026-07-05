@@ -590,10 +590,8 @@ error_cleanup:
     rc = -1;
 done:
     close_upload_file(&upload_file);
-    if (rc == 0) {
-        clock_gettime(CLOCK_MONOTONIC, &total_end);
-        out->total_ms = ms_between(&total_start, &total_end);
-    }
+    clock_gettime(CLOCK_MONOTONIC, &total_end);
+    out->total_ms = ms_between(&total_start, &total_end);
     close_connection(&conn);
     freeaddrinfo(conn_addrs);
     if (rc != 0 && out->error[0] == '\0')
