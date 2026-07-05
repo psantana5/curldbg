@@ -549,7 +549,8 @@ static int run_request(const char *input_url, const struct run_options *opts, st
                      "%s", redirected_url.host);
             out->hops[out->hop_count].has_redirect_target = true;
             can_redirect = true;
-            if (out->resp.status_code == 303) {
+            if (out->resp.status_code == 301 || out->resp.status_code == 302 ||
+                out->resp.status_code == 303) {
                 strcpy(method, "GET");
                 data = NULL;
                 close_upload_file(&upload_file);
