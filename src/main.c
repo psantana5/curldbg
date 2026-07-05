@@ -336,8 +336,6 @@ int main(int argc, char **argv) {
             }
         }
 
-        if (body_out == NULL && !isatty(fileno(stdout))) { body_out = stdout; c.silent = true; }
-
         memset(&opts, 0, sizeof(opts));
         opts.proxy_host = proxy_host;
         opts.proxy_port = proxy_port;
