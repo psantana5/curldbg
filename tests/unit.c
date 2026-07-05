@@ -227,6 +227,17 @@ TEST(test_parse_response_headers_no_headers) {
     ASSERT_INT_EQ(ri.status_code, 0, "empty headers has status 0");
 }
 
+TEST(test_parse_response_headers_lf_only) {
+    char buf[HEADER_MAX + 1];
+    struct response_info ri;
+    memset(buf, 0, sizeof(buf));
+    snprintf(buf, sizeof(buf), "HTTP/1.1 200 OK\nContent-Length: 12345\n\n");
+    memset(&ri, 0, sizeof(ri));
+    parse_response_headers(buf, &ri);
+    ASSERT_INT_EQ(ri.status_code, 200, "LF-only status code");
+    ASSERT_INT_EQ((int)ri.content_length, 12345, "LF-only content-length");
+}
+
 /* --- cookie_jar tests --- */
 TEST(test_cookie_jar_add_and_get) {
     struct cookie_jar jar;
@@ -359,7 +370,21 @@ TEST(test_build_redirect_url_absolute_path) {
 
     char out[2048];
     ASSERT_INT_EQ(build_redirect_url("/absolute", &base, out, sizeof(out)), 0, "absolute path redirect");
-    ASSERT_STR_EQ(out, "http://example.com/absolute", "absolute path redirect resolves");
+    ASSERT_STR_EQ(out, "http://example.com/absolute", "absolute path redirect URL resolves");
+}
+
+TEST(test_build_redirect_url_protocol_relative) {
+    struct url_info base;
+    memset(&base, 0, sizeof(base));
+    snprintf(base.host, sizeof(base.host), "example.com");
+    snprintf(base.port, sizeof(base.port), "443");
+    base.use_tls = true;
+    base.has_explicit_port = false;
+    snprintf(base.path, sizeof(base.path), "/dir/page");
+
+    char out[2048];
+    ASSERT_INT_EQ(build_redirect_url("//other.com/path", &base, out, sizeof(out)), 0, "protocol-relative redirect");
+    ASSERT_STR_EQ(out, "https://other.com/path", "protocol-relative redirect URL resolves");
 }
 
 int main(void) {
@@ -393,6 +418,7 @@ int main(void) {
     test_parse_response_headers_chunked();
     test_parse_response_headers_set_cookie();
     test_parse_response_headers_no_headers();
+    test_parse_response_headers_lf_only();
 
     test_cookie_jar_add_and_get();
     test_cookie_jar_path_mismatch();
@@ -403,6 +429,7 @@ int main(void) {
     test_build_redirect_url_absolute();
     test_build_redirect_url_relative();
     test_build_redirect_url_absolute_path();
+    test_build_redirect_url_protocol_relative();
 
     test_write_out_expand();
 
