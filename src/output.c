@@ -5,6 +5,11 @@
 
 void write_out_expand(const char *fmt, const struct run_result *result) {
     while (*fmt != '\0') {
+        if (fmt[0] == '%' && fmt[1] == '%') {
+            putchar('%');
+            fmt += 2;
+            continue;
+        }
         if (fmt[0] == '%' && fmt[1] == '{') {
             const char *start = fmt + 2;
             const char *end = strchr(start, '}');
@@ -37,7 +42,7 @@ void write_out_expand(const char *fmt, const struct run_result *result) {
                             printf("%s", h->redirect_to_host);
                     }
                 } else {
-                    printf("%%{%s}", varname);
+                    /* unknown variable: curl prints nothing */
                 }
                 fmt = end + 1;
                 continue;
