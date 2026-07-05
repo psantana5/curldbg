@@ -128,9 +128,17 @@ int build_redirect_url(
     char base_dir[1024];
     int n;
 
-    if (strncmp(location, "http://", 7) == 0 || strncmp(location, "https://", 8) == 0) {
+    if (strncasecmp(location, "http://", 7) == 0 || strncasecmp(location, "https://", 8) == 0) {
         if (strlen(location) >= out_size) return -1;
         strcpy(out_url, location);
+        return 0;
+    }
+
+    if (location[0] == '/' && location[1] == '/') {
+        const char *scheme = base->use_tls ? "https:" : "http:";
+        if (strlen(scheme) + strlen(location) >= out_size) return -1;
+        strcpy(out_url, scheme);
+        strcat(out_url, location);
         return 0;
     }
 
