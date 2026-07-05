@@ -26,7 +26,8 @@ void parse_response_headers(char *headers, struct response_info *out) {
     if (nl == NULL || nl == headers) return;
     if (*(nl - 1) == '\r') *(nl - 1) = '\0';
     *nl = '\0';
-    if (sscanf(headers, "HTTP/%*d.%*d %d", &out->status_code) != 1) {
+    if (sscanf(headers, "HTTP/%*d.%*d %d", &out->status_code) != 1 &&
+        sscanf(headers, "HTTP/%*d %d", &out->status_code) != 1) {
         out->status_code = 0; return;
     }
 
@@ -537,6 +538,12 @@ int receive_response(
                 }
 
                 parse_response_headers(headers_only, out);
+
+                if (out->status_code == 0) {
+                    set_error(error, error_len, "Invalid HTTP response status line");
+                    if (decomp_init) inflateEnd(&decomp_strm);
+                    return -1;
+                }
 
                 if (head_method) return 0;
 
