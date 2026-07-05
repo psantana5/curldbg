@@ -399,30 +399,26 @@ static int connect_tcp_preferred_first(
 ) {
     const struct addrinfo *ai;
     int last_errno = 0;
-    int fallback_af = (preferred_family == AF_INET) ? AF_INET6 : AF_INET;
     int per_attempt_ms = (connect_timeout_ms > 0) ? connect_timeout_ms : 5000;
 
     clear_race_info(race_info);
 
-    for (int pass = 0; pass < 2; pass++) {
-        int target_af = (pass == 0) ? preferred_family : fallback_af;
-        for (ai = addrs; ai != NULL; ai = ai->ai_next) {
-            if (ai->ai_family != target_af) continue;
-            struct timespec start_ts, end_ts;
-            int fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-            if (fd < 0) { last_errno = errno; continue; }
-            if (bind_to_interface(fd, bind_interface) != 0) { last_errno = errno; close(fd); continue; }
+    for (ai = addrs; ai != NULL; ai = ai->ai_next) {
+        if (ai->ai_family != preferred_family) continue;
+        struct timespec start_ts, end_ts;
+        int fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd < 0) { last_errno = errno; continue; }
+        if (bind_to_interface(fd, bind_interface) != 0) { last_errno = errno; close(fd); continue; }
 
-            clock_gettime(CLOCK_MONOTONIC, &start_ts);
-            if (connect_with_timeout(fd, ai->ai_addr, ai->ai_addrlen, per_attempt_ms) == 0) {
-                clock_gettime(CLOCK_MONOTONIC, &end_ts);
-                if (race_info != NULL) race_info->winner_connect_ms = ms_between(&start_ts, &end_ts);
-                fill_connected_endpoint(ai, connected_ip, connected_ip_size, connected_family);
-                return fd;
-            }
-            last_errno = errno;
-            close(fd);
+        clock_gettime(CLOCK_MONOTONIC, &start_ts);
+        if (connect_with_timeout(fd, ai->ai_addr, ai->ai_addrlen, per_attempt_ms) == 0) {
+            clock_gettime(CLOCK_MONOTONIC, &end_ts);
+            if (race_info != NULL) race_info->winner_connect_ms = ms_between(&start_ts, &end_ts);
+            fill_connected_endpoint(ai, connected_ip, connected_ip_size, connected_family);
+            return fd;
         }
+        last_errno = errno;
+        close(fd);
     }
 
     errno = (last_errno != 0) ? last_errno : ECONNREFUSED;
