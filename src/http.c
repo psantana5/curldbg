@@ -358,15 +358,28 @@ int send_request(
                            &content_len, &include_body_headers,
                            error, error_len) != 0) return -1;
 
-    if (basic_auth != NULL && basic_auth[0] != '\0') {
-        if (base64_encode((const unsigned char *)basic_auth, strlen(basic_auth), auth_b64, sizeof(auth_b64)) != 0) {
-            set_error(error, error_len, "Basic auth value is too large"); return -1;
+    {
+        const char *effective_auth = basic_auth;
+        char url_auth_buf[512];
+        if (effective_auth == NULL || effective_auth[0] == '\0') {
+            if (url->user[0] != '\0') {
+                int na = snprintf(url_auth_buf, sizeof(url_auth_buf), "%s:%s", url->user, url->pass);
+                if (na < 0 || (size_t)na >= sizeof(url_auth_buf)) {
+                    set_error(error, error_len, "URL credentials are too large"); return -1;
+                }
+                effective_auth = url_auth_buf;
+            }
         }
-        n = snprintf(auth_header, sizeof(auth_header), "Authorization: Basic %s\r\n", auth_b64);
-        if (n < 0 || (size_t)n >= sizeof(auth_header)) {
-            set_error(error, error_len, "Authorization header is too large"); return -1;
+        if (effective_auth != NULL && effective_auth[0] != '\0') {
+            if (base64_encode((const unsigned char *)effective_auth, strlen(effective_auth), auth_b64, sizeof(auth_b64)) != 0) {
+                set_error(error, error_len, "Basic auth value is too large"); return -1;
+            }
+            n = snprintf(auth_header, sizeof(auth_header), "Authorization: Basic %s\r\n", auth_b64);
+            if (n < 0 || (size_t)n >= sizeof(auth_header)) {
+                set_error(error, error_len, "Authorization header is too large"); return -1;
+            }
+            auth_len = (size_t)n;
         }
-        auth_len = (size_t)n;
     }
 
     for (size_t i = 0; i < extra_header_count; i++) {

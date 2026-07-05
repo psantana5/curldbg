@@ -32,6 +32,26 @@ int parse_url(const char *url, struct url_info *out) {
     memcpy(authority, authority_start, authority_len);
     authority[authority_len] = '\0';
 
+    {
+        char *at = strrchr(authority, '@');
+        if (at != NULL) {
+            *at = '\0';
+            char *colon = strchr(authority, ':');
+            if (colon != NULL) {
+                *colon = '\0';
+                if (strlen(authority) >= sizeof(out->user) || strlen(colon + 1) >= sizeof(out->pass))
+                    return -1;
+                strcpy(out->user, authority);
+                strcpy(out->pass, colon + 1);
+            } else {
+                if (strlen(authority) >= sizeof(out->user)) return -1;
+                strcpy(out->user, authority);
+                out->pass[0] = '\0';
+            }
+            memmove(authority, at + 1, strlen(at + 1) + 1);
+        }
+    }
+
     if (authority[0] == '[') {
         char *closing = strchr(authority, ']');
         if (closing == NULL) return -1;

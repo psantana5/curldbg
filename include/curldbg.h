@@ -39,6 +39,8 @@ struct url_info {
     char host[256];
     char port[16];
     char path[1024];
+    char user[256];
+    char pass[256];
     bool use_tls;
     bool has_explicit_port;
 };
