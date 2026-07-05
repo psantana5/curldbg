@@ -7,6 +7,43 @@
 #include <signal.h>
 #include <arpa/inet.h>
 
+#include "flags.h"
+
+static void print_help(const char *prog) {
+    printf("curldbg %s -- HTTP debug client\n\n", CURLDBG_VERSION);
+    printf("Usage: %s [options] <url> [url2 ...]\n\n", prog);
+
+    const char *last_cat = NULL;
+    for (int i = 0; g_flags[i].desc != NULL; i++) {
+        const struct flag_info *f = &g_flags[i];
+        if (last_cat == NULL || strcmp(f->category, last_cat) != 0) {
+            if (last_cat != NULL) printf("\n");
+            printf("%s:\n", f->category);
+            last_cat = f->category;
+        }
+        printf("  ");
+        int col = 2;
+        if (f->short_name != NULL) {
+            printf("%s", f->short_name);
+            col += (int)strlen(f->short_name);
+        }
+        if (f->long_name != NULL) {
+            if (f->short_name != NULL) { printf(", "); col += 2; }
+            printf("%s", f->long_name);
+            col += (int)strlen(f->long_name);
+        }
+        if (f->arg != NULL) {
+            printf(" %s", f->arg);
+            col += (int)strlen(f->arg) + 1;
+        }
+        int pad = 26 - col;
+        if (pad < 1) pad = 1;
+        for (int p = 0; p < pad; p++) putchar(' ');
+        printf("%s\n", f->desc);
+    }
+    printf("\nAuthor: Pau Santana\n");
+}
+
 static int parse_non_negative_int(const char *value, const char *flag_name) {
     char *end = NULL;
     long parsed;
@@ -35,6 +72,9 @@ void parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
         if (strcmp(argv[i], "--version") == 0) {
             printf("curldbg %s\n", CURLDBG_VERSION);
             printf("Author: Pau Santana\n"); exit(EXIT_SUCCESS);
+        }
+        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+            print_help(argv[0]); exit(EXIT_SUCCESS);
         }
         if (strcmp(argv[i], "--wizard") == 0) { c->wizard_mode = true; continue; }
         if (strcmp(argv[i], "--debug-chaos") == 0) { c->debug_chaos = true; continue; }
@@ -405,6 +445,7 @@ void parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
                     case 'L': c->follow_redirects = true; break;
                     case 'O': c->output_remote_name = true; break;
                     case 'I': strcpy(c->request_method, "HEAD"); c->method_explicit = true; break;
+                    case 'h': print_help(argv[0]); exit(EXIT_SUCCESS);
                     case 'o':
                         if (argv[i][j + 1] != '\0') {
                             c->output_path = argv[i] + j + 1;

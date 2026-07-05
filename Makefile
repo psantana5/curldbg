@@ -6,19 +6,20 @@ TARGET := curldbg
 OBJDIR := obj
 SRCS := src/main.c src/request.c src/results.c src/util.c src/url.c src/dns.c src/tls.c src/connect.c src/http.c src/proxy.c src/cookie.c src/cli.c src/output.c
 OBJS := $(SRCS:src/%.c=$(OBJDIR)/%.o)
+UNIT_OBJS := $(filter-out $(OBJDIR)/main.o,$(OBJS))
 MANPAGE := man/curldbg.1
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man/man1
 
-.PHONY: all clean install test static
+.PHONY: all clean install test test-unit static
 
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -s $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
 
-$(OBJDIR)/%.o: src/%.c include/curldbg.h | $(OBJDIR)
+$(OBJDIR)/%.o: src/%.c include/curldbg.h include/flags.h | $(OBJDIR)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(OBJDIR):
@@ -27,8 +28,18 @@ $(OBJDIR):
 clean:
 	rm -rf $(TARGET) $(OBJDIR)
 
-test: $(TARGET)
+test: $(TARGET) $(UNIT_OBJS)
 	@CURLDBG=$(CURDIR)/$(TARGET) sh tests/flags.sh
+	$(CC) -g -O0 -Wall -Wextra -Werror -pthread -Iinclude \
+		-o $(OBJDIR)/unit_test tests/unit.c $(UNIT_OBJS) $(LDLIBS)
+	@valgrind --leak-check=full --error-exitcode=1 -q $(OBJDIR)/unit_test
+	@rm -f $(OBJDIR)/unit_test
+
+test-unit: $(UNIT_OBJS)
+	$(CC) -g -O0 -Wall -Wextra -Werror -pthread -Iinclude \
+		-o $(OBJDIR)/unit_test tests/unit.c $(UNIT_OBJS) $(LDLIBS)
+	@$(OBJDIR)/unit_test
+	@rm -f $(OBJDIR)/unit_test
 
 static: CFLAGS += -no-pie
 static: LDLIBS = -pthread /usr/lib/x86_64-linux-gnu/libssl.a /usr/lib/x86_64-linux-gnu/libcrypto.a
