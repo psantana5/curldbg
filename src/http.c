@@ -227,6 +227,7 @@ static int build_request_buffer(const char *verb, const char *request_target,
                                  const char *auth_header, size_t auth_len,
                                  const char **extra_headers, size_t extra_header_count,
                                  bool has_host, bool compressed, bool has_accept_encoding,
+                                 bool has_user_agent,
                                  char *req, size_t req_size,
                                  char *error, size_t error_len) {
     size_t offset = 0;
@@ -247,10 +248,12 @@ static int build_request_buffer(const char *verb, const char *request_target,
             set_error(error, error_len, "Request is too large"); return -1;
         }
     }
-    if (append_str(req, req_size, &offset, "User-Agent: ") != 0 ||
-        append_str(req, req_size, &offset, user_agent) != 0 ||
-        append_str(req, req_size, &offset, "\r\n") != 0) {
-        set_error(error, error_len, "Request is too large"); return -1;
+    if (!has_user_agent) {
+        if (append_str(req, req_size, &offset, "User-Agent: ") != 0 ||
+            append_str(req, req_size, &offset, user_agent) != 0 ||
+            append_str(req, req_size, &offset, "\r\n") != 0) {
+            set_error(error, error_len, "Request is too large"); return -1;
+        }
     }
 
     if (compressed && !has_accept_encoding) {
@@ -337,13 +340,15 @@ int send_request(
 
     format_host_header(url, host_header, sizeof(host_header));
 
-    bool has_content_type = false, has_content_length = false, has_host = false, has_accept_encoding = false;
+    bool has_content_type = false, has_content_length = false, has_host = false,
+         has_accept_encoding = false, has_user_agent = false;
     for (size_t i = 0; i < extra_header_count; i++) {
         if (extra_headers[i] == NULL) continue;
         if (strncasecmp(extra_headers[i], "Content-Type:", 13) == 0) has_content_type = true;
         else if (strncasecmp(extra_headers[i], "Content-Length:", 15) == 0) has_content_length = true;
         else if (strncasecmp(extra_headers[i], "Host:", 5) == 0) has_host = true;
         else if (strncasecmp(extra_headers[i], "Accept-Encoding:", 16) == 0) has_accept_encoding = true;
+        else if (strncasecmp(extra_headers[i], "User-Agent:", 11) == 0) has_user_agent = true;
     }
 
     if (build_body_headers(body_headers, sizeof(body_headers), verb,
@@ -386,6 +391,7 @@ int send_request(
                              auth_header, auth_len,
                              extra_headers, extra_header_count,
                              has_host, compressed, has_accept_encoding,
+                             has_user_agent,
                              req, req_len + 1, error, error_len) != 0) {
         free(req); return -1;
     }
@@ -393,7 +399,7 @@ int send_request(
     if (conn->verbose) {
         fprintf(stderr, "> %s %s HTTP/1.1\n", verb, request_target);
         if (!has_host) fprintf(stderr, "> Host: %s\n", host_header);
-        fprintf(stderr, "> User-Agent: %s\n", user_agent);
+        if (!has_user_agent) fprintf(stderr, "> User-Agent: %s\n", user_agent);
         if (include_body_headers) {
             size_t off = 0;
             while (off < strlen(body_headers)) {
