@@ -300,7 +300,7 @@ int receive_response(struct connection *conn, const struct timespec *ttfb_start,
 void cookie_jar_init(struct cookie_jar *jar);
 void cookie_jar_add_set_cookie(struct cookie_jar *jar, const char *set_cookie, const char *request_host);
 void cookie_jar_get_header(struct cookie_jar *jar, const char *host, const char *path,
-                           char *out, size_t out_size);
+                           bool secure_connection, char *out, size_t out_size);
 int cookie_jar_save(const struct cookie_jar *jar, const char *filepath);
 void cookie_jar_load(struct cookie_jar *jar, const char *filepath);
 

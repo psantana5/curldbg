@@ -235,7 +235,7 @@ TEST(test_cookie_jar_add_and_get) {
     cookie_jar_add_set_cookie(&jar, "session=abc; Path=/; Secure", "example.com");
 
     char header[512];
-    cookie_jar_get_header(&jar, "example.com", "/", header, sizeof(header));
+    cookie_jar_get_header(&jar, "example.com", "/", true, header, sizeof(header));
     ASSERT_STR_EQ(header, "session=abc", "cookie header sent to matching host");
 }
 
@@ -245,7 +245,7 @@ TEST(test_cookie_jar_path_mismatch) {
     cookie_jar_add_set_cookie(&jar, "token=xyz; Path=/api", "example.com");
 
     char header[512];
-    cookie_jar_get_header(&jar, "example.com", "/other", header, sizeof(header));
+    cookie_jar_get_header(&jar, "example.com", "/other", true, header, sizeof(header));
     ASSERT_STR_EQ(header, "", "cookie not sent for non-matching path");
 }
 
@@ -255,7 +255,7 @@ TEST(test_cookie_jar_domain_mismatch) {
     cookie_jar_add_set_cookie(&jar, "key=val", "example.com");
 
     char header[512];
-    cookie_jar_get_header(&jar, "other.com", "/", header, sizeof(header));
+    cookie_jar_get_header(&jar, "other.com", "/", true, header, sizeof(header));
     ASSERT_STR_EQ(header, "", "cookie not sent for non-matching domain");
 }
 
@@ -266,9 +266,22 @@ TEST(test_cookie_jar_multiple_cookies) {
     cookie_jar_add_set_cookie(&jar, "b=2", "example.com");
 
     char header[512];
-    cookie_jar_get_header(&jar, "example.com", "/", header, sizeof(header));
+    cookie_jar_get_header(&jar, "example.com", "/", true, header, sizeof(header));
     ASSERT_TRUE(strstr(header, "a=1") != NULL, "first cookie present");
     ASSERT_TRUE(strstr(header, "b=2") != NULL, "second cookie present");
+}
+
+TEST(test_cookie_jar_secure_over_http) {
+    struct cookie_jar jar;
+    cookie_jar_init(&jar);
+    cookie_jar_add_set_cookie(&jar, "session=abc; Path=/; Secure", "example.com");
+
+    char header[512];
+    cookie_jar_get_header(&jar, "example.com", "/", false, header, sizeof(header));
+    ASSERT_STR_EQ(header, "", "secure cookie not sent over HTTP");
+
+    cookie_jar_get_header(&jar, "example.com", "/", true, header, sizeof(header));
+    ASSERT_STR_EQ(header, "session=abc", "secure cookie sent over HTTPS");
 }
 
 /* --- write_out_expand tests --- */
@@ -385,6 +398,7 @@ int main(void) {
     test_cookie_jar_path_mismatch();
     test_cookie_jar_domain_mismatch();
     test_cookie_jar_multiple_cookies();
+    test_cookie_jar_secure_over_http();
 
     test_build_redirect_url_absolute();
     test_build_redirect_url_relative();

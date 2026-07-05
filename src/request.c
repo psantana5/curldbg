@@ -434,7 +434,7 @@ static int run_request(const char *input_url, const struct run_options *opts, st
         char cookie_header_buf[8192] = "";
         const char *cookie_header_str = NULL;
         if (opts->cookie_jar != NULL) {
-            cookie_jar_get_header(opts->cookie_jar, url.host, url.path,
+            cookie_jar_get_header(opts->cookie_jar, url.host, url.path, url.use_tls,
                                   cookie_header_buf, sizeof(cookie_header_buf));
             if (cookie_header_buf[0] != '\0') cookie_header_str = cookie_header_buf;
         }

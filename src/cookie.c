@@ -76,12 +76,14 @@ void cookie_jar_add_set_cookie(struct cookie_jar *jar, const char *set_cookie, c
 }
 
 void cookie_jar_get_header(struct cookie_jar *jar, const char *host, const char *path,
-                           char *out, size_t out_size) {
+                           bool secure_connection, char *out, size_t out_size) {
     out[0] = '\0';
     size_t offset = 0;
 
     for (int i = 0; i < jar->count; i++) {
         const struct cookie_entry *e = &jar->entries[i];
+
+        if (e->secure && !secure_connection) continue;
 
         size_t host_len = strlen(host);
         size_t dom_len = strlen(e->domain);
