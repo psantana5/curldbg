@@ -86,4 +86,4 @@ See `man ./man/curldbg.1` or `man curldbg` after install.
 make test
 ```
 
-Runs 235 tests against a local test server (Python, no network required).
+Builds and runs the internal unit-test suite under Valgrind.

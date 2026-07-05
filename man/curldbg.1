@@ -1,4 +1,4 @@
-.TH CURLDBG 1 "June 2026" "curldbg" "User Commands"
+.TH CURLDBG 1 "July 2026" "curldbg" "User Commands"
 .SH NAME
 curldbg \- lightweight HTTP/HTTPS client and request debugger
 .SH SYNOPSIS
@@ -180,6 +180,12 @@ Silent HEAD request (check headers only).
 .TP
 .B curldbg \-\-compare https://example.com
 Compare IPv4 vs IPv6 performance.
+.SH TESTING
+Run the unit-test suite with:
+.P
+.B make test
+.P
+This builds the internal unit tests and runs them under Valgrind.
 .SH "EXIT STATUS"
 .IP 0
 Success.
