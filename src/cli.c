@@ -67,6 +67,18 @@ void parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
     signal(SIGPIPE, SIG_IGN);
 
     for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--") == 0) {
+            for (i++; i < argc; i++) {
+                const char **new_urls = realloc(c->urls, (c->url_count + 1) * sizeof(*c->urls));
+                if (new_urls == NULL) { fprintf(stderr, "Out of memory\n"); exit(EXIT_FAILURE); }
+                c->urls = new_urls;
+                c->urls[c->url_count++] = argv[i];
+                if (c->input_url == NULL) c->input_url = argv[i];
+                if (c->compare_urls_mode && c->compare_url == NULL && c->url_count >= 2)
+                    c->compare_url = argv[i];
+            }
+            break;
+        }
         if (strcmp(argv[i], "--compare") == 0) { c->compare_family_mode = true; continue; }
         if (strcmp(argv[i], "--compare-urls") == 0) { c->compare_urls_mode = true; continue; }
         if (strcmp(argv[i], "--version") == 0) {
