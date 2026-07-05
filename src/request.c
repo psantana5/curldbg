@@ -139,6 +139,7 @@ static struct addrinfo *resolve_host(const struct url_info *url,
                                       int address_family,
                                       const struct resolve_entry *resolve_entries,
                                       int resolve_count,
+                                      int dns_timeout_ms,
                                       struct timespec *dns_start,
                                       struct timespec *dns_end,
                                       int *gai_error) {
@@ -151,8 +152,9 @@ static struct addrinfo *resolve_host(const struct url_info *url,
         *dns_end = *dns_start;
         return addrs;
     }
+    if (dns_timeout_ms <= 0) dns_timeout_ms = 5000;
     clock_gettime(CLOCK_MONOTONIC, dns_start);
-    struct addrinfo *addrs = resolve_dns_timeout(url, address_family, gai_error, 5000);
+    struct addrinfo *addrs = resolve_dns_timeout(url, address_family, gai_error, dns_timeout_ms);
     clock_gettime(CLOCK_MONOTONIC, dns_end);
     return addrs;
 }
@@ -180,8 +182,18 @@ static int establish_connection(struct connection *conn,
     if (!use_unix) {
         struct timespec dns_start, dns_end;
         int gai_error = 0;
+        int dns_timeout_ms = 5000;
+        if (opts->max_time_ms > 0) {
+            long rem = deadline_remaining_ms(total_start, opts->max_time_ms);
+            if (rem <= 0) {
+                snprintf(error, error_len, "Operation timed out after %d ms", opts->max_time_ms);
+                return -1;
+            }
+            dns_timeout_ms = (rem < dns_timeout_ms) ? (int)rem : dns_timeout_ms;
+        }
         struct addrinfo *addrs = resolve_host(url, opts->address_family,
                                                opts->resolve_entries, opts->resolve_count,
+                                               dns_timeout_ms,
                                                &dns_start, &dns_end, &gai_error);
         if (addrs == NULL) {
             snprintf(error, error_len, "DNS resolution failed: %s", gai_strerror(gai_error));
