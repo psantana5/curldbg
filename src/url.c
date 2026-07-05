@@ -9,11 +9,11 @@ int parse_url(const char *url, struct url_info *out) {
     char authority[512];
     size_t authority_len;
 
-    if (strncmp(url, "http://", 7) == 0) {
+    if (strncasecmp(url, "http://", 7) == 0) {
         authority_start = url + 7;
         out->use_tls = false;
         strcpy(out->port, "80");
-    } else if (strncmp(url, "https://", 8) == 0) {
+    } else if (strncasecmp(url, "https://", 8) == 0) {
         authority_start = url + 8;
         out->use_tls = true;
         strcpy(out->port, "443");
