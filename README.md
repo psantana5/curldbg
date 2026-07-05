@@ -47,7 +47,7 @@ actually failing and where.
   pipe-friendly output
 - **Network debugging** — quick visibility into DNS resolution, connect latency,
   TTFB, redirect chains, and happy-eyeballs races
-- **Embedded/low-resource** — single ~87KB binary, no libcurl dependency, minimal
+- **Embedded/low-resource** — single ~96KB binary, no libcurl dependency, minimal
   memory footprint
 
 ## Quick start
