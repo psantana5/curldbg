@@ -4,10 +4,6 @@ src/*.o
 curldbg
 curldbg_dbg
 
-# Test/benchmark scripts
-tests/*.py
-tests/*.sh
-
 # Benchmark outputs
 docs/benchmarks/*.svg
 BENCHMARKS.md
