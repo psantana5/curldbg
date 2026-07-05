@@ -291,23 +291,21 @@ static int build_request_buffer(const char *verb, const char *request_target,
 static int write_upload_body(struct connection *conn, FILE *upload_file,
                               bool chunked_upload, char *error, size_t error_len) {
     char buf[4096];
-    for (;;) {
-        size_t nread = fread(buf, 1, sizeof(buf), upload_file);
-        if (nread > 0) {
-            if (chunked_upload) {
-                char chunk_hdr[32];
-                int hn = snprintf(chunk_hdr, sizeof(chunk_hdr), "%zx\r\n", nread);
-                if (connection_write_all(conn, chunk_hdr, (size_t)hn, error, error_len) != 0) return -1;
-            }
-            if (connection_write_all(conn, buf, nread, error, error_len) != 0) return -1;
-            if (chunked_upload) {
-                if (connection_write_all(conn, "\r\n", 2, error, error_len) != 0) return -1;
-            }
+    size_t nread;
+    while ((nread = fread(buf, 1, sizeof(buf), upload_file)) > 0) {
+        if (chunked_upload) {
+            char chunk_hdr[32];
+            int hn = snprintf(chunk_hdr, sizeof(chunk_hdr), "%zx\r\n", nread);
+            if (connection_write_all(conn, chunk_hdr, (size_t)hn, error, error_len) != 0) return -1;
         }
-        if (nread < sizeof(buf)) {
-            if (ferror(upload_file)) { set_error(error, error_len, "Failed to read upload file"); return -1; }
-            break;
+        if (connection_write_all(conn, buf, nread, error, error_len) != 0) return -1;
+        if (chunked_upload) {
+            if (connection_write_all(conn, "\r\n", 2, error, error_len) != 0) return -1;
         }
+    }
+    if (ferror(upload_file)) {
+        set_error(error, error_len, "Failed to read upload file");
+        return -1;
     }
     if (chunked_upload) {
         if (connection_write_all(conn, "0\r\n\r\n", 5, error, error_len) != 0) return -1;
