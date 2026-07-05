@@ -106,7 +106,7 @@ struct connection {
 };
 
 struct run_options {
-    char method[8];
+    char method[32];
     const char *data;
     size_t data_len;
     bool follow_redirects;
@@ -157,7 +157,7 @@ struct run_result {
 struct cmdline_opts {
     const char *input_url;
     const char *compare_url;
-    char request_method[8];
+    char request_method[32];
     bool method_explicit;
     const char *request_data;
     size_t request_data_len;

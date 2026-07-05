@@ -340,7 +340,7 @@ static int run_request(const char *input_url, const struct run_options *opts, st
 
     if (clock_gettime(CLOCK_MONOTONIC, &total_start) != 0) die("clock_gettime");
 
-    char method[8];
+    char method[32];
     const char *data;
     strcpy(method, opts->method);
     data = opts->data;
