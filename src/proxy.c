@@ -31,7 +31,7 @@ int proxy_connect(struct connection *conn, const char *proxy_host, const char *p
         if (n == 0) break;
         total += (size_t)n;
         response[total] = '\0';
-        if (strstr(response, "\r\n\r\n") != NULL) break;
+        if (strstr(response, "\r\n\r\n") != NULL || strstr(response, "\n\n") != NULL) break;
     }
 
     response[total] = '\0';

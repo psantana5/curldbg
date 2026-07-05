@@ -78,9 +78,11 @@ void parse_response_headers(char *headers, struct response_info *out) {
 }
 
 static char *find_header_end(char *buf, size_t len) {
-    if (len < 4) return NULL;
-    for (size_t i = 0; i + 3 < len; i++) {
-        if (buf[i] == '\r' && buf[i + 1] == '\n' && buf[i + 2] == '\r' && buf[i + 3] == '\n')
+    for (size_t i = 0; i + 1 < len; i++) {
+        if (buf[i] == '\n' && buf[i + 1] == '\n')
+            return buf + i + 2;
+        if (i + 3 < len && buf[i] == '\r' && buf[i + 1] == '\n' &&
+            buf[i + 2] == '\r' && buf[i + 3] == '\n')
             return buf + i + 4;
     }
     return NULL;
