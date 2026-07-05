@@ -12,11 +12,13 @@ int proxy_connect(struct connection *conn, const char *proxy_host, const char *p
 
     char request[2048];
     char response[4096];
+    char host_header[320];
     ssize_t n;
     size_t total = 0;
 
-    int nw = snprintf(request, sizeof(request), "CONNECT %s:%s HTTP/1.1\r\nHost: %s:%s\r\n\r\n",
-                      target->host, target->port, target->host, target->port);
+    format_host_header(target, host_header, sizeof(host_header));
+    int nw = snprintf(request, sizeof(request), "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n",
+                      host_header, host_header);
     if (nw < 0 || (size_t)nw >= sizeof(request)) {
         set_error(error, error_len, "CONNECT request too large"); return -1;
     }
