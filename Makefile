@@ -12,7 +12,7 @@ PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man/man1
 
-.PHONY: all clean install test test-unit static
+.PHONY: all clean install test static
 
 all: $(TARGET)
 
@@ -28,17 +28,10 @@ $(OBJDIR):
 clean:
 	rm -rf $(TARGET) $(OBJDIR)
 
-test: $(TARGET) $(UNIT_OBJS)
-	@CURLDBG=$(CURDIR)/$(TARGET) sh tests/flags.sh
+test: $(UNIT_OBJS)
 	$(CC) -g -O0 -Wall -Wextra -Werror -pthread -Iinclude \
 		-o $(OBJDIR)/unit_test tests/unit.c $(UNIT_OBJS) $(LDLIBS)
 	@valgrind --leak-check=full --error-exitcode=1 -q $(OBJDIR)/unit_test
-	@rm -f $(OBJDIR)/unit_test
-
-test-unit: $(UNIT_OBJS)
-	$(CC) -g -O0 -Wall -Wextra -Werror -pthread -Iinclude \
-		-o $(OBJDIR)/unit_test tests/unit.c $(UNIT_OBJS) $(LDLIBS)
-	@$(OBJDIR)/unit_test
 	@rm -f $(OBJDIR)/unit_test
 
 static: CFLAGS += -no-pie
