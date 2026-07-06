@@ -50,6 +50,8 @@ actually failing and where.
 - **Embedded/low-resource** — single ~96KB binary, no libcurl dependency, minimal
   memory footprint
 
+Performance measurements and methodology are documented in the [GitHub Wiki](https://github.com/psantana5/curldbg/wiki/Performance).
+
 ## Quick start
 
 ```bash
