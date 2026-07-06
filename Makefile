@@ -33,12 +33,30 @@ $(OBJDIR):
 clean:
 	rm -rf $(TARGET) $(OBJDIR)
 
-test: $(UNIT_OBJS)
+TESTD_SRCS := tests/server/testd.c tests/server/route.c tests/server/handlers.c
+
+test: $(TARGET) $(UNIT_OBJS)
+	@# Unit tests
 	$(CC) -g -O0 -Wall -Wextra -Werror -pthread -Iinclude \
 		-o $(OBJDIR)/unit_test tests/unit.c $(UNIT_OBJS) $(LDLIBS)
 	@valgrind --leak-check=full --error-exitcode=1 -q $(OBJDIR)/unit_test
 	@rm -f $(OBJDIR)/unit_test
-	@if command -v clang >/dev/null 2>&1; then \
+	@# Build test HTTP server
+	$(CC) -O2 -Wall -Wextra -Wno-unused-result -Iinclude \
+		-o $(OBJDIR)/testd $(TESTD_SRCS)
+	@# Integration tests
+	@$(OBJDIR)/testd >/tmp/testd.log 2>&1 & \
+	TDPID=$$!; \
+	until [ -s /tmp/testd.log ]; do sleep 0.1; done; \
+	PORT=$$(head -1 /tmp/testd.log); \
+	echo "=== integration tests (port $$PORT) ==="; \
+	tests/integration/run.sh $$PORT; \
+	IRC=$$?; \
+	kill $$TDPID 2>/dev/null; \
+	wait $$TDPID 2>/dev/null; \
+	rm -f /tmp/testd.log; \
+	if [ $$IRC -ne 0 ]; then exit $$IRC; fi; \
+	if command -v clang >/dev/null 2>&1; then \
 		echo "=== fuzz: parse_response_headers (30s) ==="; \
 		$(MAKE) fuzz; \
 		./$(TARGET)-fuzz -max_total_time=30; \
