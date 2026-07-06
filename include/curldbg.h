@@ -106,6 +106,14 @@ struct connection {
     bool verbose;
 };
 
+struct connection_state {
+    struct connection conn;
+    char host[256];
+    char port[16];
+    bool use_tls;
+    struct addrinfo *addrs;
+};
+
 struct run_options {
     char method[32];
     const char *data;
@@ -219,7 +227,8 @@ void parse_cmdline(int argc, char **argv, struct cmdline_opts *c);
 
 /* --- request.c --- */
 int run_single_request(const struct cmdline_opts *c, struct run_options *opts,
-                       struct run_result *result, FILE *body_out);
+                       struct run_result *result, FILE *body_out,
+                       struct connection_state *reuse);
 void init_run_options(struct run_options *opts, const struct cmdline_opts *c);
 void run_two_requests_parallel(const char *url_a, const struct run_options *opts_a,
                                struct run_result *result_a, bool *ok_a,

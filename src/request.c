@@ -22,7 +22,8 @@ struct run_request_task {
     bool ok;
 };
 
-static int run_request(const char *input_url, const struct run_options *opts, struct run_result *out);
+static int run_request(const char *input_url, const struct run_options *opts,
+                       struct run_result *out, struct connection_state *reuse);
 
 static const struct resolve_entry *find_resolve_entry(
     const struct resolve_entry *entries, int count, const char *host, const char *port)
@@ -61,7 +62,7 @@ void free_run_result(struct run_result *result) {
 
 static void *run_request_thread(void *arg) {
     struct run_request_task *task = (struct run_request_task *)arg;
-    task->ok = (run_request(task->url, task->opts, task->result) == 0);
+    task->ok = (run_request(task->url, task->opts, task->result, NULL) == 0);
     return NULL;
 }
 
@@ -77,12 +78,12 @@ void run_two_requests_parallel(const char *url_a, const struct run_options *opts
     if (pthread_create(&thread_a, NULL, run_request_thread, &task_a) == 0)
         thread_a_started = true;
     else
-        task_a.ok = (run_request(url_a, opts_a, result_a) == 0);
+        task_a.ok = (run_request(url_a, opts_a, result_a, NULL) == 0);
 
     if (pthread_create(&thread_b, NULL, run_request_thread, &task_b) == 0)
         thread_b_started = true;
     else
-        task_b.ok = (run_request(url_b, opts_b, result_b) == 0);
+        task_b.ok = (run_request(url_b, opts_b, result_b, NULL) == 0);
 
     if (thread_a_started) (void)pthread_join(thread_a, NULL);
     if (thread_b_started) (void)pthread_join(thread_b, NULL);
@@ -319,7 +320,15 @@ static int establish_connection(struct connection *conn,
     return 0;
 }
 
-static int run_request(const char *input_url, const struct run_options *opts, struct run_result *out) {
+static bool is_connection_error(const char *error) {
+    return (strncmp(error, "Write failed", 12) == 0 ||
+            strncmp(error, "Read failed", 11) == 0 ||
+            strncmp(error, "Write timeout", 13) == 0 ||
+            strncmp(error, "Read timeout", 12) == 0);
+}
+
+static int run_request(const char *input_url, const struct run_options *opts,
+                       struct run_result *out, struct connection_state *reuse) {
     char current_url[2048], next_url[2048];
     int redirect_count = 0;
     FILE *upload_file = NULL;
@@ -327,17 +336,27 @@ static int run_request(const char *input_url, const struct run_options *opts, st
     bool chunked_upload = false;
     struct timespec total_start, total_end;
     int preferred_family = AF_INET;
-    struct connection conn;
-    struct addrinfo *conn_addrs = NULL;
-    char conn_host[256] = "", conn_port[16] = "";
-    bool conn_use_tls = false;
+    struct connection_state local_state;
+    struct connection_state *state;
     int rc = -1;
+
+    if (reuse != NULL) {
+        state = reuse;
+    } else {
+        memset(&local_state, 0, sizeof(local_state));
+        local_state.conn.fd = -1;
+        state = &local_state;
+    }
+
+    struct connection *conn = &state->conn;
+    struct addrinfo **conn_addrs = &state->addrs;
+    char *conn_host = state->host;
+    char *conn_port = state->port;
+    bool *conn_use_tls = &state->use_tls;
 
     memset(out, 0, sizeof(*out));
     out->ttfb_ms = -1.0;
     out->error[0] = '\0';
-    memset(&conn, 0, sizeof(conn));
-    conn.fd = -1;
 
     if (strlen(input_url) >= sizeof(current_url)) {
         snprintf(out->error, sizeof(out->error), "URL too long"); return -1;
@@ -391,10 +410,10 @@ static int run_request(const char *input_url, const struct run_options *opts, st
             strcpy(out->hops[out->hop_count].connected_ip, "via-proxy");
             out->hops[out->hop_count].connected_family = AF_UNSPEC;
         } else {
-            reuse_connection = (conn.fd >= 0 &&
+            reuse_connection = (conn->fd >= 0 &&
                 strcmp(url.host, conn_host) == 0 &&
                 strcmp(url.port, conn_port) == 0 &&
-                url.use_tls == conn_use_tls);
+                url.use_tls == *conn_use_tls);
             if (reuse_connection && out->hop_count > 0) {
                 const struct hop_info *prev = &out->hops[out->hop_count - 1];
                 strcpy(out->hops[out->hop_count].connected_ip, prev->connected_ip);
@@ -402,15 +421,17 @@ static int run_request(const char *input_url, const struct run_options *opts, st
             }
         }
 
+    reconnect:
         if (!reuse_connection) {
-            close_connection(&conn);
-            freeaddrinfo(conn_addrs);
-            conn_addrs = NULL;
-            conn_host[0] = '\0'; conn_port[0] = '\0';
+            close_connection(conn);
+            freeaddrinfo(*conn_addrs);
+            *conn_addrs = NULL;
+            conn_host[0] = '\0';
+            conn_port[0] = '\0';
             memset(&race_info, 0, sizeof(race_info));
 
-            if (establish_connection(&conn, &conn_addrs, conn_host, sizeof(conn_host),
-                                     conn_port, sizeof(conn_port), &conn_use_tls,
+            if (establish_connection(conn, conn_addrs, conn_host, 256,
+                                     conn_port, 16, conn_use_tls,
                                      &url, opts, &out->hops[out->hop_count],
                                      &preferred_family, &race_info, &total_start,
                                      &hop_connect_ms, &hop_dns_ms,
@@ -482,19 +503,32 @@ static int run_request(const char *input_url, const struct run_options *opts, st
             send_header_count = total;
         }
 
-        int sr = send_request(&conn, &url, method, data, data_len,
+        int sr;
+        bool request_retried = false;
+        sr = send_request(conn, &url, method, data, data_len,
                 upload_file, upload_size, send_headers, send_header_count,
                 opts->basic_auth, opts->user_agent, out->error, sizeof(out->error),
                 use_proxy && !url.use_tls, chunked_upload, opts->compressed);
+        if (sr == 0) {
+            bool head_method = (strcasecmp(opts->method, "HEAD") == 0);
+            if (receive_response(conn, &ttfb_start, &out->resp, out->error, sizeof(out->error),
+                    opts->body_out, opts->follow_redirects, opts->fail_on_http_error, head_method) != 0)
+                sr = -1;
+        }
+        if (sr != 0 && reuse_connection && !request_retried && is_connection_error(out->error)) {
+            close_connection(conn);
+            freeaddrinfo(*conn_addrs);
+            *conn_addrs = NULL;
+            conn_host[0] = '\0';
+            conn_port[0] = '\0';
+            reuse_connection = false;
+            request_retried = true;
+            goto reconnect;
+        }
         if (send_headers != opts->extra_headers && send_headers != stack_headers)
             free((void *)send_headers);
 
         if (sr != 0) goto error_cleanup;
-
-        bool head_method = (strcasecmp(opts->method, "HEAD") == 0);
-        if (receive_response(&conn, &ttfb_start, &out->resp, out->error, sizeof(out->error),
-                opts->body_out, opts->follow_redirects, opts->fail_on_http_error, head_method) != 0)
-            goto error_cleanup;
 
         if (opts->cookie_jar != NULL && out->resp.set_cookie_len > 0) {
             char *buf = out->resp.set_cookie_buf;
@@ -564,11 +598,11 @@ static int run_request(const char *input_url, const struct run_options *opts, st
 
         bool same_host = (strcmp(redirected_url.host, conn_host) == 0 &&
                           strcmp(redirected_url.port, conn_port) == 0 &&
-                          redirected_url.use_tls == conn_use_tls);
+                          redirected_url.use_tls == *conn_use_tls);
         if (!same_host) {
-            close_connection(&conn);
-            freeaddrinfo(conn_addrs);
-            conn_addrs = NULL;
+            close_connection(conn);
+            freeaddrinfo(*conn_addrs);
+            *conn_addrs = NULL;
             conn_host[0] = '\0'; conn_port[0] = '\0';
         }
 
@@ -582,8 +616,13 @@ done:
     close_upload_file(&upload_file);
     clock_gettime(CLOCK_MONOTONIC, &total_end);
     out->total_ms = ms_between(&total_start, &total_end);
-    close_connection(&conn);
-    freeaddrinfo(conn_addrs);
+    if (reuse == NULL || rc != 0) {
+        close_connection(conn);
+        freeaddrinfo(*conn_addrs);
+        *conn_addrs = NULL;
+        conn_host[0] = '\0';
+        conn_port[0] = '\0';
+    }
     if (rc != 0 && out->error[0] == '\0')
         snprintf(out->error, sizeof(out->error), "Request failed");
     return rc;
@@ -625,7 +664,8 @@ void init_run_options(struct run_options *opts, const struct cmdline_opts *c) {
 
 /* --- Single request mode --- */
 int run_single_request(const struct cmdline_opts *c, struct run_options *opts,
-                               struct run_result *result, FILE *body_out) {
+                               struct run_result *result, FILE *body_out,
+                               struct connection_state *reuse) {
     struct cookie_jar *cookie_jar = opts->cookie_jar;
     init_run_options(opts, c);
     opts->body_out = body_out;
@@ -646,7 +686,7 @@ int run_single_request(const struct cmdline_opts *c, struct run_options *opts,
     int max_attempts = 1 + opts->retry_count;
     int rc = -1;
     for (int attempt = 0; attempt < max_attempts; attempt++) {
-        rc = run_request(c->input_url, opts, result);
+        rc = run_request(c->input_url, opts, result, reuse);
         if (rc == 0) break;
         if (attempt + 1 < max_attempts && opts->retry_delay_ms > 0)
             (void)poll(NULL, 0, opts->retry_delay_ms);

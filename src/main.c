@@ -302,9 +302,12 @@ int main(int argc, char **argv) {
     if (!c.compare_family_mode && !c.compare_urls_mode) {
         struct run_options opts;
         struct run_result result;
+        struct connection_state rconn;
         FILE *body_out = NULL;
         char output_path_buf[1024];
         bool close_body = false;
+        memset(&rconn, 0, sizeof(rconn));
+        rconn.conn.fd = -1;
 
         if (c.input_url == NULL) {
             fprintf(stderr, "Usage: %s [-L] [-4|-6] [-X GET|POST|PUT] [-d data] [-f] [-s] [-S] [-k] "
@@ -354,7 +357,7 @@ int main(int argc, char **argv) {
             if (c.url_count > 1 && !c.silent)
                 printf("\n--- URL %d/%d: %s ---\n", ui + 1, c.url_count, c.input_url);
 
-            int rc = run_single_request(&c, &opts, &result, body_out);
+            int rc = run_single_request(&c, &opts, &result, body_out, &rconn);
 
             if (c.write_out_format != NULL) {
                 write_out_expand(c.write_out_format, &result);
@@ -372,6 +375,9 @@ int main(int argc, char **argv) {
                 goto cleanup;
             }
         }
+
+        close_connection(&rconn.conn);
+        freeaddrinfo(rconn.addrs);
 
         if (cookie_jar_ptr != NULL && c.cookie_jar_path != NULL)
             cookie_jar_save(cookie_jar_ptr, c.cookie_jar_path);
