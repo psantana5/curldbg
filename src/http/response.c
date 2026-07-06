@@ -58,9 +58,9 @@ void parse_response_headers(char *headers, struct response_info *out) {
                 strncpy(out->location, value, sizeof(out->location) - 1);
                 out->location[sizeof(out->location) - 1] = '\0';
             } else if (c == 'c') {
-                if (line_len >= 16 && line[1] == 'o' &&
+                if (line_len >= 17 && line[1] == 'o' &&
                     strncasecmp(line + 2, "ntent-Encoding:", 15) == 0) {
-                    const char *val = line + 16;
+                    const char *val = line + 17;
                     trim_spaces((char **)&val);
                     strncpy(out->content_encoding, val, sizeof(out->content_encoding) - 1);
                     out->content_encoding[sizeof(out->content_encoding) - 1] = '\0';
