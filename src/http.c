@@ -282,17 +282,20 @@ static int build_request_buffer(const char *verb, size_t verb_len,
 
 static int write_upload_body(struct connection *conn, FILE *upload_file,
                               bool chunked_upload, char *error, size_t error_len) {
-    char buf[4096];
+    char buf[UPLOAD_READ_BUF];
     size_t nread;
     while ((nread = fread(buf, 1, sizeof(buf), upload_file)) > 0) {
         if (chunked_upload) {
             char chunk_hdr[32];
             int hn = snprintf(chunk_hdr, sizeof(chunk_hdr), "%zx\r\n", nread);
-            if (connection_write_all(conn, chunk_hdr, (size_t)hn, error, error_len) != 0) return -1;
-        }
-        if (connection_write_all(conn, buf, nread, error, error_len) != 0) return -1;
-        if (chunked_upload) {
-            if (connection_write_all(conn, "\r\n", 2, error, error_len) != 0) return -1;
+            struct iovec iov[3] = {
+                { .iov_base = chunk_hdr, .iov_len = (size_t)hn },
+                { .iov_base = buf, .iov_len = nread },
+                { .iov_base = "\r\n", .iov_len = 2 }
+            };
+            if (connection_writev_all(conn, iov, 3, error, error_len) != 0) return -1;
+        } else {
+            if (connection_write_all(conn, buf, nread, error, error_len) != 0) return -1;
         }
     }
     if (ferror(upload_file)) {
@@ -424,9 +427,14 @@ int send_request(
     }
 
     size_t req_len = strlen(req);
+    if (data_len > 0) {
+        struct iovec iov[2] = {
+            { .iov_base = (void *)req, .iov_len = req_len },
+            { .iov_base = (void *)data, .iov_len = data_len }
+        };
+        return connection_writev_all(conn, iov, 2, error, error_len);
+    }
     if (connection_write_all(conn, req, req_len, error, error_len) != 0) return -1;
-
-    if (data_len > 0) return connection_write_all(conn, data, data_len, error, error_len);
 
     if (upload_file != NULL)
         return write_upload_body(conn, upload_file, chunked_upload, error, error_len);

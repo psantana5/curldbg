@@ -11,6 +11,7 @@
 
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <sys/uio.h>
 #include <net/if.h>
 #include <arpa/inet.h>
 
@@ -549,5 +550,62 @@ int connection_write_all(struct connection *conn, const char *buf, size_t len, c
         }
         sent += (size_t)n;
     }
+    return 0;
+}
+
+int connection_writev_all(struct connection *conn, const struct iovec *iov, int iovcnt,
+                          char *error, size_t error_len) {
+    if (iovcnt <= 0) return 0;
+
+    if (conn->use_tls) {
+        for (int i = 0; i < iovcnt; i++) {
+            if (iov[i].iov_len == 0) continue;
+            if (connection_write_all(conn, iov[i].iov_base, iov[i].iov_len, error, error_len) != 0)
+                return -1;
+        }
+        return 0;
+    }
+
+    size_t total = 0;
+    for (int i = 0; i < iovcnt; i++) total += iov[i].iov_len;
+    if (total == 0) return 0;
+
+    struct iovec local_iov[8];
+    struct iovec *iov_copy = local_iov;
+    struct iovec *iov_orig = iov_copy;
+    if (iovcnt > 8) {
+        iov_copy = malloc((size_t)iovcnt * sizeof(*iov_copy));
+        if (iov_copy == NULL) {
+            set_error(error, error_len, "Out of memory for writev");
+            return -1;
+        }
+        iov_orig = iov_copy;
+    }
+    memcpy(iov_copy, iov, (size_t)iovcnt * sizeof(*iov_copy));
+    int remaining = iovcnt;
+
+    size_t sent = 0;
+    while (sent < total) {
+        ssize_t n = writev(conn->fd, iov_copy, remaining);
+        if (n < 0) {
+            if (iov_orig != local_iov) free(iov_orig);
+            if (is_timeout_errno(errno)) set_error(error, error_len, "Write timeout");
+            else set_error(error, error_len, "Write failed: %s", strerror(errno));
+            return -1;
+        }
+        sent += (size_t)n;
+        ssize_t consumed = n;
+        while (remaining > 0 && consumed >= (ssize_t)iov_copy[0].iov_len) {
+            consumed -= (ssize_t)iov_copy[0].iov_len;
+            iov_copy++;
+            remaining--;
+        }
+        if (remaining > 0 && consumed > 0) {
+            iov_copy[0].iov_base = (char *)iov_copy[0].iov_base + consumed;
+            iov_copy[0].iov_len -= (size_t)consumed;
+        }
+    }
+
+    if (iov_orig != local_iov) free(iov_orig);
     return 0;
 }

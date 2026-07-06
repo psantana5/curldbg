@@ -16,6 +16,7 @@
 #define PREVIEW_BYTES 1024
 #define HEADER_MAX 16384
 #define RESPONSE_READ_BUF 32768
+#define UPLOAD_READ_BUF 32768
 #define DEFAULT_MAX_REDIRECTS 10
 #define MAX_COOKIES 256
 #define MAX_COOKIE_LEN 4096
@@ -282,6 +283,8 @@ void apply_socket_timeout(int fd, int timeout_ms);
 void close_connection(struct connection *conn);
 ssize_t connection_read(struct connection *conn, void *buf, size_t len, char *error, size_t error_len);
 int connection_write_all(struct connection *conn, const char *buf, size_t len, char *error, size_t error_len);
+int connection_writev_all(struct connection *conn, const struct iovec *iov, int iovcnt,
+                          char *error, size_t error_len);
 
 /* --- http.c --- */
 bool is_redirect_status(int status_code);
