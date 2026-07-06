@@ -4,7 +4,7 @@ CFLAGS := $(OPT) -Wall -Wextra -pthread -Iinclude
 LDLIBS := -pthread -lssl -lcrypto -lz
 TARGET := curldbg
 OBJDIR := obj
-SRCS := src/main.c src/request.c src/results.c src/util.c src/url.c \
+SRCS := src/main.c src/run.c src/results.c src/util.c src/url.c \
         src/net/dns.c src/net/tls.c src/net/connect.c src/net/proxy.c \
         src/http/request.c src/http/response.c \
         src/cookie.c src/cli/parse.c src/cli/help.c src/output.c src/compare.c

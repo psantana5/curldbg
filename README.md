@@ -68,7 +68,7 @@ See `man ./man/curldbg.1` or `man curldbg` after install.
 ```
 src/
 ├── main.c                   — main loop, output mode selection
-├── request.c                — request lifecycle, redirects, retries, parallel orchestration
+├── run.c                     — request lifecycle, redirects, retries, connection orchestration
 ├── results.c                — output formatting for single, compare, and hop-level results
 ├── output.c                 — --write-out format string expansion
 ├── url.c                    — URL parsing, redirect URL construction, IPv6 bracket handling
