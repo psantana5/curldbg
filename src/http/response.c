@@ -23,10 +23,15 @@ void parse_response_headers(char *headers, struct response_info *out) {
     out->set_cookie_buf[0] = '\0';
     out->set_cookie_len = 0;
 
-    char *nl = (char *)memchr(headers, '\n', HEADER_MAX);
+    size_t len = strlen(headers);
+    if (len > HEADER_MAX) len = HEADER_MAX;
+
+    char *nl = (char *)memchr(headers, '\n', len);
     if (nl == NULL || nl == headers) return;
     if (*(nl - 1) == '\r') *(nl - 1) = '\0';
     *nl = '\0';
+
+    char *end = headers + len;
     {
         const char *sp = headers;
         while (*sp && *sp != ' ') sp++;
@@ -42,7 +47,7 @@ void parse_response_headers(char *headers, struct response_info *out) {
     }
 
     char *line = nl + 1;
-    size_t remaining = HEADER_MAX - (size_t)(line - headers);
+    size_t remaining = (size_t)(end - line);
     while (remaining > 0 && *line != '\0') {
         nl = (char *)memchr(line, '\n', remaining);
         if (nl == NULL) break;
@@ -92,7 +97,7 @@ void parse_response_headers(char *headers, struct response_info *out) {
         }
 
         line = nl + 1;
-        remaining = HEADER_MAX - (size_t)(line - headers);
+        remaining = (size_t)(end - line);
     }
 }
 
@@ -153,6 +158,7 @@ static size_t chunked_write(const char *buf, size_t len, FILE *body_out, struct 
                             z_stream *decomp_strm, bool decompress, char *error, size_t error_len) {
     size_t consumed = 0;
     while (consumed < len) {
+        /* chunk_state: 0=read size line, 1=read chunk data, 2=read trailing \r\n, 3=done */
         if (*state == 0) {
             while (consumed < len && buf[consumed] != '\n') {
                 if (buf[consumed] != '\r' && *line_len < 31)
@@ -234,6 +240,14 @@ int receive_response(
     out->content_encoding[0] = '\0';
 
     for (;;) {
+        /*
+         * Two phases:
+         *   Phase 1 (header_done=false): accumulate headers in recv_buf until
+         *     \r\n\r\n is found, then parse headers, init decompression if needed,
+         *     and process any body data that arrived with the headers.
+         *   Phase 2 (header_done=true): read body data into recv_buf and process
+         *     it through chunked_write or write_body_maybe_decomp.
+         */
         ssize_t n;
 
         if (__builtin_expect(!header_done, 0)) {

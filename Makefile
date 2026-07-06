@@ -16,7 +16,7 @@ PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man/man1
 
-.PHONY: all clean install test static
+.PHONY: all clean install test static fuzz
 
 all: $(TARGET)
 
@@ -49,3 +49,13 @@ install: $(TARGET) $(MANPAGE)
 	install -d $(DESTDIR)$(BINDIR) $(DESTDIR)$(MANDIR)
 	install -m 755 $(TARGET) $(DESTDIR)$(BINDIR)/$(TARGET)
 	install -m 644 $(MANPAGE) $(DESTDIR)$(MANDIR)/curldbg.1
+
+fuzz: FUZZ_CC := clang
+fuzz: FUZZ_CFLAGS := -g -O1 -fsanitize=fuzzer,address -Iinclude
+fuzz: FUZZ_LIBS := -lz -lssl -lcrypto
+fuzz:
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $(OBJDIR)/fuzz_response.o src/http/response.c
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $(OBJDIR)/fuzz_util.o src/util.c
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -o $(TARGET)-fuzz $(OBJDIR)/fuzz_response.o $(OBJDIR)/fuzz_util.o tests/fuzz_response.c $(FUZZ_LIBS)
+	@echo "Built $(TARGET)-fuzz (libFuzzer). Run with time limit, e.g.:"
+	@echo "  ./$(TARGET)-fuzz -max_total_time=30"

@@ -1,14 +1,17 @@
-#Build artifacts
+# Build artifacts
 *.o
 src/*.o
 curldbg
 curldbg_dbg
 
-# Benchmark outputs
-docs/benchmarks/*.svg
-BENCHMARKS.md
+# Benchmark raw data
+docs/benchmarks/
+
+# Profiling output
 curldbg.stripped.bak
 perf.data
 perf_curldbg.data
 perf_cycles.data
 perf_mem.data
+curldbg-fuzz
+obj/unit_test

@@ -280,6 +280,16 @@ static bool is_connection_error(const char *error) {
 
 static int run_request(const char *input_url, const struct run_options *opts,
                        struct run_result *out, struct connection_state *reuse) {
+    /*
+     * State machine for one request including all redirect hops:
+     *   1. Parse URL → DNS → TCP/TLS connect → send request → receive response
+     *   2. If redirect: loop (up to max_redirects), downgrade method on 301/302/303
+     *   3. If connection error on reused conn: retry once with fresh connection
+     *
+     * Connection reuse: if 'reuse' is non-NULL, conn/addrs/host/port are carried
+     * across calls (used for multi-URL batches in main.c).  The state tracks
+     * whether the target host changed since the last hop so we can skip reconnect.
+     */
     char current_url[2048], next_url[2048];
     int redirect_count = 0;
     FILE *upload_file = NULL;
@@ -330,6 +340,7 @@ static int run_request(const char *input_url, const struct run_options *opts,
     data_len = opts->data_len;
 
     for (;;) {
+        /* Each iteration is one hop: URL → connect → send → receive → redirect? */
         struct url_info url = {0}, redirected_url = {0};
         struct connect_race_info race_info;
         struct timespec ttfb_start;
@@ -361,6 +372,7 @@ static int run_request(const char *input_url, const struct run_options *opts,
             strcpy(out->hops[out->hop_count].connected_ip, "via-proxy");
             out->hops[out->hop_count].connected_family = AF_UNSPEC;
         } else {
+            /* Reuse connection if target host/port/tls didn't change vs last hop */
             reuse_connection = (conn->fd >= 0 &&
                 strcmp(url.host, conn_host) == 0 &&
                 strcmp(url.port, conn_port) == 0 &&
@@ -373,6 +385,7 @@ static int run_request(const char *input_url, const struct run_options *opts,
         }
 
     reconnect:
+        /* Fresh connection path: close old, resolve DNS, TCP/TLS connect */
         if (!reuse_connection) {
             close_connection(conn);
             freeaddrinfo(*conn_addrs);
@@ -486,6 +499,7 @@ static int run_request(const char *input_url, const struct run_options *opts,
                     opts->body_out, opts->follow_redirects, opts->fail_on_http_error, head_method) != 0)
                 sr = -1;
         }
+        /* On connection-level error with a reused socket, retry once with a fresh TCP/TLS */
         if (sr != 0 && reuse_connection && !request_retried && is_connection_error(out->error)) {
             close_connection(conn);
             freeaddrinfo(*conn_addrs);
@@ -542,6 +556,7 @@ static int run_request(const char *input_url, const struct run_options *opts,
                      "%s", redirected_url.host);
             out->hops[out->hop_count].has_redirect_target = true;
             can_redirect = true;
+            /* 301/302/303: downgrade to GET, per RFC 7231 */
             if (out->resp.status_code == 301 || out->resp.status_code == 302 ||
                 out->resp.status_code == 303) {
                 strcpy(method, "GET");
