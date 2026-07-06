@@ -4,7 +4,11 @@ CFLAGS := $(OPT) -Wall -Wextra -pthread -Iinclude
 LDLIBS := -pthread -lssl -lcrypto -lz
 TARGET := curldbg
 OBJDIR := obj
-SRCS := src/main.c src/request.c src/results.c src/util.c src/url.c src/dns.c src/tls.c src/connect.c src/http.c src/http_recv.c src/proxy.c src/cookie.c src/cli.c src/output.c src/compare.c
+SRCS := src/main.c src/request.c src/results.c src/util.c src/url.c \
+        src/net/dns.c src/net/tls.c src/net/connect.c src/net/proxy.c \
+        src/http/request.c src/http/response.c \
+        src/cookie.c src/cli/parse.c src/cli/help.c src/output.c src/compare.c
+OBJS := $(SRCS:src/%.c=$(OBJDIR)/%.o)
 OBJS := $(SRCS:src/%.c=$(OBJDIR)/%.o)
 UNIT_OBJS := $(filter-out $(OBJDIR)/main.o,$(OBJS))
 MANPAGE := man/curldbg.1
@@ -19,7 +23,8 @@ all: $(TARGET)
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -s $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
 
-$(OBJDIR)/%.o: src/%.c include/curldbg.h include/flags.h | $(OBJDIR)
+$(OBJDIR)/%.o: src/%.c include/curldbg.h include/flags.h
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(OBJDIR):

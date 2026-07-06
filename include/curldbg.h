@@ -234,8 +234,11 @@ struct cmdline_opts {
 
 extern struct tls_params g_tls_params;
 
-/* --- cli.c --- */
+/* --- cli/parse.c --- */
 void parse_cmdline(int argc, char **argv, struct cmdline_opts *c);
+
+/* --- cli/help.c --- */
+void print_help(const char *prog);
 
 /* --- request.c --- */
 int run_single_request(const struct cmdline_opts *c, struct run_options *opts,
