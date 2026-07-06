@@ -40,36 +40,51 @@ void parse_response_headers(char *headers, struct response_info *out) {
         if (line_len > 0 && *(nl - 1) == '\r') { *(nl - 1) = '\0'; line_len--; }
         *nl = '\0';
 
-        if (line_len >= 9 && strncasecmp(line, "Location:", 9) == 0) {
-            char *value = line + 9;
-            trim_spaces(&value);
-            strncpy(out->location, value, sizeof(out->location) - 1);
-            out->location[sizeof(out->location) - 1] = '\0';
-        } else if (line_len >= 15 && strncasecmp(line, "Content-Length:", 15) == 0) {
-            const char *val = line + 15;
-            trim_spaces((char **)&val);
-            char *end = NULL;
-            long cl = strtol(val, &end, 10);
-            if (*end == '\0' && cl >= 0) out->content_length = cl;
-        } else if (line_len >= 18 && strncasecmp(line, "Transfer-Encoding:", 18) == 0) {
-            const char *val = line + 18;
-            trim_spaces((char **)&val);
-            if (strcasecmp(val, "chunked") == 0) out->chunked = true;
-        } else if (line_len >= 16 && strncasecmp(line, "Content-Encoding:", 16) == 0) {
-            const char *val = line + 16;
-            trim_spaces((char **)&val);
-            strncpy(out->content_encoding, val, sizeof(out->content_encoding) - 1);
-            out->content_encoding[sizeof(out->content_encoding) - 1] = '\0';
-        } else if (line_len >= 12 && strncasecmp(line, "Set-Cookie:", 11) == 0) {
-            const char *val = line + 11;
-            trim_spaces((char **)&val);
-            size_t vlen = strlen(val);
-            if (out->set_cookie_len + vlen + 1 < sizeof(out->set_cookie_buf)) {
-                if (out->set_cookie_len > 0) out->set_cookie_buf[out->set_cookie_len++] = '\n';
-                memcpy(out->set_cookie_buf + out->set_cookie_len, val, vlen);
-                out->set_cookie_len += vlen;
-                out->set_cookie_buf[out->set_cookie_len] = '\0';
-            }
+        if (line_len >= 9) {
+            switch (line[0] | 32) {
+            case 'l':
+                if (strncasecmp(line, "Location:", 9) == 0) {
+                    char *value = line + 9;
+                    trim_spaces(&value);
+                    strncpy(out->location, value, sizeof(out->location) - 1);
+                    out->location[sizeof(out->location) - 1] = '\0';
+                }
+                break;
+            case 'c':
+                if (line_len >= 15 && strncasecmp(line, "Content-Length:", 15) == 0) {
+                    const char *val = line + 15;
+                    trim_spaces((char **)&val);
+                    char *end = NULL;
+                    long cl = strtol(val, &end, 10);
+                    if (*end == '\0' && cl >= 0) out->content_length = cl;
+                } else if (line_len >= 16 && strncasecmp(line, "Content-Encoding:", 16) == 0) {
+                    const char *val = line + 16;
+                    trim_spaces((char **)&val);
+                    strncpy(out->content_encoding, val, sizeof(out->content_encoding) - 1);
+                    out->content_encoding[sizeof(out->content_encoding) - 1] = '\0';
+                }
+                break;
+            case 't':
+                if (line_len >= 18 && strncasecmp(line, "Transfer-Encoding:", 18) == 0) {
+                    const char *val = line + 18;
+                    trim_spaces((char **)&val);
+                    if (strcasecmp(val, "chunked") == 0) out->chunked = true;
+                }
+                break;
+            case 's':
+                if (line_len >= 12 && strncasecmp(line, "Set-Cookie:", 11) == 0) {
+                    const char *val = line + 11;
+                    trim_spaces((char **)&val);
+                    size_t vlen = strlen(val);
+                    if (out->set_cookie_len + vlen + 1 < sizeof(out->set_cookie_buf)) {
+                        if (out->set_cookie_len > 0) out->set_cookie_buf[out->set_cookie_len++] = '\n';
+                        memcpy(out->set_cookie_buf + out->set_cookie_len, val, vlen);
+                        out->set_cookie_len += vlen;
+                        out->set_cookie_buf[out->set_cookie_len] = '\0';
+                    }
+                }
+                break;
+            }  /* end switch */
         }
 
         line = nl + 1;
@@ -493,26 +508,6 @@ int receive_response(
             seen_first_byte = true;
         }
 
-        if (trailer_mode) {
-            size_t off = 0;
-            while (off < (size_t)n) {
-                const char *cr = memchr(recv_buf + off, '\r', (size_t)n - off);
-                if (cr == NULL) break;
-                size_t cr_off = (size_t)(cr - recv_buf);
-                if (cr_off + 1 < (size_t)n && recv_buf[cr_off + 1] == '\n') {
-                    bool empty = (cr_off == off);
-                    off = cr_off + 2;
-                    if (empty) { trailer_mode = false; break; }
-                } else if (cr_off + 1 >= (size_t)n) {
-                    break;
-                } else {
-                    off = cr_off + 1;
-                }
-            }
-            if (!trailer_mode) continue;
-            continue;
-        }
-
         if (!header_done) {
             size_t hbuf_room = sizeof(header_buf) - header_len - 1;
             size_t hbuf_take = (size_t)n;
@@ -532,9 +527,8 @@ int receive_response(
                 if (body_in_hbuf > 0) { memcpy(pending_body, body_start, body_in_hbuf); pending_len = body_in_hbuf; }
                 if (recv_excess > 0) { memcpy(pending_body + pending_len, recv_buf + hbuf_take, recv_excess); pending_len += recv_excess; }
 
-                char *headers_to_parse = header_buf;
-                char headers_only[HEADER_MAX + 1];
                 if (conn->verbose) {
+                    char headers_only[HEADER_MAX + 1];
                     memcpy(headers_only, header_buf, header_bytes);
                     headers_only[header_bytes] = '\0';
                     char *line = headers_only;
@@ -545,14 +539,10 @@ int receive_response(
                         fprintf(stderr, "< %s\n", line);
                         line = nl + 2;
                     }
-                    memcpy(headers_only, header_buf, header_bytes);
-                    headers_only[header_bytes] = '\0';
-                    headers_to_parse = headers_only;
-                } else {
-                    header_buf[header_bytes] = '\0';
                 }
+                header_buf[header_bytes] = '\0';
 
-                parse_response_headers(headers_to_parse, out);
+                parse_response_headers(header_buf, out);
 
                 if (out->status_code == 0) {
                     set_error(error, error_len, "Invalid HTTP response status line");
@@ -616,12 +606,30 @@ int receive_response(
         }
 
         if (chunked) {
+            if (trailer_mode) {
+                size_t off = 0;
+                while (off < (size_t)n) {
+                    const char *cr = memchr(recv_buf + off, '\r', (size_t)n - off);
+                    if (cr == NULL) break;
+                    size_t cr_off = (size_t)(cr - recv_buf);
+                    if (cr_off + 1 < (size_t)n && recv_buf[cr_off + 1] == '\n') {
+                        off = cr_off + 2;
+                        if (cr_off == off - 2) { trailer_mode = false; break; }
+                    } else if (cr_off + 1 >= (size_t)n) {
+                        break;
+                    } else {
+                        off = cr_off + 1;
+                    }
+                }
+                if (trailer_mode) break;
+                continue;
+            }
             size_t cw = chunked_write(recv_buf, (size_t)n, write_body ? body_out : NULL, out,
                               &chunk_state, &chunk_remaining, chunk_line_buf, &chunk_line_len,
                               need_decompress ? &decomp_strm : NULL, need_decompress,
                               error, error_len);
             if (cw == (size_t)-1) { if (decomp_init) inflateEnd(&decomp_strm); return -1; }
-            if (chunk_state == 3 && cw < (size_t)n) break;
+            if (chunk_state == 3) break;
         } else {
             size_t take = (size_t)n;
             if (body_remaining >= 0 && (long)take > body_remaining) take = (size_t)body_remaining;
