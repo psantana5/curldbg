@@ -475,7 +475,7 @@ int receive_response(
     (void)follow_redirects;
     (void)fail_on_http_error;
 
-    char recv_buf[RESPONSE_READ_BUF];
+    static __thread char recv_buf[RECV_BUF_SIZE];
     char header_buf[HEADER_MAX + 1];
     size_t header_len = 0;
     bool header_done = false;
