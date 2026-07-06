@@ -10,6 +10,101 @@
 
 #include <arpa/inet.h>
 
+#define DNS_CACHE_SIZE 32
+
+struct dns_cache_entry {
+    char key[256 + 16 + 16];
+    struct addrinfo *addrs;
+};
+
+static pthread_mutex_t g_dns_cache_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct dns_cache_entry g_dns_cache[DNS_CACHE_SIZE];
+static int g_dns_cache_count = 0;
+
+static void dns_cache_key(const char *host, const char *port, int family,
+                          char *out, size_t out_size) {
+    snprintf(out, out_size, "%s:%s:%d", host, port ? port : "", family);
+}
+
+static struct addrinfo *copy_addrinfo_list(const struct addrinfo *src) {
+    struct addrinfo *head = NULL;
+    struct addrinfo **tail = &head;
+
+    for (const struct addrinfo *ai = src; ai != NULL; ai = ai->ai_next) {
+        size_t total = sizeof(struct addrinfo) + ai->ai_addrlen;
+        struct addrinfo *copy = calloc(1, total);
+        if (copy == NULL) {
+            freeaddrinfo(head);
+            return NULL;
+        }
+        copy->ai_flags = ai->ai_flags;
+        copy->ai_family = ai->ai_family;
+        copy->ai_socktype = ai->ai_socktype;
+        copy->ai_protocol = ai->ai_protocol;
+        copy->ai_addrlen = ai->ai_addrlen;
+        if (ai->ai_addrlen > 0) {
+            struct sockaddr *sa = (struct sockaddr *)((char *)copy + sizeof(struct addrinfo));
+            memcpy(sa, ai->ai_addr, ai->ai_addrlen);
+            copy->ai_addr = sa;
+        }
+        *tail = copy;
+        tail = &copy->ai_next;
+    }
+    return head;
+}
+
+static struct addrinfo *dns_cache_lookup(const char *host, const char *port, int family) {
+    char key[256 + 16 + 16];
+    dns_cache_key(host, port, family, key, sizeof(key));
+
+    pthread_mutex_lock(&g_dns_cache_lock);
+    for (int i = 0; i < g_dns_cache_count; i++) {
+        if (strcmp(g_dns_cache[i].key, key) == 0) {
+            struct addrinfo *copy = copy_addrinfo_list(g_dns_cache[i].addrs);
+            pthread_mutex_unlock(&g_dns_cache_lock);
+            return copy;
+        }
+    }
+    pthread_mutex_unlock(&g_dns_cache_lock);
+    return NULL;
+}
+
+static void dns_cache_store(const char *host, const char *port, int family,
+                            struct addrinfo *addrs) {
+    if (addrs == NULL) return;
+
+    char key[256 + 16 + 16];
+    dns_cache_key(host, port, family, key, sizeof(key));
+
+    struct addrinfo *copy = copy_addrinfo_list(addrs);
+    if (copy == NULL) return;
+
+    pthread_mutex_lock(&g_dns_cache_lock);
+    for (int i = 0; i < g_dns_cache_count; i++) {
+        if (strcmp(g_dns_cache[i].key, key) == 0) {
+            freeaddrinfo(g_dns_cache[i].addrs);
+            g_dns_cache[i].addrs = copy;
+            pthread_mutex_unlock(&g_dns_cache_lock);
+            return;
+        }
+    }
+    if (g_dns_cache_count < DNS_CACHE_SIZE) {
+        snprintf(g_dns_cache[g_dns_cache_count].key,
+                 sizeof(g_dns_cache[0].key), "%s", key);
+        g_dns_cache[g_dns_cache_count].addrs = copy;
+        g_dns_cache_count++;
+    } else {
+        /* Evict oldest entry (FIFO). */
+        freeaddrinfo(g_dns_cache[0].addrs);
+        memmove(&g_dns_cache[0], &g_dns_cache[1],
+                (size_t)(DNS_CACHE_SIZE - 1) * sizeof(g_dns_cache[0]));
+        snprintf(g_dns_cache[DNS_CACHE_SIZE - 1].key,
+                 sizeof(g_dns_cache[0].key), "%s", key);
+        g_dns_cache[DNS_CACHE_SIZE - 1].addrs = copy;
+    }
+    pthread_mutex_unlock(&g_dns_cache_lock);
+}
+
 /* Resolve all candidate IPs (IPv4/IPv6) for host:port. */
 struct addrinfo *resolve_dns(const struct url_info *url, int address_family, int *gai_error) {
     struct addrinfo hints;
@@ -58,6 +153,12 @@ struct addrinfo *resolve_dns_timeout(
             return resolve_dns(url, address_family, gai_error);
     }
 
+    struct addrinfo *cached = dns_cache_lookup(url->host, url->port, address_family);
+    if (cached != NULL) {
+        if (gai_error != NULL) *gai_error = 0;
+        return cached;
+    }
+
     struct dns_thread_arg *arg = malloc(sizeof(*arg));
     if (arg == NULL) return resolve_dns(url, address_family, gai_error);
 
@@ -91,6 +192,9 @@ struct addrinfo *resolve_dns_timeout(
 
     struct addrinfo *result = finished->result;
     if (gai_error != NULL) *gai_error = finished->gai_error;
+    if (result != NULL && finished->gai_error == 0) {
+        dns_cache_store(url->host, url->port, address_family, result);
+    }
     free(finished);
     return result;
 }
