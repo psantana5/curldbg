@@ -65,20 +65,31 @@ See `man ./man/curldbg.1` or `man curldbg` after install.
 
 ## Project layout
 
-- `src/cli.c` — CLI option parsing, combined flags (`-sfvk`), signal setup
-- `src/main.c` — main loop, output mode selection, compare mode orchestration
-- `src/request.c` — single request lifecycle, retry logic, redirect loop
-- `src/results.c` — output formatting for single, compare, and hop-level results
-- `src/output.c` — `--write-out` format string expansion
-- `src/connect.c` — TCP connection with Happy Eyeballs (RFC 8305), Unix sockets
-- `src/http.c` — HTTP/1.1 send/receive, chunked decoding, gzip/deflate decompression
-- `src/tls.c` — TLS handshake via OpenSSL, shared SSL_CTX, SNI, cert verification
-- `src/dns.c` — DNS resolution with thread-based timeout, IP literal fast path
-- `src/url.c` — URL parsing, redirect URL construction, IPv6 bracket handling
-- `src/proxy.c` — HTTP CONNECT proxy handshake
-- `src/cookie.c` — Cookie jar for `-b`/`-c` flags, Netscape-format persistence
-- `src/util.c` — Timers, base64, URL encoding, error helpers
-- `include/curldbg.h` — shared structs, constants, function declarations
+```
+src/
+├── main.c                   — main loop, output mode selection
+├── request.c                — request lifecycle, redirects, retries, parallel orchestration
+├── results.c                — output formatting for single, compare, and hop-level results
+├── output.c                 — --write-out format string expansion
+├── url.c                    — URL parsing, redirect URL construction, IPv6 bracket handling
+├── cookie.c                 — Cookie jar for -b/-c flags, Netscape-format persistence
+├── util.c                   — Timers, base64, URL encoding, error helpers
+├── compare.c                — --compare (IPv4 vs IPv6) and --compare-urls modes
+├── net/
+│   ├── connect.c            — TCP connection, Happy Eyeballs (RFC 8305), Unix sockets, socket I/O
+│   ├── dns.c                — DNS resolution with thread-based timeout, DNS cache, resolve helpers
+│   ├── tls.c                — TLS handshake via OpenSSL, shared SSL_CTX, SNI, cert verification
+│   └── proxy.c              — HTTP CONNECT proxy handshake
+├── http/
+│   ├── request.c            — HTTP/1.1 request building and sending
+│   └── response.c           — HTTP/1.1 response receive, header parsing, chunked decoding, gzip/deflate
+├── cli/
+│   ├── parse.c              — CLI option parsing, combined flags (-sfvk), signal setup
+│   └── help.c               — --help flag rendering
+└── include/
+    ├── curldbg.h            — shared structs, constants, function declarations
+    └── flags.h              — flag definitions table
+```
 
 ## Testing
 
