@@ -203,8 +203,10 @@ int receive_response(
     (void)follow_redirects;
     (void)fail_on_http_error;
 
-    static __thread char recv_buf[RECV_BUF_SIZE];
-    char header_buf[HEADER_MAX + 1];
+    static __thread char recv_buf[RECV_BUF_SIZE]
+        __attribute__((aligned(64)));
+    static __thread char pending_body_buf[RECV_BUF_SIZE]
+        __attribute__((aligned(64)));
     size_t header_len = 0;
     bool header_done = false;
     bool seen_first_byte = false;
@@ -232,7 +234,15 @@ int receive_response(
     out->content_encoding[0] = '\0';
 
     for (;;) {
-        ssize_t n = connection_read(conn, recv_buf, sizeof(recv_buf), error, error_len);
+        ssize_t n;
+
+        if (__builtin_expect(!header_done, 0)) {
+            n = connection_read(conn, recv_buf + header_len,
+                                sizeof(recv_buf) - header_len,
+                                error, error_len);
+        } else {
+            n = connection_read(conn, recv_buf, sizeof(recv_buf), error, error_len);
+        }
         if (n < 0) return -1;
         if (n == 0) break;
 
@@ -245,40 +255,41 @@ int receive_response(
         }
 
         if (__builtin_expect(!header_done, 0)) {
-            size_t hbuf_room = sizeof(header_buf) - header_len - 1;
-            size_t hbuf_take = (size_t)n;
-            size_t recv_excess = 0;
-            if (hbuf_take > hbuf_room) { hbuf_take = hbuf_room; recv_excess = (size_t)n - hbuf_take; }
-            memcpy(header_buf + header_len, recv_buf, hbuf_take);
-            header_len += hbuf_take;
-            header_buf[header_len] = '\0';
+            header_len += (size_t)n;
+            if (header_len >= RECV_BUF_SIZE) {
+                header_len = RECV_BUF_SIZE - 1;
+                recv_buf[header_len] = '\0';
+            }
+            recv_buf[header_len] = '\0';
 
-            char *body_start = find_header_end(header_buf, header_len);
+            char *body_start = find_header_end(recv_buf, header_len);
             if (body_start != NULL) {
-                size_t header_bytes = (size_t)(body_start - header_buf);
-                size_t body_in_hbuf = header_len - header_bytes;
+                size_t header_bytes = (size_t)(body_start - recv_buf);
+                size_t pending_len = header_len - header_bytes;
 
-                char pending_body[RESPONSE_READ_BUF];
-                size_t pending_len = 0;
-                if (body_in_hbuf > 0) { memcpy(pending_body, body_start, body_in_hbuf); pending_len = body_in_hbuf; }
-                if (recv_excess > 0) { memcpy(pending_body + pending_len, recv_buf + hbuf_take, recv_excess); pending_len += recv_excess; }
+                if (pending_len > 0) {
+                    memcpy(pending_body_buf, body_start, pending_len);
+                }
 
                 if (conn->verbose) {
-                    char headers_only[HEADER_MAX + 1];
-                    memcpy(headers_only, header_buf, header_bytes);
-                    headers_only[header_bytes] = '\0';
-                    char *line = headers_only;
-                    while (*line != '\0') {
-                        char *nl = strstr(line, "\r\n");
-                        if (nl == NULL) break;
-                        *nl = '\0';
-                        fprintf(stderr, "< %s\n", line);
-                        line = nl + 2;
+                    char *headers_only = malloc(header_bytes + 1);
+                    if (headers_only != NULL) {
+                        memcpy(headers_only, recv_buf, header_bytes);
+                        headers_only[header_bytes] = '\0';
+                        char *line = headers_only;
+                        while (*line != '\0') {
+                            char *nl = strstr(line, "\r\n");
+                            if (nl == NULL) break;
+                            *nl = '\0';
+                            fprintf(stderr, "< %s\n", line);
+                            line = nl + 2;
+                        }
+                        free(headers_only);
                     }
                 }
-                header_buf[header_bytes] = '\0';
 
-                parse_response_headers(header_buf, out);
+                recv_buf[header_bytes] = '\0';
+                parse_response_headers(recv_buf, out);
 
                 if (out->status_code == 0) {
                     set_error(error, error_len, "Invalid HTTP response status line");
@@ -303,7 +314,7 @@ int receive_response(
                 chunked = out->chunked;
                 body_remaining = out->content_length;
                 if (__builtin_expect(chunked, 0)) {
-                    size_t cw = chunked_write(pending_body, pending_len, write_body ? body_out : NULL, out,
+                    size_t cw = chunked_write(pending_body_buf, pending_len, write_body ? body_out : NULL, out,
                                       &chunk_state, &chunk_remaining, chunk_line_buf, &chunk_line_len,
                                       need_decompress ? &decomp_strm : NULL, need_decompress,
                                       error, error_len);
@@ -311,10 +322,10 @@ int receive_response(
                     if (chunk_state == 3 && cw < pending_len) {
                         size_t off = cw;
                         while (off < pending_len) {
-                            const char *cr = memchr(pending_body + off, '\r', pending_len - off);
+                            const char *cr = memchr(pending_body_buf + off, '\r', pending_len - off);
                             if (cr == NULL) break;
-                            size_t cr_off = (size_t)(cr - pending_body);
-                            if (cr_off + 1 < pending_len && pending_body[cr_off + 1] == '\n') {
+                            size_t cr_off = (size_t)(cr - pending_body_buf);
+                            if (cr_off + 1 < pending_len && pending_body_buf[cr_off + 1] == '\n') {
                                 bool empty = (cr_off == off);
                                 off = cr_off + 2;
                                 if (empty) break;
@@ -326,7 +337,7 @@ int receive_response(
                         }
                     }
                 } else if (pending_len > 0) {
-                    if (write_body_maybe_decomp(pending_body, pending_len, write_body ? body_out : NULL, out,
+                    if (write_body_maybe_decomp(pending_body_buf, pending_len, write_body ? body_out : NULL, out,
                                                  need_decompress ? &decomp_strm : NULL, need_decompress,
                                                  error, error_len) == (size_t)-1) {
                         if (decomp_init) { inflateEnd(&decomp_strm); } return -1;
@@ -335,7 +346,7 @@ int receive_response(
                 }
                 header_done = true;
                 if (!chunked && body_remaining <= 0) break;
-            } else if (header_len >= sizeof(header_buf) - 1) {
+            } else if (header_len >= RECV_BUF_SIZE - 1) {
                 set_error(error, error_len, "Response headers too large"); return -1;
             }
             continue;

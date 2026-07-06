@@ -7,3 +7,8 @@ curldbg_dbg
 # Benchmark outputs
 docs/benchmarks/*.svg
 BENCHMARKS.md
+curldbg.stripped.bak
+perf.data
+perf_curldbg.data
+perf_cycles.data
+perf_mem.data

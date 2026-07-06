@@ -22,7 +22,7 @@
 #define MAX_COOKIES 256
 #define MAX_COOKIE_LEN 4096
 #define WRITE_OUT_VAR_MAX 64
-#define CURLDBG_VERSION "1.2.0"
+#define CURLDBG_VERSION "1.3.0"
 
 enum {
     HF_CONTENT_TYPE   = 1 << 0,
@@ -112,17 +112,17 @@ struct connect_race_info {
 struct connection {
     int fd;
     bool use_tls;
+    bool verbose;
     SSL_CTX *ctx;
     SSL *ssl;
-    bool verbose;
 };
 
 struct connection_state {
     struct connection conn;
+    struct addrinfo *addrs;
     char host[256];
     char port[16];
     bool use_tls;
-    struct addrinfo *addrs;
 };
 
 struct run_options {
@@ -130,20 +130,26 @@ struct run_options {
     const char *data;
     size_t data_len;
     bool follow_redirects;
+    bool happy_eyeballs;
+    bool verbose;
+    bool insecure_tls;
+    bool compressed;
+    bool is_head_method;
+    bool fail_on_http_error;
     int address_family;
     int connect_timeout_ms;
     int read_timeout_ms;
     int max_time_ms;
     int max_redirects;
-    bool fail_on_http_error;
+    int tls_min_version;
+    int tls_max_version;
+    int retry_count;
+    int retry_delay_ms;
     FILE *body_out;
-    bool insecure_tls;
     const char *basic_auth;
     const char **extra_headers;
     size_t extra_header_count;
     const char *upload_path;
-    bool happy_eyeballs;
-    bool verbose;
     const char *user_agent;
     const char *proxy_host;
     const char *proxy_port;
@@ -154,19 +160,13 @@ struct run_options {
     int resolve_count;
     const char *referer;
     const char *bind_interface;
-    int tls_min_version;
-    int tls_max_version;
-    int retry_count;
-    int retry_delay_ms;
-    bool compressed;
     const char *unix_socket_path;
-    bool is_head_method;
 };
 
 struct run_result {
+    struct response_info resp;
     struct hop_info *hops;
     int hop_count;
-    struct response_info resp;
     double dns_ms;
     double connect_ms;
     double ttfb_ms;
