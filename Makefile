@@ -38,6 +38,16 @@ test: $(UNIT_OBJS)
 		-o $(OBJDIR)/unit_test tests/unit.c $(UNIT_OBJS) $(LDLIBS)
 	@valgrind --leak-check=full --error-exitcode=1 -q $(OBJDIR)/unit_test
 	@rm -f $(OBJDIR)/unit_test
+	@if command -v clang >/dev/null 2>&1; then \
+		echo "=== fuzz: parse_response_headers (30s) ==="; \
+		$(MAKE) fuzz; \
+		./$(TARGET)-fuzz -max_total_time=30; \
+		FUZZ_RC=$$?; \
+		rm -f $(TARGET)-fuzz; \
+		exit $$FUZZ_RC; \
+	else \
+		echo "=== fuzz: skipped (clang not found) ==="; \
+	fi
 
 static: CFLAGS += -no-pie
 static: LDLIBS = -pthread /usr/lib/x86_64-linux-gnu/libssl.a /usr/lib/x86_64-linux-gnu/libcrypto.a
