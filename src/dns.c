@@ -3,6 +3,7 @@
 
 #include <errno.h>
 #include <pthread.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,7 @@
 #define DNS_CACHE_SIZE 32
 
 struct dns_cache_entry {
+    uint32_t hash;
     char key[256 + 16 + 16];
     struct addrinfo *addrs;
 };
@@ -22,8 +24,14 @@ static struct dns_cache_entry g_dns_cache[DNS_CACHE_SIZE];
 static int g_dns_cache_count = 0;
 
 static void dns_cache_key(const char *host, const char *port, int family,
-                          char *out, size_t out_size) {
-    snprintf(out, out_size, "%s:%s:%d", host, port ? port : "", family);
+                          char *out, size_t out_size, uint32_t *hash_out) {
+    int n = snprintf(out, out_size, "%s:%s:%d", host, port ? port : "", family);
+    if (hash_out != NULL && n > 0) {
+        uint32_t h = 2166136261u;
+        for (int i = 0; i < n && i < (int)out_size - 1; i++)
+            h = (h ^ (unsigned char)out[i]) * 16777619u;
+        *hash_out = h;
+    }
 }
 
 static struct addrinfo *copy_addrinfo_list(const struct addrinfo *src) {
@@ -55,11 +63,12 @@ static struct addrinfo *copy_addrinfo_list(const struct addrinfo *src) {
 
 static struct addrinfo *dns_cache_lookup(const char *host, const char *port, int family) {
     char key[256 + 16 + 16];
-    dns_cache_key(host, port, family, key, sizeof(key));
+    uint32_t hash = 0;
+    dns_cache_key(host, port, family, key, sizeof(key), &hash);
 
     pthread_mutex_lock(&g_dns_cache_lock);
     for (int i = 0; i < g_dns_cache_count; i++) {
-        if (strcmp(g_dns_cache[i].key, key) == 0) {
+        if (g_dns_cache[i].hash == hash && strcmp(g_dns_cache[i].key, key) == 0) {
             struct addrinfo *copy = copy_addrinfo_list(g_dns_cache[i].addrs);
             pthread_mutex_unlock(&g_dns_cache_lock);
             return copy;
@@ -74,14 +83,15 @@ static void dns_cache_store(const char *host, const char *port, int family,
     if (addrs == NULL) return;
 
     char key[256 + 16 + 16];
-    dns_cache_key(host, port, family, key, sizeof(key));
+    uint32_t hash = 0;
+    dns_cache_key(host, port, family, key, sizeof(key), &hash);
 
     struct addrinfo *copy = copy_addrinfo_list(addrs);
     if (copy == NULL) return;
 
     pthread_mutex_lock(&g_dns_cache_lock);
     for (int i = 0; i < g_dns_cache_count; i++) {
-        if (strcmp(g_dns_cache[i].key, key) == 0) {
+        if (g_dns_cache[i].hash == hash && strcmp(g_dns_cache[i].key, key) == 0) {
             freeaddrinfo(g_dns_cache[i].addrs);
             g_dns_cache[i].addrs = copy;
             pthread_mutex_unlock(&g_dns_cache_lock);
@@ -89,15 +99,16 @@ static void dns_cache_store(const char *host, const char *port, int family,
         }
     }
     if (g_dns_cache_count < DNS_CACHE_SIZE) {
+        g_dns_cache[g_dns_cache_count].hash = hash;
         snprintf(g_dns_cache[g_dns_cache_count].key,
                  sizeof(g_dns_cache[0].key), "%s", key);
         g_dns_cache[g_dns_cache_count].addrs = copy;
         g_dns_cache_count++;
     } else {
-        /* Evict oldest entry (FIFO). */
         freeaddrinfo(g_dns_cache[0].addrs);
         memmove(&g_dns_cache[0], &g_dns_cache[1],
                 (size_t)(DNS_CACHE_SIZE - 1) * sizeof(g_dns_cache[0]));
+        g_dns_cache[DNS_CACHE_SIZE - 1].hash = hash;
         snprintf(g_dns_cache[DNS_CACHE_SIZE - 1].key,
                  sizeof(g_dns_cache[0].key), "%s", key);
         g_dns_cache[DNS_CACHE_SIZE - 1].addrs = copy;

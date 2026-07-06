@@ -10,8 +10,9 @@
 #include <zlib.h>
 
 bool is_redirect_status(int status_code) {
-    return status_code == 301 || status_code == 302 || status_code == 303 ||
-           status_code == 307 || status_code == 308;
+    if (status_code == 301 || status_code == 302) return true;
+    if (status_code == 303 || status_code == 307 || status_code == 308) return true;
+    return false;
 }
 
 void parse_response_headers(char *headers, struct response_info *out) {
@@ -26,9 +27,18 @@ void parse_response_headers(char *headers, struct response_info *out) {
     if (nl == NULL || nl == headers) return;
     if (*(nl - 1) == '\r') *(nl - 1) = '\0';
     *nl = '\0';
-    if (sscanf(headers, "HTTP/%*d.%*d %d", &out->status_code) != 1 &&
-        sscanf(headers, "HTTP/%*d %d", &out->status_code) != 1) {
-        out->status_code = 0; return;
+    {
+        const char *sp = headers;
+        while (*sp && *sp != ' ') sp++;
+        if (*sp == ' ') {
+            sp++;
+            int code = 0;
+            while (*sp >= '0' && *sp <= '9')
+                code = code * 10 + (*sp++ - '0');
+            if (code >= 100 && code <= 599)
+                out->status_code = code;
+            else { out->status_code = 0; return; }
+        } else { out->status_code = 0; return; }
     }
 
     char *line = nl + 1;
@@ -41,50 +51,44 @@ void parse_response_headers(char *headers, struct response_info *out) {
         *nl = '\0';
 
         if (line_len >= 9) {
-            switch (line[0] | 32) {
-            case 'l':
-                if (strncasecmp(line, "Location:", 9) == 0) {
-                    char *value = line + 9;
-                    trim_spaces(&value);
-                    strncpy(out->location, value, sizeof(out->location) - 1);
-                    out->location[sizeof(out->location) - 1] = '\0';
-                }
-                break;
-            case 'c':
-                if (line_len >= 15 && strncasecmp(line, "Content-Length:", 15) == 0) {
+            char c = (char)(line[0] | 32);
+            if (c == 'l' && line[1] == 'o' && strncasecmp(line + 2, "cation:", 7) == 0) {
+                char *value = line + 9;
+                trim_spaces(&value);
+                strncpy(out->location, value, sizeof(out->location) - 1);
+                out->location[sizeof(out->location) - 1] = '\0';
+            } else if (c == 'c') {
+                if (line_len >= 16 && line[1] == 'o' &&
+                    strncasecmp(line + 2, "ntent-Encoding:", 15) == 0) {
+                    const char *val = line + 16;
+                    trim_spaces((char **)&val);
+                    strncpy(out->content_encoding, val, sizeof(out->content_encoding) - 1);
+                    out->content_encoding[sizeof(out->content_encoding) - 1] = '\0';
+                } else if (line_len >= 15 && line[1] == 'o' &&
+                           strncasecmp(line + 2, "ntent-Length:", 13) == 0) {
                     const char *val = line + 15;
                     trim_spaces((char **)&val);
                     char *end = NULL;
                     long cl = strtol(val, &end, 10);
                     if (*end == '\0' && cl >= 0) out->content_length = cl;
-                } else if (line_len >= 16 && strncasecmp(line, "Content-Encoding:", 16) == 0) {
-                    const char *val = line + 16;
-                    trim_spaces((char **)&val);
-                    strncpy(out->content_encoding, val, sizeof(out->content_encoding) - 1);
-                    out->content_encoding[sizeof(out->content_encoding) - 1] = '\0';
                 }
-                break;
-            case 't':
-                if (line_len >= 18 && strncasecmp(line, "Transfer-Encoding:", 18) == 0) {
-                    const char *val = line + 18;
-                    trim_spaces((char **)&val);
-                    if (strcasecmp(val, "chunked") == 0) out->chunked = true;
+            } else if (c == 't' && line_len >= 18 && line[1] == 'r' &&
+                       strncasecmp(line + 2, "ansfer-Encoding:", 16) == 0) {
+                const char *val = line + 18;
+                trim_spaces((char **)&val);
+                if (strcasecmp(val, "chunked") == 0) out->chunked = true;
+            } else if (c == 's' && line_len >= 12 && line[1] == 'e' &&
+                       strncasecmp(line + 2, "t-Cookie:", 9) == 0) {
+                const char *val = line + 11;
+                trim_spaces((char **)&val);
+                size_t vlen = strlen(val);
+                if (out->set_cookie_len + vlen + 1 < sizeof(out->set_cookie_buf)) {
+                    if (out->set_cookie_len > 0) out->set_cookie_buf[out->set_cookie_len++] = '\n';
+                    memcpy(out->set_cookie_buf + out->set_cookie_len, val, vlen);
+                    out->set_cookie_len += vlen;
+                    out->set_cookie_buf[out->set_cookie_len] = '\0';
                 }
-                break;
-            case 's':
-                if (line_len >= 12 && strncasecmp(line, "Set-Cookie:", 11) == 0) {
-                    const char *val = line + 11;
-                    trim_spaces((char **)&val);
-                    size_t vlen = strlen(val);
-                    if (out->set_cookie_len + vlen + 1 < sizeof(out->set_cookie_buf)) {
-                        if (out->set_cookie_len > 0) out->set_cookie_buf[out->set_cookie_len++] = '\n';
-                        memcpy(out->set_cookie_buf + out->set_cookie_len, val, vlen);
-                        out->set_cookie_len += vlen;
-                        out->set_cookie_buf[out->set_cookie_len] = '\0';
-                    }
-                }
-                break;
-            }  /* end switch */
+            }
         }
 
         line = nl + 1;
@@ -198,7 +202,7 @@ static int build_body_headers(char *body_headers, size_t body_headers_size,
     *content_len_out = 0;
     body_headers[0] = '\0';
 
-    if (upload_file != NULL) {
+    if (__builtin_expect(upload_file != NULL, 0)) {
         *content_len_out = upload_size;
         *include_body_headers_out = true;
         if (chunked_upload) {
@@ -339,7 +343,8 @@ int send_request(
     size_t error_len,
     bool use_proxy,
     bool chunked_upload,
-    bool compressed
+    bool compressed,
+    unsigned int header_flags
 ) {
     if (user_agent == NULL) user_agent = "curldbg/1.0";
 
@@ -351,16 +356,11 @@ int send_request(
 
     format_host_header(url, host_header, sizeof(host_header));
 
-    bool has_content_type = false, has_content_length = false, has_host = false,
-         has_accept_encoding = false, has_user_agent = false;
-    for (size_t i = 0; i < extra_header_count; i++) {
-        if (extra_headers[i] == NULL) continue;
-        if (strncasecmp(extra_headers[i], "Content-Type:", 13) == 0) has_content_type = true;
-        else if (strncasecmp(extra_headers[i], "Content-Length:", 15) == 0) has_content_length = true;
-        else if (strncasecmp(extra_headers[i], "Host:", 5) == 0) has_host = true;
-        else if (strncasecmp(extra_headers[i], "Accept-Encoding:", 16) == 0) has_accept_encoding = true;
-        else if (strncasecmp(extra_headers[i], "User-Agent:", 11) == 0) has_user_agent = true;
-    }
+    bool has_content_type = (header_flags & HF_CONTENT_TYPE) != 0;
+    bool has_content_length = (header_flags & HF_CONTENT_LENGTH) != 0;
+    bool has_host = (header_flags & HF_HOST) != 0;
+    bool has_accept_encoding = (header_flags & HF_ACCEPT_ENC) != 0;
+    bool has_user_agent = (header_flags & HF_USER_AGENT) != 0;
 
     if (build_body_headers(body_headers, sizeof(body_headers), verb,
                            data, data_len, upload_file, upload_size,
@@ -493,14 +493,22 @@ int receive_response(
     z_stream decomp_strm;
     bool decomp_init = false;
 
-    memset(out, 0, sizeof(*out));
+    out->preview_len = 0;
+    out->ttfb_ms = -1.0;
+    out->status_code = 0;
+    out->location[0] = '\0';
+    out->chunked = false;
+    out->content_length = -1;
+    out->set_cookie_len = 0;
+    out->set_cookie_buf[0] = '\0';
+    out->content_encoding[0] = '\0';
 
     for (;;) {
         ssize_t n = connection_read(conn, recv_buf, sizeof(recv_buf), error, error_len);
         if (n < 0) return -1;
         if (n == 0) break;
 
-        if (!seen_first_byte) {
+        if (__builtin_expect(!seen_first_byte, 0)) {
             if (clock_gettime(CLOCK_MONOTONIC, &first_byte_ts) != 0) {
                 set_error(error, error_len, "clock_gettime failed"); return -1;
             }
@@ -508,7 +516,7 @@ int receive_response(
             seen_first_byte = true;
         }
 
-        if (!header_done) {
+        if (__builtin_expect(!header_done, 0)) {
             size_t hbuf_room = sizeof(header_buf) - header_len - 1;
             size_t hbuf_take = (size_t)n;
             size_t recv_excess = 0;
@@ -566,7 +574,7 @@ int receive_response(
 
                 chunked = out->chunked;
                 body_remaining = out->content_length;
-                if (chunked) {
+                if (__builtin_expect(chunked, 0)) {
                     size_t cw = chunked_write(pending_body, pending_len, write_body ? body_out : NULL, out,
                                       &chunk_state, &chunk_remaining, chunk_line_buf, &chunk_line_len,
                                       need_decompress ? &decomp_strm : NULL, need_decompress,
@@ -605,7 +613,7 @@ int receive_response(
             continue;
         }
 
-        if (chunked) {
+        if (__builtin_expect(chunked, 0)) {
             if (trailer_mode) {
                 size_t off = 0;
                 while (off < (size_t)n) {

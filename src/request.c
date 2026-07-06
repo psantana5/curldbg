@@ -369,7 +369,7 @@ static int run_request(const char *input_url, const struct run_options *opts,
     out->hops = calloc((size_t)opts->max_redirects + 1, sizeof(*out->hops));
     if (out->hops == NULL) die("calloc");
 
-    if (clock_gettime(CLOCK_MONOTONIC, &total_start) != 0) die("clock_gettime");
+    if (__builtin_expect(clock_gettime(CLOCK_MONOTONIC, &total_start) != 0, 0)) die("clock_gettime");
 
     char method[32];
     const char *data;
@@ -453,13 +453,32 @@ static int run_request(const char *input_url, const struct run_options *opts,
         }
 
         bool has_cookie_header = false, has_referer_header = false;
+        unsigned int header_flags = 0;
         for (size_t i = 0; i < opts->extra_header_count; i++) {
             if (opts->extra_headers[i] == NULL) continue;
-            if (strncasecmp(opts->extra_headers[i], "Cookie:", 7) == 0)
-                has_cookie_header = true;
-            else if (strncasecmp(opts->extra_headers[i], "Referer:", 8) == 0)
-                has_referer_header = true;
+            const char *h = opts->extra_headers[i];
+            char c = (char)(h[0] | 32);
+            if (c == 'c') {
+                if (h[1] == 'o') {
+                    if (strncasecmp(h + 2, "ntent-Type:", 11) == 0)
+                        header_flags |= HF_CONTENT_TYPE;
+                    else if (strncasecmp(h + 2, "ntent-Length:", 13) == 0)
+                        header_flags |= HF_CONTENT_LENGTH;
+                    else if (strncasecmp(h + 2, "okie:", 5) == 0)
+                        header_flags |= HF_COOKIE;
+                }
+            } else if (c == 'h' && strncasecmp(h + 1, "ost:", 4) == 0) {
+                header_flags |= HF_HOST;
+            } else if (c == 'a' && strncasecmp(h + 1, "ccept-Encoding:", 15) == 0) {
+                header_flags |= HF_ACCEPT_ENC;
+            } else if (c == 'u' && strncasecmp(h + 1, "ser-Agent:", 10) == 0) {
+                header_flags |= HF_USER_AGENT;
+            } else if (c == 'r' && strncasecmp(h + 1, "eferer:", 7) == 0) {
+                header_flags |= HF_REFERER;
+            }
         }
+        has_cookie_header = (header_flags & HF_COOKIE) != 0;
+        has_referer_header = (header_flags & HF_REFERER) != 0;
 
         char cookie_header_buf[8192] = "";
         const char *cookie_header_str = NULL;
@@ -508,9 +527,10 @@ static int run_request(const char *input_url, const struct run_options *opts,
         sr = send_request(conn, &url, method, data, data_len,
                 upload_file, upload_size, send_headers, send_header_count,
                 opts->basic_auth, opts->user_agent, out->error, sizeof(out->error),
-                use_proxy && !url.use_tls, chunked_upload, opts->compressed);
+                use_proxy && !url.use_tls, chunked_upload, opts->compressed,
+                header_flags);
         if (sr == 0) {
-            bool head_method = (strcasecmp(opts->method, "HEAD") == 0);
+            bool head_method = opts->is_head_method;
             if (receive_response(conn, &ttfb_start, &out->resp, out->error, sizeof(out->error),
                     opts->body_out, opts->follow_redirects, opts->fail_on_http_error, head_method) != 0)
                 sr = -1;
@@ -660,6 +680,7 @@ void init_run_options(struct run_options *opts, const struct cmdline_opts *c) {
     opts->retry_delay_ms = c->retry_delay_ms;
     opts->compressed = c->compressed;
     opts->unix_socket_path = c->unix_socket_path;
+    opts->is_head_method = (strcasecmp(opts->method, "HEAD") == 0);
 }
 
 /* --- Single request mode --- */
@@ -688,8 +709,11 @@ int run_single_request(const struct cmdline_opts *c, struct run_options *opts,
     for (int attempt = 0; attempt < max_attempts; attempt++) {
         rc = run_request(c->input_url, opts, result, reuse);
         if (rc == 0) break;
-        if (attempt + 1 < max_attempts && opts->retry_delay_ms > 0)
-            (void)poll(NULL, 0, opts->retry_delay_ms);
+        if (attempt + 1 < max_attempts && opts->retry_delay_ms > 0) {
+            struct timespec ts = { .tv_sec = opts->retry_delay_ms / 1000,
+                                   .tv_nsec = (long)(opts->retry_delay_ms % 1000) * 1000000L };
+            nanosleep(&ts, NULL);
+        }
     }
 
     free((void *)opts->proxy_host);

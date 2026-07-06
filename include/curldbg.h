@@ -23,6 +23,16 @@
 #define WRITE_OUT_VAR_MAX 64
 #define CURLDBG_VERSION "1.2.0"
 
+enum {
+    HF_CONTENT_TYPE   = 1 << 0,
+    HF_CONTENT_LENGTH = 1 << 1,
+    HF_HOST           = 1 << 2,
+    HF_ACCEPT_ENC     = 1 << 3,
+    HF_USER_AGENT     = 1 << 4,
+    HF_COOKIE         = 1 << 5,
+    HF_REFERER        = 1 << 6,
+};
+
 struct tls_params {
     const char *cacert;
     const char *capath;
@@ -149,6 +159,7 @@ struct run_options {
     int retry_delay_ms;
     bool compressed;
     const char *unix_socket_path;
+    bool is_head_method;
 };
 
 struct run_result {
@@ -303,7 +314,7 @@ int send_request(struct connection *conn, const struct url_info *url, const char
                  const char **extra_headers, size_t extra_header_count,
                  const char *basic_auth, const char *user_agent,
                  char *error, size_t error_len, bool use_proxy, bool chunked_upload,
-                 bool compressed);
+                 bool compressed, unsigned int header_flags);
 int receive_response(struct connection *conn, const struct timespec *ttfb_start,
                      struct response_info *out, char *error, size_t error_len,
                      FILE *body_out, bool follow_redirects, bool fail_on_http_error, bool head_method);

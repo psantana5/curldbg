@@ -16,6 +16,7 @@
 #include <arpa/inet.h>
 
 #define HAPPY_EYEBALLS_DELAY_MS 25
+#define HE_STACK_MAX 8
 
 static int bind_to_interface(int fd, const char *bind_interface) {
     if (bind_interface == NULL) return 0;
@@ -161,6 +162,13 @@ static int connect_tcp_happy_eyeballs(
     size_t winner_idx = 0;
     bool have_winner = false;
     long long race_start_ms;
+    bool heap_alloc = false;
+    char *heap_mem = NULL;
+    const struct addrinfo *stack_v4_buf[HE_STACK_MAX];
+    const struct addrinfo *stack_v6_buf[HE_STACK_MAX];
+    struct he_attempt stack_att_buf[HE_STACK_MAX];
+    struct pollfd stack_pfd_buf[HE_STACK_MAX];
+    size_t stack_idx_buf[HE_STACK_MAX];
 
     for (ai = addrs; ai != NULL; ai = ai->ai_next) {
         if (ai->ai_family == AF_INET) v4_total++, total++;
@@ -174,18 +182,34 @@ static int connect_tcp_happy_eyeballs(
 
     clear_race_info(race_info);
     {
+        bool use_heap = (total > HE_STACK_MAX);
         size_t sz_v4 = v4_total * sizeof(*v4);
         size_t sz_v6 = v6_total * sizeof(*v6);
         size_t sz_att = total * sizeof(*attempts);
         size_t sz_pfd = total * sizeof(*pfds);
         size_t sz_idx = total * sizeof(*pfd_to_attempt);
-        char *mem = calloc(1, sz_v4 + sz_v6 + sz_att + sz_pfd + sz_idx);
-        if (mem == NULL) { errno = ENOMEM; return -1; }
-        v4 = (const struct addrinfo **)mem;
-        v6 = (const struct addrinfo **)(mem + sz_v4);
-        attempts = (struct he_attempt *)(mem + sz_v4 + sz_v6);
-        pfds = (struct pollfd *)(mem + sz_v4 + sz_v6 + sz_att);
-        pfd_to_attempt = (size_t *)(mem + sz_v4 + sz_v6 + sz_att + sz_pfd);
+
+        if (use_heap) {
+            heap_mem = calloc(1, sz_v4 + sz_v6 + sz_att + sz_pfd + sz_idx);
+            if (heap_mem == NULL) { errno = ENOMEM; return -1; }
+            heap_alloc = true;
+            v4 = (const struct addrinfo **)heap_mem;
+            v6 = (const struct addrinfo **)(heap_mem + sz_v4);
+            attempts = (struct he_attempt *)(heap_mem + sz_v4 + sz_v6);
+            pfds = (struct pollfd *)(heap_mem + sz_v4 + sz_v6 + sz_att);
+            pfd_to_attempt = (size_t *)(heap_mem + sz_v4 + sz_v6 + sz_att + sz_pfd);
+        } else {
+            memset(stack_v4_buf, 0, sizeof(stack_v4_buf));
+            memset(stack_v6_buf, 0, sizeof(stack_v6_buf));
+            memset(stack_att_buf, 0, sizeof(stack_att_buf));
+            memset(stack_pfd_buf, 0, sizeof(stack_pfd_buf));
+            memset(stack_idx_buf, 0, sizeof(stack_idx_buf));
+            v4 = stack_v4_buf;
+            v6 = stack_v6_buf;
+            attempts = stack_att_buf;
+            pfds = stack_pfd_buf;
+            pfd_to_attempt = stack_idx_buf;
+        }
     }
 
     {
@@ -246,7 +270,12 @@ static int connect_tcp_happy_eyeballs(
 
         if (active_count == 0) {
             if (next_index >= total) break;
-            if (next_start_ms > now) (void)poll(NULL, 0, (int)(next_start_ms - now));
+            if (next_start_ms > now) {
+                long delay_ms = (long)(next_start_ms - now);
+                struct timespec ts = { .tv_sec = delay_ms / 1000,
+                                       .tv_nsec = (delay_ms % 1000) * 1000000L };
+                nanosleep(&ts, NULL);
+            }
             continue;
         }
 
@@ -384,7 +413,7 @@ static int connect_tcp_happy_eyeballs(
         }
     }
 
-    free(v4);
+    if (heap_alloc) free(heap_mem);
     if (winner_fd >= 0) return winner_fd;
     errno = (last_errno != 0) ? last_errno : ECONNREFUSED;
     return -1;
@@ -493,13 +522,11 @@ void close_connection(struct connection *conn) {
 }
 
 ssize_t connection_read(struct connection *conn, void *buf, size_t len, char *error, size_t error_len) {
-    if (!conn->use_tls) {
+    if (__builtin_expect(!conn->use_tls, 1)) {
         ssize_t n = recv(conn->fd, buf, len, 0);
-        if (n < 0) {
-            if (is_timeout_errno(errno)) { set_error(error, error_len, "Read timeout"); return -1; }
-            set_error(error, error_len, "Read failed: %s", strerror(errno)); return -1;
-        }
-        return n;
+        if (__builtin_expect(n >= 0, 1)) return n;
+        if (is_timeout_errno(errno)) { set_error(error, error_len, "Read timeout"); return -1; }
+        set_error(error, error_len, "Read failed: %s", strerror(errno)); return -1;
     }
 
     int n = SSL_read(conn->ssl, buf, (int)len);
@@ -521,8 +548,8 @@ ssize_t connection_read(struct connection *conn, void *buf, size_t len, char *er
 
 int connection_write_all(struct connection *conn, const char *buf, size_t len, char *error, size_t error_len) {
     size_t sent = 0;
-    while (sent < len) {
-        if (!conn->use_tls) {
+    while (__builtin_expect(sent < len, 1)) {
+        if (__builtin_expect(!conn->use_tls, 1)) {
             ssize_t n = send(conn->fd, buf + sent, len - sent, 0);
             if (n < 0) {
                 if (is_timeout_errno(errno)) set_error(error, error_len, "Write timeout");
