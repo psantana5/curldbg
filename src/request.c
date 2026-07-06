@@ -25,31 +25,6 @@ struct run_request_task {
 static int run_request(const char *input_url, const struct run_options *opts,
                        struct run_result *out, struct connection_state *reuse);
 
-static const struct resolve_entry *find_resolve_entry(
-    const struct resolve_entry *entries, int count, const char *host, const char *port)
-{
-    for (int i = 0; i < count; i++) {
-        if (strcmp(entries[i].host, host) == 0 && strcmp(entries[i].port, port) == 0)
-            return &entries[i];
-    }
-    return NULL;
-}
-
-static struct addrinfo *build_addrinfo_from_resolve(const struct resolve_entry *re) {
-    size_t total = sizeof(struct addrinfo) + re->ss_len;
-    struct addrinfo *ai = calloc(1, total);
-    if (ai == NULL) return NULL;
-    struct sockaddr *sa = (struct sockaddr *)((char *)ai + sizeof(struct addrinfo));
-    memcpy(sa, &re->ss, re->ss_len);
-    ai->ai_family = re->family;
-    ai->ai_socktype = SOCK_STREAM;
-    ai->ai_protocol = IPPROTO_TCP;
-    ai->ai_addr = sa;
-    ai->ai_addrlen = re->ss_len;
-    ai->ai_next = NULL;
-    return ai;
-}
-
 static void close_upload_file(FILE **file) {
     if (file != NULL && *file != NULL) { fclose(*file); *file = NULL; }
 }
@@ -134,30 +109,6 @@ static int setup_upload_file(const char *upload_path, FILE **upload_file,
     }
     *upload_size = (size_t)st.st_size;
     return 0;
-}
-
-static struct addrinfo *resolve_host(const struct url_info *url,
-                                      int address_family,
-                                      const struct resolve_entry *resolve_entries,
-                                      int resolve_count,
-                                      int dns_timeout_ms,
-                                      struct timespec *dns_start,
-                                      struct timespec *dns_end,
-                                      int *gai_error) {
-    const struct resolve_entry *re = find_resolve_entry(resolve_entries, resolve_count,
-                                                        url->host, url->port);
-    if (re != NULL) {
-        struct addrinfo *addrs = build_addrinfo_from_resolve(re);
-        *gai_error = (addrs != NULL) ? 0 : EAI_FAIL;
-        clock_gettime(CLOCK_MONOTONIC, dns_start);
-        *dns_end = *dns_start;
-        return addrs;
-    }
-    if (dns_timeout_ms <= 0) dns_timeout_ms = 5000;
-    clock_gettime(CLOCK_MONOTONIC, dns_start);
-    struct addrinfo *addrs = resolve_dns_timeout(url, address_family, gai_error, dns_timeout_ms);
-    clock_gettime(CLOCK_MONOTONIC, dns_end);
-    return addrs;
 }
 
 static int establish_connection(struct connection *conn,

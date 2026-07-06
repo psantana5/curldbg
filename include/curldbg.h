@@ -287,6 +287,11 @@ int build_redirect_url(const char *location, const struct url_info *base, char *
 /* --- dns.c --- */
 struct addrinfo *resolve_dns(const struct url_info *url, int address_family, int *gai_error);
 struct addrinfo *resolve_dns_timeout(const struct url_info *url, int address_family, int *gai_error, int timeout_ms);
+struct addrinfo *resolve_host(const struct url_info *url, int address_family,
+                               const struct resolve_entry *resolve_entries,
+                               int resolve_count, int dns_timeout_ms,
+                               struct timespec *dns_start, struct timespec *dns_end,
+                               int *gai_error);
 
 /* --- tls.c --- */
 void warmup_tls(void);
@@ -319,6 +324,10 @@ int send_request(struct connection *conn, const struct url_info *url, const char
 int receive_response(struct connection *conn, const struct timespec *ttfb_start,
                      struct response_info *out, char *error, size_t error_len,
                      FILE *body_out, bool follow_redirects, bool fail_on_http_error, bool head_method);
+
+/* --- compare.c --- */
+int run_compare_family(const struct cmdline_opts *c, struct run_options *opts);
+int run_compare_urls(const struct cmdline_opts *c, struct run_options *opts);
 
 /* --- cookie.c --- */
 void cookie_jar_init(struct cookie_jar *jar);
