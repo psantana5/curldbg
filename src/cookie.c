@@ -79,24 +79,27 @@ void cookie_jar_get_header(struct cookie_jar *jar, const char *host, const char 
                            bool secure_connection, char *out, size_t out_size) {
     out[0] = '\0';
     size_t offset = 0;
+    size_t host_len = strlen(host);
+    size_t path_len = strlen(path);
 
     for (int i = 0; i < jar->count; i++) {
         const struct cookie_entry *e = &jar->entries[i];
 
         if (e->secure && !secure_connection) continue;
 
-        size_t host_len = strlen(host);
         size_t dom_len = strlen(e->domain);
         bool domain_match;
         if (e->include_subdomains) {
             domain_match = (host_len >= dom_len &&
-                strcasecmp(host + host_len - dom_len, e->domain) == 0 &&
+                (dom_len == 0 || strncasecmp(host + host_len - dom_len, e->domain, dom_len) == 0) &&
                 (host_len == dom_len || host[host_len - dom_len - 1] == '.'));
         } else {
-            domain_match = (strcasecmp(host, e->domain) == 0);
+            domain_match = (host_len == dom_len && strncasecmp(host, e->domain, dom_len) == 0);
         }
         if (!domain_match) continue;
-        if (strncmp(path, e->path, strlen(e->path)) != 0) continue;
+
+        size_t e_path_len = strlen(e->path);
+        if (path_len < e_path_len || strncmp(path, e->path, e_path_len) != 0) continue;
 
         if (offset > 0) {
             if (offset + 2 >= out_size) break;

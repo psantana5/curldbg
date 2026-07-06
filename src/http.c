@@ -224,9 +224,12 @@ static int build_body_headers(char *body_headers, size_t body_headers_size,
     return 0;
 }
 
-static int build_request_buffer(const char *verb, const char *request_target,
-                                 const char *host_header, const char *user_agent,
-                                 const char *body_headers, bool include_body_headers,
+static int build_request_buffer(const char *verb, size_t verb_len,
+                                 const char *request_target, size_t request_target_len,
+                                 const char *host_header, size_t host_header_len,
+                                 const char *user_agent, size_t user_agent_len,
+                                 const char *body_headers, size_t body_headers_len,
+                                 bool include_body_headers,
                                  const char *auth_header, size_t auth_len,
                                  const char **extra_headers, size_t extra_header_count,
                                  bool has_host, bool compressed, bool has_accept_encoding,
@@ -234,58 +237,47 @@ static int build_request_buffer(const char *verb, const char *request_target,
                                  char *req, size_t req_size,
                                  char *error, size_t error_len) {
     size_t offset = 0;
-    if (append_str(req, req_size, &offset, verb) != 0) {
-        set_error(error, error_len, "Request is too large"); return -1;
-    }
+#define APPEND_MEM(p, l) do { \
+        if (offset + (l) >= req_size) { \
+            set_error(error, error_len, "Request is too large"); return -1; \
+        } \
+        memcpy(req + offset, (p), (l)); \
+        offset += (l); \
+    } while (0)
+
+    APPEND_MEM(verb, verb_len);
     req[offset++] = ' ';
-    if (append_str(req, req_size, &offset, request_target) != 0) {
-        set_error(error, error_len, "Request is too large"); return -1;
-    }
-    if (append_str(req, req_size, &offset, " HTTP/1.1\r\n") != 0) {
-        set_error(error, error_len, "Request is too large"); return -1;
-    }
+    APPEND_MEM(request_target, request_target_len);
+    APPEND_MEM(" HTTP/1.1\r\n", 11);
     if (!has_host) {
-        if (append_str(req, req_size, &offset, "Host: ") != 0 ||
-            append_str(req, req_size, &offset, host_header) != 0 ||
-            append_str(req, req_size, &offset, "\r\n") != 0) {
-            set_error(error, error_len, "Request is too large"); return -1;
-        }
+        APPEND_MEM("Host: ", 6);
+        APPEND_MEM(host_header, host_header_len);
+        APPEND_MEM("\r\n", 2);
     }
     if (!has_user_agent) {
-        if (append_str(req, req_size, &offset, "User-Agent: ") != 0 ||
-            append_str(req, req_size, &offset, user_agent) != 0 ||
-            append_str(req, req_size, &offset, "\r\n") != 0) {
-            set_error(error, error_len, "Request is too large"); return -1;
-        }
+        APPEND_MEM("User-Agent: ", 12);
+        APPEND_MEM(user_agent, user_agent_len);
+        APPEND_MEM("\r\n", 2);
     }
-
     if (compressed && !has_accept_encoding) {
-        if (append_str(req, req_size, &offset, "Accept-Encoding: gzip, deflate\r\n") != 0) {
-            set_error(error, error_len, "Request is too large"); return -1;
-        }
+        APPEND_MEM("Accept-Encoding: gzip, deflate\r\n", 32);
     }
-
-    if (include_body_headers && body_headers[0] != '\0') {
-        if (append_str(req, req_size, &offset, body_headers) != 0) {
-            set_error(error, error_len, "Request is too large"); return -1;
-        }
+    if (include_body_headers && body_headers_len > 0) {
+        APPEND_MEM(body_headers, body_headers_len);
     }
     if (auth_len > 0) {
-        if (append_str(req, req_size, &offset, auth_header) != 0) {
-            set_error(error, error_len, "Request is too large"); return -1;
-        }
+        APPEND_MEM(auth_header, auth_len);
     }
     for (size_t i = 0; i < extra_header_count; i++) {
         if (extra_headers[i] == NULL) continue;
-        if (append_str(req, req_size, &offset, extra_headers[i]) != 0 ||
-            append_str(req, req_size, &offset, "\r\n") != 0) {
-            set_error(error, error_len, "Request is too large"); return -1;
-        }
+        size_t hlen = strlen(extra_headers[i]);
+        APPEND_MEM(extra_headers[i], hlen);
+        APPEND_MEM("\r\n", 2);
     }
-    if (append_str(req, req_size, &offset, "\r\n") != 0) {
-        set_error(error, error_len, "Request is too large"); return -1;
-    }
+    APPEND_MEM("\r\n", 2);
+    req[offset] = '\0';
     return 0;
+#undef APPEND_MEM
 }
 
 static int write_upload_body(struct connection *conn, FILE *upload_file,
@@ -335,7 +327,7 @@ int send_request(
 
     char host_header[320], body_headers[256], auth_header[1024], auth_b64[512];
     const char *verb = (method != NULL) ? method : "GET";
-    size_t extra_len = 0, auth_len = 0, content_len = 0, req_len;
+    size_t auth_len = 0, content_len = 0;
     bool include_body_headers = false;
     int n;
 
@@ -382,15 +374,6 @@ int send_request(
         }
     }
 
-    for (size_t i = 0; i < extra_header_count; i++) {
-        if (extra_headers[i] != NULL) extra_len += strlen(extra_headers[i]) + 2;
-    }
-
-    req_len = strlen(verb) + strlen(url->path) + strlen(host_header) +
-              strlen(body_headers) + auth_len + extra_len + 128;
-    char *req = malloc(req_len + 1);
-    if (req == NULL) { set_error(error, error_len, "Out of memory building request"); return -1; }
-
     char proxy_abs_uri[2048];
     const char *request_target;
     if (use_proxy) {
@@ -400,14 +383,22 @@ int send_request(
         request_target = url->path;
     }
 
-    if (build_request_buffer(verb, request_target, host_header, user_agent,
-                             body_headers, include_body_headers,
+    size_t verb_len = strlen(verb);
+    size_t request_target_len = strlen(request_target);
+    size_t host_header_len = strlen(host_header);
+    size_t user_agent_len = strlen(user_agent);
+    size_t body_headers_len = include_body_headers ? strlen(body_headers) : 0;
+
+    char req[HEADER_MAX + 1];
+    if (build_request_buffer(verb, verb_len, request_target, request_target_len,
+                             host_header, host_header_len, user_agent, user_agent_len,
+                             body_headers, body_headers_len, include_body_headers,
                              auth_header, auth_len,
                              extra_headers, extra_header_count,
                              has_host, compressed, has_accept_encoding,
                              has_user_agent,
-                             req, req_len + 1, error, error_len) != 0) {
-        free(req); return -1;
+                             req, sizeof(req), error, error_len) != 0) {
+        return -1;
     }
 
     if (conn->verbose) {
@@ -416,7 +407,7 @@ int send_request(
         if (!has_user_agent) fprintf(stderr, "> User-Agent: %s\n", user_agent);
         if (include_body_headers) {
             size_t off = 0;
-            while (off < strlen(body_headers)) {
+            while (off < body_headers_len) {
                 const char *end = strchr(body_headers + off, '\n');
                 if (end == NULL) break;
                 fprintf(stderr, "> ");
@@ -432,8 +423,8 @@ int send_request(
         fprintf(stderr, ">\n");
     }
 
-    if (connection_write_all(conn, req, strlen(req), error, error_len) != 0) { free(req); return -1; }
-    free(req);
+    size_t req_len = strlen(req);
+    if (connection_write_all(conn, req, req_len, error, error_len) != 0) return -1;
 
     if (data_len > 0) return connection_write_all(conn, data, data_len, error, error_len);
 
@@ -533,11 +524,11 @@ int receive_response(
                 if (body_in_hbuf > 0) { memcpy(pending_body, body_start, body_in_hbuf); pending_len = body_in_hbuf; }
                 if (recv_excess > 0) { memcpy(pending_body + pending_len, recv_buf + hbuf_take, recv_excess); pending_len += recv_excess; }
 
+                char *headers_to_parse = header_buf;
                 char headers_only[HEADER_MAX + 1];
-                memcpy(headers_only, header_buf, header_bytes);
-                headers_only[header_bytes] = '\0';
-
                 if (conn->verbose) {
+                    memcpy(headers_only, header_buf, header_bytes);
+                    headers_only[header_bytes] = '\0';
                     char *line = headers_only;
                     while (*line != '\0') {
                         char *nl = strstr(line, "\r\n");
@@ -548,9 +539,12 @@ int receive_response(
                     }
                     memcpy(headers_only, header_buf, header_bytes);
                     headers_only[header_bytes] = '\0';
+                    headers_to_parse = headers_only;
+                } else {
+                    header_buf[header_bytes] = '\0';
                 }
 
-                parse_response_headers(headers_only, out);
+                parse_response_headers(headers_to_parse, out);
 
                 if (out->status_code == 0) {
                     set_error(error, error_len, "Invalid HTTP response status line");

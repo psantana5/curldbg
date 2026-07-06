@@ -129,9 +129,11 @@ long deadline_remaining_ms(const struct timespec *start, int max_ms) {
     if (max_ms <= 0) return -1;
     struct timespec now;
     if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;
-    long elapsed = (long)ms_between(start, &now);
-    if (elapsed >= max_ms) return 0;
-    return max_ms - elapsed;
+    long long elapsed_ns = (long long)(now.tv_sec - start->tv_sec) * 1000000000LL +
+                           (long long)(now.tv_nsec - start->tv_nsec);
+    long elapsed_ms = (long)(elapsed_ns / 1000000LL);
+    if (elapsed_ms >= max_ms) return 0;
+    return max_ms - elapsed_ms;
 }
 
 int url_encode(const char *input, char *output, size_t output_size) {

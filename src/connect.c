@@ -152,6 +152,7 @@ static int connect_tcp_happy_eyeballs(
     const struct addrinfo **v4 = NULL, **v6 = NULL;
     struct he_attempt *attempts = NULL;
     struct pollfd *pfds = NULL;
+    size_t *pfd_to_attempt = NULL;
     size_t next_index = 0;
     int active_count = 0, last_errno = 0;
     long long next_start_ms;
@@ -176,12 +177,14 @@ static int connect_tcp_happy_eyeballs(
         size_t sz_v6 = v6_total * sizeof(*v6);
         size_t sz_att = total * sizeof(*attempts);
         size_t sz_pfd = total * sizeof(*pfds);
-        char *mem = calloc(1, sz_v4 + sz_v6 + sz_att + sz_pfd);
+        size_t sz_idx = total * sizeof(*pfd_to_attempt);
+        char *mem = calloc(1, sz_v4 + sz_v6 + sz_att + sz_pfd + sz_idx);
         if (mem == NULL) { errno = ENOMEM; return -1; }
         v4 = (const struct addrinfo **)mem;
         v6 = (const struct addrinfo **)(mem + sz_v4);
         attempts = (struct he_attempt *)(mem + sz_v4 + sz_v6);
         pfds = (struct pollfd *)(mem + sz_v4 + sz_v6 + sz_att);
+        pfd_to_attempt = (size_t *)(mem + sz_v4 + sz_v6 + sz_att + sz_pfd);
     }
 
     {
@@ -276,6 +279,7 @@ static int connect_tcp_happy_eyeballs(
 
             for (size_t i = 0; i < total; i++) {
                 if (!attempts[i].active) continue;
+                pfd_to_attempt[nfds] = i;
                 pfds[nfds].fd = attempts[i].fd;
                 pfds[nfds].events = POLLOUT;
                 pfds[nfds].revents = 0;
@@ -291,26 +295,23 @@ static int connect_tcp_happy_eyeballs(
 
             for (nfds_t pidx = 0; pidx < nfds; pidx++) {
                 if ((pfds[pidx].revents & (POLLOUT | POLLERR | POLLHUP)) == 0) continue;
-                for (size_t i = 0; i < total; i++) {
-                    if (!attempts[i].active || attempts[i].fd != pfds[pidx].fd) continue;
-                    int so_error = 0;
-                    socklen_t so_len = sizeof(so_error);
-                    if (getsockopt(attempts[i].fd, SOL_SOCKET, SO_ERROR, &so_error, &so_len) != 0)
-                        so_error = errno;
+                size_t i = pfd_to_attempt[pidx];
+                int so_error = 0;
+                socklen_t so_len = sizeof(so_error);
+                if (getsockopt(attempts[i].fd, SOL_SOCKET, SO_ERROR, &so_error, &so_len) != 0)
+                    so_error = errno;
 
-                    if (so_error == 0) {
-                        attempts[i].finished = true; attempts[i].success = true;
-                        attempts[i].connect_ms = (double)(now - race_start_ms);
-                        have_winner = true; winner_fd = attempts[i].fd; winner_idx = i;
-                        attempts[i].active = false; active_count--;
-                    } else {
-                        last_errno = so_error;
-                        attempts[i].finished = true; attempts[i].success = false;
-                        attempts[i].connect_ms = (double)(now - race_start_ms);
-                        close(attempts[i].fd); attempts[i].fd = -1;
-                        attempts[i].active = false; active_count--;
-                    }
-                    break;
+                if (so_error == 0) {
+                    attempts[i].finished = true; attempts[i].success = true;
+                    attempts[i].connect_ms = (double)(now - race_start_ms);
+                    have_winner = true; winner_fd = attempts[i].fd; winner_idx = i;
+                    attempts[i].active = false; active_count--;
+                } else {
+                    last_errno = so_error;
+                    attempts[i].finished = true; attempts[i].success = false;
+                    attempts[i].connect_ms = (double)(now - race_start_ms);
+                    close(attempts[i].fd); attempts[i].fd = -1;
+                    attempts[i].active = false; active_count--;
                 }
             }
 

@@ -431,81 +431,55 @@ static int run_request(const char *input_url, const struct run_options *opts, st
             }
         }
 
+        bool has_cookie_header = false, has_referer_header = false;
+        for (size_t i = 0; i < opts->extra_header_count; i++) {
+            if (opts->extra_headers[i] == NULL) continue;
+            if (strncasecmp(opts->extra_headers[i], "Cookie:", 7) == 0)
+                has_cookie_header = true;
+            else if (strncasecmp(opts->extra_headers[i], "Referer:", 8) == 0)
+                has_referer_header = true;
+        }
+
         char cookie_header_buf[8192] = "";
         const char *cookie_header_str = NULL;
-        if (opts->cookie_jar != NULL) {
+        if (opts->cookie_jar != NULL && !has_cookie_header) {
             cookie_jar_get_header(opts->cookie_jar, url.host, url.path, url.use_tls,
                                   cookie_header_buf, sizeof(cookie_header_buf));
             if (cookie_header_buf[0] != '\0') cookie_header_str = cookie_header_buf;
         }
 
         char referer_header_buf[2048] = "";
-        if (opts->referer != NULL) {
-            bool has_referer = false;
-            for (size_t i = 0; i < opts->extra_header_count; i++) {
-                if (opts->extra_headers[i] != NULL &&
-                    strncasecmp(opts->extra_headers[i], "Referer:", 8) == 0) {
-                    has_referer = true; break;
-                }
-            }
-            if (!has_referer) {
-                int n = snprintf(referer_header_buf, sizeof(referer_header_buf), "Referer: %s", opts->referer);
-                if (n < 0 || (size_t)n >= sizeof(referer_header_buf)) referer_header_buf[0] = '\0';
-            }
+        if (opts->referer != NULL && !has_referer_header) {
+            int n = snprintf(referer_header_buf, sizeof(referer_header_buf), "Referer: %s", opts->referer);
+            if (n < 0 || (size_t)n >= sizeof(referer_header_buf)) referer_header_buf[0] = '\0';
         }
 
         const char **send_headers = opts->extra_headers;
         size_t send_header_count = opts->extra_header_count;
         const char *stack_headers[32];
-        if (cookie_header_str != NULL) {
-            bool has_cookie = false;
-            for (size_t i = 0; i < opts->extra_header_count; i++) {
-                if (opts->extra_headers[i] != NULL &&
-                    strncasecmp(opts->extra_headers[i], "Cookie:", 7) == 0) {
-                    has_cookie = true; break;
-                }
-            }
-            if (!has_cookie) {
-                size_t total = opts->extra_header_count + (referer_header_buf[0] != '\0' ? 2 : 1);
-                if (total <= sizeof(stack_headers) / sizeof(stack_headers[0])) {
-                    for (size_t i = 0; i < opts->extra_header_count; i++)
-                        stack_headers[i] = opts->extra_headers[i];
-                    stack_headers[opts->extra_header_count] = cookie_header_str;
-                    if (referer_header_buf[0] != '\0')
-                        stack_headers[opts->extra_header_count + 1] = referer_header_buf;
-                    send_headers = stack_headers;
-                } else {
-                    const char **dh = malloc(total * sizeof(*dh));
-                    if (dh != NULL) {
-                        for (size_t i = 0; i < opts->extra_header_count; i++)
-                            dh[i] = opts->extra_headers[i];
-                        dh[opts->extra_header_count] = cookie_header_str;
-                        if (referer_header_buf[0] != '\0')
-                            dh[opts->extra_header_count + 1] = referer_header_buf;
-                        send_headers = dh;
-                    }
-                }
-                send_header_count = total;
-            }
-        }
-        if (send_headers == opts->extra_headers && referer_header_buf[0] != '\0') {
-            size_t total = opts->extra_header_count + 1;
+        size_t inject_count = (cookie_header_str != NULL ? 1 : 0) +
+                              (referer_header_buf[0] != '\0' ? 1 : 0);
+        if (inject_count > 0) {
+            size_t total = opts->extra_header_count + inject_count;
             if (total <= sizeof(stack_headers) / sizeof(stack_headers[0])) {
                 for (size_t i = 0; i < opts->extra_header_count; i++)
                     stack_headers[i] = opts->extra_headers[i];
-                stack_headers[opts->extra_header_count] = referer_header_buf;
+                size_t idx = opts->extra_header_count;
+                if (cookie_header_str != NULL) stack_headers[idx++] = cookie_header_str;
+                if (referer_header_buf[0] != '\0') stack_headers[idx++] = referer_header_buf;
                 send_headers = stack_headers;
-                send_header_count = total;
             } else {
                 const char **dh = malloc(total * sizeof(*dh));
                 if (dh != NULL) {
                     for (size_t i = 0; i < opts->extra_header_count; i++)
                         dh[i] = opts->extra_headers[i];
-                    dh[opts->extra_header_count] = referer_header_buf;
+                    size_t idx = opts->extra_header_count;
+                    if (cookie_header_str != NULL) dh[idx++] = cookie_header_str;
+                    if (referer_header_buf[0] != '\0') dh[idx++] = referer_header_buf;
                     send_headers = dh;
-                    send_header_count = total;
                 }
             }
+            send_header_count = total;
         }
 
         int sr = send_request(&conn, &url, method, data, data_len,

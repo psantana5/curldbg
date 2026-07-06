@@ -3,6 +3,17 @@
 #include <stdio.h>
 #include <string.h>
 
+static char *find_connect_end(char *buf, size_t len) {
+    for (size_t i = 0; i + 1 < len; i++) {
+        if (buf[i] == '\n' && buf[i + 1] == '\n')
+            return buf + i + 2;
+        if (i + 3 < len && buf[i] == '\r' && buf[i + 1] == '\n' &&
+            buf[i + 2] == '\r' && buf[i + 3] == '\n')
+            return buf + i + 4;
+    }
+    return NULL;
+}
+
 int proxy_connect(struct connection *conn, const char *proxy_host, const char *proxy_port,
                   const struct url_info *target, int connect_timeout_ms,
                   char *error, size_t error_len) {
@@ -29,9 +40,11 @@ int proxy_connect(struct connection *conn, const char *proxy_host, const char *p
         n = connection_read(conn, response + total, sizeof(response) - 1 - total, error, error_len);
         if (n < 0) return -1;
         if (n == 0) break;
+        size_t prev_total = total;
         total += (size_t)n;
         response[total] = '\0';
-        if (strstr(response, "\r\n\r\n") != NULL || strstr(response, "\n\n") != NULL) break;
+        size_t scan_start = (prev_total > 3) ? prev_total - 3 : 0;
+        if (find_connect_end(response + scan_start, total - scan_start) != NULL) break;
     }
 
     response[total] = '\0';
