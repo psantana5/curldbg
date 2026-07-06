@@ -360,7 +360,7 @@ static int run_request(const char *input_url, const struct run_options *opts, st
     data_len = opts->data_len;
 
     for (;;) {
-        struct url_info url, redirected_url;
+        struct url_info url = {0}, redirected_url = {0};
         struct connect_race_info race_info;
         struct timespec ttfb_start;
         bool can_redirect = false, reuse_connection = false;
