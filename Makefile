@@ -18,9 +18,13 @@ PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man/man1
 TESTD_SRCS := tests/server/testd.c tests/server/route.c tests/server/handlers.c
+TSAN_OBJDIR := obj-tsan
+TSAN_CFLAGS := -g -O1 -fsanitize=thread -Wall -Wextra -Werror -pthread -Iinclude
 SAN_CFLAGS := -g -O0 -fsanitize=address,undefined -Wall -Wextra -Werror -pthread -Iinclude
+TSAN_OBJS := $(SRCS:src/%.c=$(TSAN_OBJDIR)/%.o)
+TSAN_UNIT_OBJS := $(filter-out $(TSAN_OBJDIR)/main.o,$(TSAN_OBJS))
 
-.PHONY: all clean install test test-san static fuzz
+.PHONY: all clean install test test-san test-tsan static fuzz
 
 all: $(TARGET)
 
@@ -45,8 +49,22 @@ $(SAN_OBJDIR)/testd: $(TESTD_SRCS)
 $(SAN_OBJDIR)/unit_test: $(SAN_UNIT_OBJS) tests/unit.c
 	$(CC) $(SAN_CFLAGS) -o $@ tests/unit.c $(SAN_UNIT_OBJS) $(LDLIBS)
 
+$(TSAN_OBJDIR)/%.o: src/%.c include/curldbg.h include/flags.h
+	@mkdir -p $(dir $@)
+	$(CC) $(TSAN_CFLAGS) -c -o $@ $<
+
+$(TSAN_OBJDIR)/curldbg: $(TSAN_OBJS)
+	$(CC) $(TSAN_CFLAGS) -o $@ $^ $(LDLIBS)
+
+$(TSAN_OBJDIR)/testd: $(TESTD_SRCS)
+	@mkdir -p $(TSAN_OBJDIR)
+	$(CC) $(TSAN_CFLAGS) -Wno-unused-result -o $@ $^
+
+$(TSAN_OBJDIR)/unit_test: $(TSAN_UNIT_OBJS) tests/unit.c
+	$(CC) $(TSAN_CFLAGS) -o $@ tests/unit.c $(TSAN_UNIT_OBJS) $(LDLIBS)
+
 clean:
-	rm -rf $(TARGET) $(OBJDIR) $(SAN_OBJDIR)
+	rm -rf $(TARGET) $(OBJDIR) $(SAN_OBJDIR) $(TSAN_OBJDIR)
 
 test: $(TARGET)
 	$(CC) -g -O0 -Wall -Wextra -Werror -pthread -Iinclude \
@@ -77,6 +95,15 @@ test-san: $(SAN_OBJDIR)/unit_test $(SAN_OBJDIR)/testd $(SAN_OBJDIR)/curldbg
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
 	tests/integration/run.sh $(SAN_OBJDIR)/testd $(SAN_OBJDIR)/curldbg
 	@echo "=== test-san: all passed ==="
+
+test-tsan: $(TSAN_OBJDIR)/unit_test $(TSAN_OBJDIR)/testd $(TSAN_OBJDIR)/curldbg
+	@echo "--- unit tests (TSan) ---"
+	TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1 \
+	setarch x86_64 -R ./$(TSAN_OBJDIR)/unit_test
+	@echo "--- integration tests (TSan) ---"
+	TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1 \
+	setarch x86_64 -R tests/integration/run.sh $(TSAN_OBJDIR)/testd $(TSAN_OBJDIR)/curldbg
+	@echo "=== test-tsan: all passed ==="
 
 static: CFLAGS += -no-pie
 static: LDLIBS = -pthread /usr/lib/x86_64-linux-gnu/libssl.a /usr/lib/x86_64-linux-gnu/libcrypto.a
