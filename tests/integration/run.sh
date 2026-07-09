@@ -1,14 +1,16 @@
 #!/bin/bash
 set -e
-PORT=$1
-BASE="http://127.0.0.1:$PORT"
+TESTD="$1"
+CURLDBG="$2"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 FAILED=0
 
+export CURLDBG_BIN="$CURLDBG"
+
 run_test() {
-    local name=$1
+    local name=$1 port=$2
     echo "  $name..."
-    if bash "$DIR/$name" "$PORT"; then
+    if bash "$DIR/$name" "$port"; then
         echo "    OK"
     else
         echo "    FAILED"
@@ -16,16 +18,27 @@ run_test() {
     fi
 }
 
-# Verify server is alive
-if ! ./curldbg -s -o /dev/null -w "%{http_code}" "$BASE/" 2>/dev/null | grep -q 200; then
+"$TESTD" >/tmp/testd.log 2>&1 &
+TDPID=$!
+until [ -s /tmp/testd.log ]; do sleep 0.1; done
+PORT=$(head -1 /tmp/testd.log)
+echo "=== integration tests (port $PORT) ==="
+
+if ! "$CURLDBG" -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/" 2>/dev/null | grep -q 200; then
     echo "ERROR: testd not responding on port $PORT"
+    kill $TDPID 2>/dev/null; wait $TDPID 2>/dev/null
+    rm -f /tmp/testd.log
     exit 1
 fi
 
-run_test test_basic.sh
-run_test test_redirect.sh
-run_test test_chunked.sh
-run_test test_malformed.sh
+run_test test_basic.sh "$PORT"
+run_test test_redirect.sh "$PORT"
+run_test test_chunked.sh "$PORT"
+run_test test_malformed.sh "$PORT"
+
+kill $TDPID 2>/dev/null
+wait $TDPID 2>/dev/null
+rm -f /tmp/testd.log
 
 if [ $FAILED -eq 0 ]; then
     echo "all integration tests passed"

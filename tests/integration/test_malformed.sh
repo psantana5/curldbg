@@ -1,7 +1,7 @@
 #!/bin/bash
 set +e
 PORT=$1; BASE="http://127.0.0.1:$PORT"
-CDBG="./curldbg -s"
+CDBG="${CURLDBG_BIN:-./curldbg} -s"
 PASS=0; FAIL=0
 
 assert_no_crash() {
