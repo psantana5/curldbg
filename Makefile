@@ -1,6 +1,6 @@
 CC := gcc
 OPT ?= -O2
-CFLAGS := $(OPT) -Wall -Wextra -pthread -Iinclude
+CFLAGS := $(OPT) -Wall -Wextra -fstack-protector-strong -D_FORTIFY_SOURCE=2 -pthread -Iinclude
 LDLIBS := -pthread -lssl -lcrypto -lz
 TARGET := curldbg
 OBJDIR := obj
