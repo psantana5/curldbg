@@ -24,7 +24,7 @@ SAN_CFLAGS := -g -O0 -fsanitize=address,undefined -Wall -Wextra -Werror -pthread
 TSAN_OBJS := $(SRCS:src/%.c=$(TSAN_OBJDIR)/%.o)
 TSAN_UNIT_OBJS := $(filter-out $(TSAN_OBJDIR)/main.o,$(TSAN_OBJS))
 
-.PHONY: all clean install test test-novg test-san test-tsan static fuzz cppcheck
+.PHONY: all clean install test test-novg test-san test-tsan static fuzz cppcheck coverage
 
 all: $(TARGET)
 
@@ -139,3 +139,18 @@ cppcheck:
 	cppcheck --enable=warning,performance,portability,style \
 		--error-exitcode=1 --suppress=missingIncludeSystem \
 		-Iinclude src/ tests/server/
+
+coverage:
+	$(MAKE) clean
+	$(MAKE) all CFLAGS="-g -O0 --coverage -Wall -Wextra -Werror -pthread -Iinclude"
+	$(CC) -g -O0 --coverage -Wall -Wextra -Werror -pthread -Iinclude \
+		-o $(OBJDIR)/unit_test tests/unit.c $(UNIT_OBJS) $(LDLIBS)
+	./$(OBJDIR)/unit_test
+	$(CC) -g -O0 --coverage -Wall -Wextra -Wno-unused-result -Werror -Iinclude \
+		-o $(OBJDIR)/testd $(TESTD_SRCS)
+	tests/integration/run.sh $(OBJDIR)/testd ./$(TARGET)
+	lcov --capture --directory $(OBJDIR) --output-file $(OBJDIR)/coverage.info --no-external
+	lcov --remove $(OBJDIR)/coverage.info '*/tests/*' '/usr/*' --output-file $(OBJDIR)/coverage.info
+	lcov --list $(OBJDIR)/coverage.info
+	genhtml $(OBJDIR)/coverage.info --output-directory $(OBJDIR)/coverage
+	@echo "=== coverage: $(OBJDIR)/coverage/index.html ==="

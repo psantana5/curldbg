@@ -74,3 +74,22 @@ jobs:
 
       - name: Static analysis
         run: make cppcheck
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq lcov libssl-dev zlib1g-dev
+
+      - name: Build and measure coverage
+        run: make coverage
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: obj/coverage/
