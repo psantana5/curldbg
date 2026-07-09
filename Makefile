@@ -15,7 +15,7 @@ SRCS := src/main.c src/run.c src/results.c src/util.c src/url.c \
 TESTD_SRCS := tests/server/testd.c tests/server/route.c tests/server/handlers.c
 
 # --- Regular build ---
-CFLAGS := $(OPT) -Wall -Wextra -fstack-protector-strong -D_FORTIFY_SOURCE=2 -pthread -Iinclude
+CFLAGS := $(OPT) -Wall -Wextra -Wshadow -fstack-protector-strong -D_FORTIFY_SOURCE=2 -pthread -Iinclude
 LDLIBS := -pthread -lssl -lcrypto -lz
 OBJS := $(SRCS:src/%.c=$(OBJDIR)/%.o)
 UNIT_OBJS := $(filter-out $(OBJDIR)/main.o,$(OBJS))
