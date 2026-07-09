@@ -24,7 +24,7 @@ SAN_CFLAGS := -g -O0 -fsanitize=address,undefined -Wall -Wextra -Werror -pthread
 TSAN_OBJS := $(SRCS:src/%.c=$(TSAN_OBJDIR)/%.o)
 TSAN_UNIT_OBJS := $(filter-out $(TSAN_OBJDIR)/main.o,$(TSAN_OBJS))
 
-.PHONY: all clean install test test-san test-tsan static fuzz
+.PHONY: all clean install test test-novg test-san test-tsan static fuzz
 
 all: $(TARGET)
 
@@ -84,6 +84,15 @@ test: $(TARGET)
 	else \
 		echo "=== fuzz: skipped (clang not found) ==="; \
 	fi
+
+test-novg: $(TARGET)
+	$(CC) -g -O0 -Wall -Wextra -Werror -pthread -Iinclude \
+		-o $(OBJDIR)/unit_test tests/unit.c $(UNIT_OBJS) $(LDLIBS)
+	./$(OBJDIR)/unit_test
+	@rm -f $(OBJDIR)/unit_test
+	$(CC) -O2 -Wall -Wextra -Wno-unused-result -Iinclude \
+		-o $(OBJDIR)/testd $(TESTD_SRCS)
+	@tests/integration/run.sh $(OBJDIR)/testd ./$(TARGET)
 
 test-san: $(SAN_OBJDIR)/unit_test $(SAN_OBJDIR)/testd $(SAN_OBJDIR)/curldbg
 	@echo "--- unit tests (ASan/UBSan) ---"
