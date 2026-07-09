@@ -159,7 +159,7 @@ cppcheck:
 coverage: CFLAGS := -g -O0 --coverage -Wall -Wextra -Wshadow -Werror -pthread -Iinclude
 coverage:
 	$(MAKE) clean
-	$(MAKE) all
+	$(MAKE) all CFLAGS="$(CFLAGS)"
 	$(CC) $(CFLAGS) -o $(OBJDIR)/unit_test tests/unit.c $(UNIT_OBJS) $(LDLIBS)
 	./$(OBJDIR)/unit_test
 	$(CC) $(CFLAGS) -Wno-unused-result -o $(OBJDIR)/testd $(TESTD_SRCS)
@@ -167,10 +167,10 @@ coverage:
 	lcov --capture --directory $(OBJDIR) --output-file $(OBJDIR)/coverage.info \
 		--rc geninfo_unexecuted_blocks=0 --ignore-errors gcov
 	lcov --remove $(OBJDIR)/coverage.info '*/tests/*' --output-file $(OBJDIR)/coverage.info \
-		--ignore-errors unused
-	lcov --list $(OBJDIR)/coverage.info --ignore-errors unused
+		--ignore-errors empty,unused
+	lcov --list $(OBJDIR)/coverage.info --ignore-errors empty,unused
 	genhtml $(OBJDIR)/coverage.info --output-directory $(OBJDIR)/coverage \
-		--ignore-errors unmapped
+		--ignore-errors unmapped,empty
 	@if [ -n "$$GITHUB_STEP_SUMMARY" ]; then \
 		echo "| Coverage |" >> $$GITHUB_STEP_SUMMARY; \
 		echo "|----------|" >> $$GITHUB_STEP_SUMMARY; \
