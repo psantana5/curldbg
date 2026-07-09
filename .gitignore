@@ -16,4 +16,4 @@ perf_mem.data
 curldbg-fuzz
 obj/unit_test
 obj/
-obj-san/
+obj-*/

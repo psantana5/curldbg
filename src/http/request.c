@@ -9,7 +9,7 @@
 
 static int build_body_headers(char *body_headers, size_t body_headers_size,
                                const char *verb, const char *data, size_t data_len,
-                               FILE *upload_file, size_t upload_size,
+                               const FILE *upload_file, size_t upload_size,
                                bool has_content_type, bool has_content_length,
                                bool chunked_upload, size_t *content_len_out,
                                bool *include_body_headers_out,
@@ -165,11 +165,10 @@ int send_request(
 ) {
     if (user_agent == NULL) user_agent = "curldbg/1.0";
 
-    char host_header[320], body_headers[256], auth_header[1024], auth_b64[512];
+    char host_header[320], body_headers[256], auth_header[1024];
     const char *verb = (method != NULL) ? method : "GET";
     size_t auth_len = 0, content_len = 0;
     bool include_body_headers = false;
-    int n;
 
     format_host_header(url, host_header, sizeof(host_header));
 
@@ -198,10 +197,11 @@ int send_request(
             }
         }
         if (effective_auth != NULL && effective_auth[0] != '\0') {
+            char auth_b64[512];
             if (base64_encode((const unsigned char *)effective_auth, strlen(effective_auth), auth_b64, sizeof(auth_b64)) != 0) {
                 set_error(error, error_len, "Basic auth value is too large"); return -1;
             }
-            n = snprintf(auth_header, sizeof(auth_header), "Authorization: Basic %s\r\n", auth_b64);
+            int n = snprintf(auth_header, sizeof(auth_header), "Authorization: Basic %s\r\n", auth_b64);
             if (n < 0 || (size_t)n >= sizeof(auth_header)) {
                 set_error(error, error_len, "Authorization header is too large"); return -1;
             }

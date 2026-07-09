@@ -98,6 +98,11 @@ int run_compare_urls(const struct cmdline_opts *c, struct run_options *opts) {
     run_two_requests_parallel(c->input_url, opts, &result_a, &ok_a,
                                c->compare_url, opts, &result_b, &ok_b);
 
+    snprintf(status_a, sizeof(status_a), "%d", final_status_code(&result_a));
+    snprintf(status_b, sizeof(status_b), "%d", final_status_code(&result_b));
+    final_endpoint(&result_a, endpoint_a, sizeof(endpoint_a));
+    final_endpoint(&result_b, endpoint_b, sizeof(endpoint_b));
+
     printf("Compare mode:      request profile A vs B\n");
     printf("Profile A URL:     %s\n", c->input_url);
     printf("Profile B URL:     %s\n", c->compare_url);

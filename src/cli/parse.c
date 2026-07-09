@@ -458,6 +458,5 @@ void parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
         if (c->input_url == NULL) c->input_url = argv[i];
         if (c->compare_urls_mode && c->compare_url == NULL && c->url_count >= 2)
             c->compare_url = argv[i];
-        continue;
     }
 }
