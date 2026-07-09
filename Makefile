@@ -1,28 +1,52 @@
 CC := gcc
 OPT ?= -O2
-CFLAGS := $(OPT) -Wall -Wextra -fstack-protector-strong -D_FORTIFY_SOURCE=2 -pthread -Iinclude
-LDLIBS := -pthread -lssl -lcrypto -lz
 TARGET := curldbg
+
+# --- Directories ---
 OBJDIR := obj
 SAN_OBJDIR := obj-san
+TSAN_OBJDIR := obj-tsan
+
+# --- Sources ---
 SRCS := src/main.c src/run.c src/results.c src/util.c src/url.c \
         src/net/dns.c src/net/tls.c src/net/connect.c src/net/proxy.c \
         src/http/request.c src/http/response.c \
         src/cookie.c src/cli/parse.c src/cli/help.c src/output.c src/compare.c
+TESTD_SRCS := tests/server/testd.c tests/server/route.c tests/server/handlers.c
+
+# --- Regular build ---
+CFLAGS := $(OPT) -Wall -Wextra -fstack-protector-strong -D_FORTIFY_SOURCE=2 -pthread -Iinclude
+LDLIBS := -pthread -lssl -lcrypto -lz
 OBJS := $(SRCS:src/%.c=$(OBJDIR)/%.o)
 UNIT_OBJS := $(filter-out $(OBJDIR)/main.o,$(OBJS))
+
+# --- ASan/UBSan ---
+SAN_CFLAGS := -g -O0 -fsanitize=address,undefined -Wall -Wextra -Werror -pthread -Iinclude
 SAN_OBJS := $(SRCS:src/%.c=$(SAN_OBJDIR)/%.o)
 SAN_UNIT_OBJS := $(filter-out $(SAN_OBJDIR)/main.o,$(SAN_OBJS))
-MANPAGE := man/curldbg.1
+
+# --- TSan ---
+TSAN_CFLAGS := -g -O1 -fsanitize=thread -Wall -Wextra -Werror -pthread -Iinclude
+TSAN_OBJS := $(SRCS:src/%.c=$(TSAN_OBJDIR)/%.o)
+TSAN_UNIT_OBJS := $(filter-out $(TSAN_OBJDIR)/main.o,$(TSAN_OBJS))
+
+# --- Install ---
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man/man1
-TESTD_SRCS := tests/server/testd.c tests/server/route.c tests/server/handlers.c
-TSAN_OBJDIR := obj-tsan
-TSAN_CFLAGS := -g -O1 -fsanitize=thread -Wall -Wextra -Werror -pthread -Iinclude
-SAN_CFLAGS := -g -O0 -fsanitize=address,undefined -Wall -Wextra -Werror -pthread -Iinclude
-TSAN_OBJS := $(SRCS:src/%.c=$(TSAN_OBJDIR)/%.o)
-TSAN_UNIT_OBJS := $(filter-out $(TSAN_OBJDIR)/main.o,$(TSAN_OBJS))
+MANPAGE := man/curldbg.1
+
+# --- Test runner template ---
+# $(call run_unit_and_integration,<unit_runner_cmd>)
+define run_unit_and_integration
+	$(CC) -g -O0 -Wall -Wextra -Werror -pthread -Iinclude \
+		-o $(OBJDIR)/unit_test tests/unit.c $(UNIT_OBJS) $(LDLIBS)
+	$(1)
+	@rm -f $(OBJDIR)/unit_test
+	$(CC) -O2 -Wall -Wextra -Wno-unused-result -Iinclude \
+		-o $(OBJDIR)/testd $(TESTD_SRCS)
+	@tests/integration/run.sh $(OBJDIR)/testd ./$(TARGET)
+endef
 
 .PHONY: all clean install test test-novg test-san test-tsan static fuzz cppcheck coverage
 
@@ -67,13 +91,7 @@ clean:
 	rm -rf $(TARGET) $(OBJDIR) $(SAN_OBJDIR) $(TSAN_OBJDIR)
 
 test: $(TARGET)
-	$(CC) -g -O0 -Wall -Wextra -Werror -pthread -Iinclude \
-		-o $(OBJDIR)/unit_test tests/unit.c $(UNIT_OBJS) $(LDLIBS)
-	@valgrind --leak-check=full --error-exitcode=1 -q $(OBJDIR)/unit_test
-	@rm -f $(OBJDIR)/unit_test
-	$(CC) -O2 -Wall -Wextra -Wno-unused-result -Iinclude \
-		-o $(OBJDIR)/testd $(TESTD_SRCS)
-	@tests/integration/run.sh $(OBJDIR)/testd ./$(TARGET)
+	$(call run_unit_and_integration,valgrind --leak-check=full --error-exitcode=1 -q $(OBJDIR)/unit_test)
 	@if command -v clang >/dev/null 2>&1; then \
 		echo "=== fuzz: parse_response_headers (30s) ==="; \
 		$(MAKE) fuzz; \
@@ -86,13 +104,7 @@ test: $(TARGET)
 	fi
 
 test-novg: $(TARGET)
-	$(CC) -g -O0 -Wall -Wextra -Werror -pthread -Iinclude \
-		-o $(OBJDIR)/unit_test tests/unit.c $(UNIT_OBJS) $(LDLIBS)
-	./$(OBJDIR)/unit_test
-	@rm -f $(OBJDIR)/unit_test
-	$(CC) -O2 -Wall -Wextra -Wno-unused-result -Iinclude \
-		-o $(OBJDIR)/testd $(TESTD_SRCS)
-	@tests/integration/run.sh $(OBJDIR)/testd ./$(TARGET)
+	$(call run_unit_and_integration,./$(OBJDIR)/unit_test)
 
 test-san: $(SAN_OBJDIR)/unit_test $(SAN_OBJDIR)/testd $(SAN_OBJDIR)/curldbg
 	@echo "--- unit tests (ASan/UBSan) ---"
