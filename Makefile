@@ -15,8 +15,9 @@ MANPAGE := man/curldbg.1
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man/man1
+TESTD_SRCS := tests/server/testd.c tests/server/route.c tests/server/handlers.c
 
-.PHONY: all clean install test static fuzz
+.PHONY: all clean install test test-san static fuzz
 
 all: $(TARGET)
 
@@ -32,8 +33,6 @@ $(OBJDIR):
 
 clean:
 	rm -rf $(TARGET) $(OBJDIR)
-
-TESTD_SRCS := tests/server/testd.c tests/server/route.c tests/server/handlers.c
 
 test: $(TARGET) $(UNIT_OBJS)
 	@# Unit tests
@@ -66,6 +65,52 @@ test: $(TARGET) $(UNIT_OBJS)
 	else \
 		echo "=== fuzz: skipped (clang not found) ==="; \
 	fi
+
+test-san:
+	@rm -rf $(OBJDIR)-san
+	@mkdir -p $(OBJDIR)-san/net $(OBJDIR)-san/http $(OBJDIR)-san/cli
+	@echo "=== test-san: building with -fsanitize=address,undefined ==="
+	@set -e; \
+	SFLAGS="-g -O0 -fsanitize=address,undefined -Wall -Wextra -Werror -pthread -Iinclude"; \
+	for src in $(SRCS); do \
+		obj=$(OBJDIR)-san/$$(echo $$src | sed 's|^src/||; s|\.c$$|.o|'); \
+		$(CC) $$SFLAGS -c -o $$obj $$src; \
+	done; \
+	T_OBJS=""; \
+	for f in $(OBJDIR)-san/*.o $(OBJDIR)-san/*/*.o; do \
+		case $$f in */main.o) continue ;; esac; \
+		T_OBJS="$$T_OBJS $$f"; \
+	done; \
+	$(CC) $$SFLAGS -o $(OBJDIR)-san/unit_test tests/unit.c $$T_OBJS $(LDLIBS)
+	@echo "--- unit tests (ASan/UBSan) ---"
+	@ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+	./$(OBJDIR)-san/unit_test
+	@echo "--- linking sanitized curldbg ---"
+	@$(CC) -g -O0 -fsanitize=address,undefined -Wall -Wextra -Werror -pthread -Iinclude \
+		-o $(OBJDIR)-san/curldbg $(OBJDIR)-san/*.o $(OBJDIR)-san/*/*.o $(LDLIBS)
+	@echo "--- building sanitized testd ---"
+	@$(CC) -g -O0 -fsanitize=address,undefined -Wall -Wextra -Wno-unused-result -Werror -Iinclude \
+		-o $(OBJDIR)-san/testd $(TESTD_SRCS)
+	@echo "--- integration tests (ASan/UBSan) ---"
+	@if [ -f $(TARGET) ] && [ ! -f $(TARGET).bak ]; then cp $(TARGET) $(TARGET).bak; fi
+	@cp $(OBJDIR)-san/curldbg $(TARGET)
+	@export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1; \
+	export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1; \
+	$(OBJDIR)-san/testd >/tmp/testd.log 2>&1 & \
+	TDPID=$$!; \
+	until [ -s /tmp/testd.log ]; do sleep 0.1; done; \
+	PORT=$$(head -1 /tmp/testd.log); \
+	tests/integration/run.sh $$PORT; \
+	IRC=$$?; \
+	kill $$TDPID 2>/dev/null; wait $$TDPID 2>/dev/null; \
+	rm -f /tmp/testd.log; \
+	if [ $$IRC -ne 0 ]; then \
+		mv $(TARGET).bak $(TARGET); exit $$IRC; \
+	fi
+	@mv $(TARGET).bak $(TARGET)
+	@rm -rf $(OBJDIR)-san
+	@echo "=== test-san: all passed ==="
 
 static: CFLAGS += -no-pie
 static: LDLIBS = -pthread /usr/lib/x86_64-linux-gnu/libssl.a /usr/lib/x86_64-linux-gnu/libcrypto.a
