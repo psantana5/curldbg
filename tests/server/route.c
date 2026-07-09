@@ -34,13 +34,13 @@ int route_parse(int fd, struct request *req) {
     buf[pos] = '\0';
 
     /* Parse request line: METHOD SP PATH SP HTTP/1.X */
-    char *sp1 = strchr(buf, ' ');
+    const char *sp1 = strchr(buf, ' ');
     if (!sp1) return -1;
     size_t method_len = (size_t)(sp1 - buf);
     if (method_len >= sizeof(req->method)) return -1;
     memcpy(req->method, buf, method_len);
 
-    char *sp2 = strchr(sp1 + 1, ' ');
+    const char *sp2 = strchr(sp1 + 1, ' ');
     if (!sp2) {
         /* tolerate missing HTTP version */
         size_t path_len = strlen(sp1 + 1);

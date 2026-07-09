@@ -5,6 +5,7 @@
 #include <strings.h>
 
 void cookie_jar_init(struct cookie_jar *jar) {
+    if (jar == NULL) return;
     memset(jar, 0, sizeof(*jar));
 }
 

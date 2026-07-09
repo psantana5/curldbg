@@ -264,7 +264,7 @@ void print_compare_family_metric(const char *label, double v4, double v6);
 void write_out_expand(const char *fmt, const struct run_result *result);
 
 /* --- util.c --- */
-void die(const char *msg);
+__attribute__((noreturn)) void die(const char *msg);
 void set_error(char *error, size_t error_len, const char *fmt, ...);
 int url_encode(const char *input, char *output, size_t output_size);
 void set_ssl_error(char *error, size_t error_len, const char *prefix);

@@ -21,6 +21,7 @@ static int parse_non_negative_int(const char *value, const char *flag_name) {
 }
 
 void parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
+    if (c == NULL) return;
     memset(c, 0, sizeof(*c));
     c->happy_eyeballs = true;
     c->max_redirects = DEFAULT_MAX_REDIRECTS;

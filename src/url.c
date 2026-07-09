@@ -155,9 +155,9 @@ int build_redirect_url(
     }
 
     if (location[0] == '/' && location[1] == '/') {
-        const char *scheme = base->use_tls ? "https:" : "http:";
-        if (strlen(scheme) + strlen(location) >= out_size) return -1;
-        strcpy(out_url, scheme);
+        const char *proto = base->use_tls ? "https:" : "http:";
+        if (strlen(proto) + strlen(location) >= out_size) return -1;
+        strcpy(out_url, proto);
         strcat(out_url, location);
         return 0;
     }

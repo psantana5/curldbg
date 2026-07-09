@@ -149,7 +149,8 @@ coverage:
 	$(CC) -g -O0 --coverage -Wall -Wextra -Wno-unused-result -Werror -Iinclude \
 		-o $(OBJDIR)/testd $(TESTD_SRCS)
 	tests/integration/run.sh $(OBJDIR)/testd ./$(TARGET)
-	lcov --capture --directory $(OBJDIR) --output-file $(OBJDIR)/coverage.info --no-external
+	lcov --capture --directory $(OBJDIR) --output-file $(OBJDIR)/coverage.info \
+		--rc geninfo_unexecuted_blocks=0
 	lcov --remove $(OBJDIR)/coverage.info '*/tests/*' '/usr/*' --output-file $(OBJDIR)/coverage.info
 	lcov --list $(OBJDIR)/coverage.info
 	genhtml $(OBJDIR)/coverage.info --output-directory $(OBJDIR)/coverage
