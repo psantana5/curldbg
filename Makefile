@@ -48,7 +48,7 @@ define run_unit_and_integration
 	@tests/integration/run.sh $(OBJDIR)/testd ./$(TARGET)
 endef
 
-.PHONY: all clean install test test-novg test-san test-tsan static fuzz cppcheck coverage
+.PHONY: all clean install test test-novg test-san test-tsan check static fuzz cppcheck coverage
 
 all: $(TARGET)
 
@@ -125,6 +125,9 @@ test-tsan: $(TSAN_OBJDIR)/unit_test $(TSAN_OBJDIR)/testd $(TSAN_OBJDIR)/curldbg
 	TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1 \
 	setarch x86_64 -R tests/integration/run.sh $(TSAN_OBJDIR)/testd $(TSAN_OBJDIR)/curldbg
 	@echo "=== test-tsan: all passed ==="
+
+check: test test-san test-tsan
+	@echo "=== check: all targets passed ==="
 
 static: CFLAGS += -no-pie
 static: LDLIBS = -pthread /usr/lib/x86_64-linux-gnu/libssl.a /usr/lib/x86_64-linux-gnu/libcrypto.a
