@@ -57,7 +57,20 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq clang valgrind libssl-dev zlib1g-dev
+          sudo apt-get install -y -qq clang libssl-dev zlib1g-dev
 
       - name: Build and test (clang)
         run: make test-novg CC=clang
+
+  cppcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cppcheck
+
+      - name: Static analysis
+        run: make cppcheck

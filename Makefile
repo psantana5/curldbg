@@ -24,7 +24,7 @@ SAN_CFLAGS := -g -O0 -fsanitize=address,undefined -Wall -Wextra -Werror -pthread
 TSAN_OBJS := $(SRCS:src/%.c=$(TSAN_OBJDIR)/%.o)
 TSAN_UNIT_OBJS := $(filter-out $(TSAN_OBJDIR)/main.o,$(TSAN_OBJS))
 
-.PHONY: all clean install test test-novg test-san test-tsan static fuzz
+.PHONY: all clean install test test-novg test-san test-tsan static fuzz cppcheck
 
 all: $(TARGET)
 
@@ -134,3 +134,8 @@ fuzz:
 	$(FUZZ_CC) $(FUZZ_CFLAGS) -o $(TARGET)-fuzz $(OBJDIR)/fuzz_response.o $(OBJDIR)/fuzz_util.o tests/fuzz_response.c $(FUZZ_LIBS)
 	@echo "Built $(TARGET)-fuzz (libFuzzer). Run with time limit, e.g.:"
 	@echo "  ./$(TARGET)-fuzz -max_total_time=30"
+
+cppcheck:
+	cppcheck --enable=warning,performance,portability,style \
+		--error-exitcode=1 --suppress=missingIncludeSystem \
+		-Iinclude src/ tests/server/
