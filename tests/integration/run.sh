@@ -7,6 +7,11 @@ FAILED=0
 
 export CURLDBG_BIN="$CURLDBG"
 
+setarch_prefix=""
+if command -v setarch >/dev/null 2>&1; then
+    setarch_prefix="setarch $(uname -m) -R"
+fi
+
 run_test() {
     local name=$1 port=$2
     echo "  $name..."
@@ -18,7 +23,7 @@ run_test() {
     fi
 }
 
-"$TESTD" >/tmp/testd.log 2>&1 &
+$setarch_prefix "$TESTD" >/tmp/testd.log 2>&1 &
 TDPID=$!
 until [ -s /tmp/testd.log ]; do sleep 0.1; done
 PORT=$(head -1 /tmp/testd.log)
