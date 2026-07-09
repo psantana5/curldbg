@@ -153,18 +153,19 @@ cppcheck:
 		--inline-suppr \
 		-Iinclude src/ tests/server/
 
+coverage: CFLAGS := -g -O0 --coverage -Wall -Wextra -Wshadow -Werror -pthread -Iinclude
 coverage:
 	$(MAKE) clean
-	$(MAKE) all CFLAGS="-g -O0 --coverage -Wall -Wextra -Werror -pthread -Iinclude"
-	$(CC) -g -O0 --coverage -Wall -Wextra -Werror -pthread -Iinclude \
-		-o $(OBJDIR)/unit_test tests/unit.c $(UNIT_OBJS) $(LDLIBS)
+	$(MAKE) all
+	$(CC) $(CFLAGS) -o $(OBJDIR)/unit_test tests/unit.c $(UNIT_OBJS) $(LDLIBS)
 	./$(OBJDIR)/unit_test
-	$(CC) -g -O0 --coverage -Wall -Wextra -Wno-unused-result -Werror -Iinclude \
-		-o $(OBJDIR)/testd $(TESTD_SRCS)
+	$(CC) $(CFLAGS) -Wno-unused-result -o $(OBJDIR)/testd $(TESTD_SRCS)
 	tests/integration/run.sh $(OBJDIR)/testd ./$(TARGET)
 	lcov --capture --directory $(OBJDIR) --output-file $(OBJDIR)/coverage.info \
-		--rc geninfo_unexecuted_blocks=0
-	lcov --remove $(OBJDIR)/coverage.info '*/tests/*' --output-file $(OBJDIR)/coverage.info
-	lcov --list $(OBJDIR)/coverage.info
-	genhtml $(OBJDIR)/coverage.info --output-directory $(OBJDIR)/coverage
+		--rc geninfo_unexecuted_blocks=0 --ignore-errors gcov
+	lcov --remove $(OBJDIR)/coverage.info '*/tests/*' --output-file $(OBJDIR)/coverage.info \
+		--ignore-errors unused
+	lcov --list $(OBJDIR)/coverage.info --ignore-errors unused
+	genhtml $(OBJDIR)/coverage.info --output-directory $(OBJDIR)/coverage \
+		--ignore-errors unmapped
 	@echo "=== coverage: $(OBJDIR)/coverage/index.html ==="
