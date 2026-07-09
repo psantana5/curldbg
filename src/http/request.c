@@ -124,7 +124,7 @@ static int write_upload_body(struct connection *conn, FILE *upload_file,
         if (chunked_upload) {
             char chunk_hdr[32];
             int hn = snprintf(chunk_hdr, sizeof(chunk_hdr), "%zx\r\n", nread);
-            struct iovec iov[3] = {
+            const struct iovec iov[3] = {
                 { .iov_base = chunk_hdr, .iov_len = (size_t)hn },
                 { .iov_base = buf, .iov_len = nread },
                 { .iov_base = "\r\n", .iov_len = 2 }
@@ -260,7 +260,7 @@ int send_request(
 
     size_t req_len = strlen(req);
     if (data_len > 0) {
-        struct iovec iov[2] = {
+        const struct iovec iov[2] = {
             { .iov_base = (void *)req, .iov_len = req_len },
             { .iov_base = (void *)data, .iov_len = data_len }
         };

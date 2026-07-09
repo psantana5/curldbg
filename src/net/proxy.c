@@ -24,7 +24,6 @@ int proxy_connect(struct connection *conn, const char *proxy_host, const char *p
     char request[2048];
     char response[4096];
     char host_header[320];
-    ssize_t n;
     size_t total = 0;
 
     format_host_header(target, host_header, sizeof(host_header));
@@ -37,7 +36,7 @@ int proxy_connect(struct connection *conn, const char *proxy_host, const char *p
     if (connection_write_all(conn, request, (size_t)nw, error, error_len) != 0) return -1;
 
     while (total < sizeof(response) - 1) {
-        n = connection_read(conn, response + total, sizeof(response) - 1 - total, error, error_len);
+        ssize_t n = connection_read(conn, response + total, sizeof(response) - 1 - total, error, error_len);
         if (n < 0) return -1;
         if (n == 0) break;
         size_t prev_total = total;

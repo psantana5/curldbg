@@ -517,7 +517,7 @@ static int run_request(const char *input_url, const struct run_options *opts,
 
         if (opts->cookie_jar != NULL && out->resp.set_cookie_len > 0) {
             char *buf = out->resp.set_cookie_buf;
-            char *line = buf;
+            const char *line = buf;
             while (*line != '\0') {
                 char *nl = strchr(line, '\n');
                 if (nl != NULL) *nl = '\0';

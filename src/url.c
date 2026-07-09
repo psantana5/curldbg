@@ -144,7 +144,7 @@ int build_redirect_url(
 ) {
     const char *scheme = base->use_tls ? "https" : "http";
     bool is_ipv6_literal = strchr(base->host, ':') != NULL;
-    const char *path_to_use = base->path;
+    const char *path_to_use;
     char base_dir[1024];
     int n;
 
@@ -162,22 +162,22 @@ int build_redirect_url(
         return 0;
     }
 
-    if (location[0] != '/') {
-        const char *slash = strrchr(base->path, '/');
-        if (slash == NULL) {
-            strcpy(base_dir, "/");
-        } else {
-            size_t keep = (size_t)(slash - base->path) + 1;
-            if (keep >= sizeof(base_dir)) return -1;
-            memcpy(base_dir, base->path, keep);
-            base_dir[keep] = '\0';
+    if (location[0] == '/') {
+        path_to_use = location;
+    } else {
+        /* Relative path: resolve against base path directory */
+        strncpy(base_dir, base->path, sizeof(base_dir) - 1);
+        base_dir[sizeof(base_dir) - 1] = '\0';
+        char *last_slash = strrchr(base_dir, '/');
+        if (last_slash != NULL) {
+            size_t keep = (size_t)(last_slash + 1 - base_dir);
+            if (keep < sizeof(base_dir))
+                base_dir[keep] = '\0';
         }
         if (snprintf(base_dir + strlen(base_dir), sizeof(base_dir) - strlen(base_dir), "%s", location) >=
             (int)(sizeof(base_dir) - strlen(base_dir)))
             return -1;
         path_to_use = base_dir;
-    } else {
-        path_to_use = location;
     }
 
     if (base->has_explicit_port) {

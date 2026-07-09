@@ -150,6 +150,7 @@ fuzz:
 cppcheck:
 	cppcheck --enable=warning,performance,portability,style \
 		--error-exitcode=1 --suppress=missingIncludeSystem \
+		--inline-suppr \
 		-Iinclude src/ tests/server/
 
 coverage:
@@ -163,7 +164,7 @@ coverage:
 	tests/integration/run.sh $(OBJDIR)/testd ./$(TARGET)
 	lcov --capture --directory $(OBJDIR) --output-file $(OBJDIR)/coverage.info \
 		--rc geninfo_unexecuted_blocks=0
-	lcov --remove $(OBJDIR)/coverage.info '*/tests/*' '/usr/*' --output-file $(OBJDIR)/coverage.info
+	lcov --remove $(OBJDIR)/coverage.info '*/tests/*' --output-file $(OBJDIR)/coverage.info
 	lcov --list $(OBJDIR)/coverage.info
 	genhtml $(OBJDIR)/coverage.info --output-directory $(OBJDIR)/coverage
 	@echo "=== coverage: $(OBJDIR)/coverage/index.html ==="

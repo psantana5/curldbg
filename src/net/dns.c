@@ -128,7 +128,7 @@ static struct addrinfo *dns_cache_lookup(const char *host, const char *port, int
 }
 
 static void dns_cache_store(const char *host, const char *port, int family,
-                            struct addrinfo *addrs) {
+                            const struct addrinfo *addrs) {
     if (addrs == NULL) return;
 
     char key[256 + 16 + 16];

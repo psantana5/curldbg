@@ -31,7 +31,7 @@ void parse_response_headers(char *headers, struct response_info *out) {
     if (*(nl - 1) == '\r') *(nl - 1) = '\0';
     *nl = '\0';
 
-    char *end = headers + len;
+    const char *end = headers + len;
     {
         const char *sp = headers;
         while (*sp && *sp != ' ') sp++;
@@ -73,9 +73,9 @@ void parse_response_headers(char *headers, struct response_info *out) {
                            strncasecmp(line + 2, "ntent-Length:", 13) == 0) {
                     const char *val = line + 15;
                     trim_spaces((char **)&val);
-                    char *end = NULL;
-                    long cl = strtol(val, &end, 10);
-                    if (*end == '\0' && cl >= 0) out->content_length = cl;
+                    char *endp = NULL;
+                    long cl = strtol(val, &endp, 10);
+                    if (*endp == '\0' && cl >= 0) out->content_length = cl;
                 }
             } else if (c == 't' && line_len >= 18 && line[1] == 'r' &&
                        strncasecmp(line + 2, "ansfer-Encoding:", 16) == 0) {
@@ -135,6 +135,8 @@ static size_t write_body_maybe_decomp(const char *buf, size_t len, FILE *body_ou
     strm->avail_in = (unsigned int)len;
     do {
         unsigned char obuf[RESPONSE_READ_BUF];
+        /* safe: obuf stays in scope for the inflate call and write_body_data that follows */
+        // cppcheck-suppress autoVariables
         strm->next_out = obuf;
         strm->avail_out = sizeof(obuf);
         int ret = inflate(strm, Z_NO_FLUSH);
@@ -272,7 +274,6 @@ int receive_response(
             header_len += (size_t)n;
             if (header_len >= RECV_BUF_SIZE) {
                 header_len = RECV_BUF_SIZE - 1;
-                recv_buf[header_len] = '\0';
             }
             recv_buf[header_len] = '\0';
 
