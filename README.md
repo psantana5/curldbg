@@ -1,6 +1,7 @@
 # curldbg
 
 [![CI](https://github.com/psantana5/curldbg/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/psantana5/curldbg/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/badge/coverage-report-blue)](https://github.com/psantana5/curldbg/actions/workflows/ci.yml)
 
 curldbg is a lightweight HTTP/HTTPS client that doubles as both a **debugging tool**
 and a **curl-compatible CLI** for scripting. It speaks raw HTTP/1.1 over TLS, reports

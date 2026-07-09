@@ -171,4 +171,10 @@ coverage:
 	lcov --list $(OBJDIR)/coverage.info --ignore-errors unused
 	genhtml $(OBJDIR)/coverage.info --output-directory $(OBJDIR)/coverage \
 		--ignore-errors unmapped
+	@if [ -n "$$GITHUB_STEP_SUMMARY" ]; then \
+		echo "| Coverage |" >> $$GITHUB_STEP_SUMMARY; \
+		echo "|----------|" >> $$GITHUB_STEP_SUMMARY; \
+		lcov --summary $(OBJDIR)/coverage.info 2>&1 | grep lines | tr -d '\n' | \
+			sed 's/.*lines\.*: //' >> $$GITHUB_STEP_SUMMARY; \
+	fi
 	@echo "=== coverage: $(OBJDIR)/coverage/index.html ==="
