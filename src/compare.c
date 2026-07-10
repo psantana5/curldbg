@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static bool is_localhost_url(const char *input_url) {
+bool is_localhost_url(const char *input_url) {
     struct url_info url;
     if (input_url == NULL) return false;
     if (parse_url(input_url, &url) != 0) return false;

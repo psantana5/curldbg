@@ -14,7 +14,7 @@
 #include <netinet/tcp.h>
 #include <poll.h>
 
-static int output_filename_from_url(const char *input_url, char *out, size_t out_size);
+int output_filename_from_url(const char *input_url, char *out, size_t out_size);
 
 static void configure_output_buffering(void) {
     if (isatty(fileno(stdout))) { (void)setvbuf(stdout, NULL, _IOLBF, 0); return; }
@@ -48,26 +48,6 @@ static void print_easter_eggs(const struct cmdline_opts *c) {
     if (c->wizard_mode) print_wizard_banner();
     if (c->fika_mode) print_fika_banner();
     if (c->debug_chaos) fprintf(stderr, "Segmentation fault (not really)\n");
-}
-
-static int output_filename_from_url(const char *input_url, char *out, size_t out_size) {
-    struct url_info url;
-    if (parse_url(input_url, &url) != 0) return -1;
-    const char *path = url.path;
-    const char *slash = strrchr(path, '/');
-    const char *segment = (slash != NULL) ? slash + 1 : path;
-    if (segment[0] == '\0')
-        return (snprintf(out, out_size, "index.html") < 0 || (size_t)snprintf(out, out_size, "index.html") >= out_size) ? -1 : 0;
-    char name_buf[1024];
-    snprintf(name_buf, sizeof(name_buf), "%s", segment);
-    char *cut = strpbrk(name_buf, "?#");
-    if (cut != NULL) *cut = '\0';
-    int n;
-    if (name_buf[0] == '\0')
-        n = snprintf(out, out_size, "index.html");
-    else
-        n = snprintf(out, out_size, "%s", name_buf);
-    return (n < 0 || (size_t)n >= out_size) ? -1 : 0;
 }
 
 /* --- main --- */

@@ -16,11 +16,11 @@ void final_endpoint(const struct run_result *result, char *out, size_t out_size)
     snprintf(out, out_size, "%s (%s)", hop->connected_ip, family_name(hop->connected_family));
 }
 
-static bool is_loopback_ip(const char *ip) {
+bool is_loopback_ip(const char *ip) {
     return ip != NULL && (strcmp(ip, "127.0.0.1") == 0 || strcmp(ip, "::1") == 0);
 }
 
-static const char *family_short_name(int family) {
+const char *family_short_name(int family) {
     if (family == AF_INET) return "v4";
     if (family == AF_INET6) return "v6";
     return "?";

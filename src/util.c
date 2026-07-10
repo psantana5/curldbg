@@ -107,7 +107,7 @@ void fill_connected_endpoint(
     char *connected_ip, size_t connected_ip_size,
     int *connected_family
 ) {
-    if (connected_ip_size == 0) return;
+    if (ai == NULL || connected_ip_size == 0) return;
     socklen_t hostlen = (connected_ip_size > (size_t)UINT_MAX) ? (socklen_t)UINT_MAX : (socklen_t)connected_ip_size;
     if (getnameinfo(ai->ai_addr, ai->ai_addrlen, connected_ip, hostlen, NULL, 0, NI_NUMERICHOST) != 0) {
         strncpy(connected_ip, "unknown", connected_ip_size);

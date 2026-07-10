@@ -101,7 +101,7 @@ void parse_response_headers(char *headers, struct response_info *out) {
     }
 }
 
-static char *find_header_end(char *buf, size_t len) {
+char *find_header_end(char *buf, size_t len) {
     for (size_t i = 0; i + 1 < len; i++) {
         if (buf[i] == '\n' && buf[i + 1] == '\n')
             return buf + i + 2;
@@ -112,7 +112,7 @@ static char *find_header_end(char *buf, size_t len) {
     return NULL;
 }
 
-static size_t write_body_data(const char *buf, size_t len, FILE *body_out, struct response_info *out) {
+size_t write_body_data(const char *buf, size_t len, FILE *body_out, struct response_info *out) {
     if (body_out != NULL && len > 0) {
         if (fwrite(buf, 1, len, body_out) != len) return (size_t)-1;
     }

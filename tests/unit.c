@@ -847,6 +847,348 @@ TEST(test_resolve_host_resolve_entry) {
     freeaddrinfo(addrs);
 }
 
+extern int output_filename_from_url(const char *input_url, char *out, size_t out_size);
+extern char *find_header_end(char *buf, size_t len);
+extern size_t write_body_data(const char *buf, size_t len, FILE *body_out, struct response_info *out);
+extern bool is_loopback_ip(const char *ip);
+extern const char *family_short_name(int family);
+extern bool is_localhost_url(const char *input_url);
+
+TEST(test_set_error) {
+    char buf[64];
+    set_error(buf, sizeof(buf), "test %d", 42);
+    ASSERT_STR_EQ(buf, "test 42", "set_error format");
+}
+
+TEST(test_set_error_truncated) {
+    char buf[8];
+    set_error(buf, sizeof(buf), "long message here");
+    ASSERT_INT_EQ(strlen(buf), 7, "set_error truncated");
+}
+
+TEST(test_set_error_null_buffer) {
+    set_error(NULL, 0, "should not crash");
+    ASSERT_INT_EQ(1, 1, "set_error null buffer doesn't crash");
+}
+
+TEST(test_set_error_zero_length) {
+    char buf[1];
+    set_error(buf, 0, "should not crash");
+    ASSERT_INT_EQ(1, 1, "set_error zero length doesn't crash");
+}
+
+static int test_write_out_capture(const char *fmt, const struct run_result *r, char *out, size_t out_size) {
+    FILE *tmp = tmpfile();
+    if (tmp == NULL) return -1;
+    int saved = dup(STDOUT_FILENO);
+    dup2(fileno(tmp), STDOUT_FILENO);
+    write_out_expand(fmt, r);
+    fflush(stdout);
+    dup2(saved, STDOUT_FILENO);
+    close(saved);
+    rewind(tmp);
+    size_t n = fread(out, 1, out_size - 1, tmp);
+    out[n] = '\0';
+    fclose(tmp);
+    return 0;
+}
+
+TEST(test_write_out_expand_http_code) {
+    struct run_result r;
+    memset(&r, 0, sizeof(r));
+    r.hop_count = 1;
+    r.hops = calloc(1, sizeof(r.hops[0]));
+    r.hops[0].status_code = 200;
+    char out[64];
+    test_write_out_capture("%{http_code}", &r, out, sizeof(out));
+    ASSERT_STR_EQ(out, "200", "http_code");
+    free(r.hops);
+}
+
+TEST(test_write_out_expand_time_total) {
+    struct run_result r;
+    memset(&r, 0, sizeof(r));
+    r.total_ms = 123456.0;
+    char out[64];
+    test_write_out_capture("%{time_total}", &r, out, sizeof(out));
+    ASSERT_STR_EQ(out, "123.456", "time_total");
+}
+
+TEST(test_write_out_expand_url_effective) {
+    struct run_result r;
+    memset(&r, 0, sizeof(r));
+    r.hop_count = 1;
+    r.hops = calloc(1, sizeof(r.hops[0]));
+    strcpy(r.final_url, "https://example.com");
+    char out[256];
+    test_write_out_capture("%{url_effective}", &r, out, sizeof(out));
+    ASSERT_STR_EQ(out, "https://example.com", "url_effective");
+    free(r.hops);
+}
+
+TEST(test_write_out_expand_num_redirects) {
+    struct run_result r;
+    memset(&r, 0, sizeof(r));
+    r.hop_count = 3;
+    r.hops = calloc(3, sizeof(r.hops[0]));
+    char out[64];
+    test_write_out_capture("%{num_redirects}", &r, out, sizeof(out));
+    ASSERT_STR_EQ(out, "2", "num_redirects");
+    free(r.hops);
+}
+
+TEST(test_write_out_expand_redirect_url) {
+    struct run_result r;
+    memset(&r, 0, sizeof(r));
+    r.hop_count = 1;
+    r.hops = calloc(1, sizeof(r.hops[0]));
+    r.hops[0].has_redirect_target = true;
+    strcpy(r.hops[0].redirect_to_host, "other.com");
+    char out[256];
+    test_write_out_capture("%{redirect_url}", &r, out, sizeof(out));
+    ASSERT_STR_EQ(out, "other.com", "redirect_url hostname");
+    free(r.hops);
+}
+
+TEST(test_write_out_expand_newline_escape) {
+    struct run_result r;
+    memset(&r, 0, sizeof(r));
+    char out[64];
+    test_write_out_capture("\\n", &r, out, sizeof(out));
+    ASSERT_STR_EQ(out, "\n", "newline escape");
+}
+
+TEST(test_write_out_expand_unknown_var) {
+    struct run_result r;
+    memset(&r, 0, sizeof(r));
+    r.hop_count = 1;
+    r.hops = calloc(1, sizeof(r.hops[0]));
+    char out[64];
+    test_write_out_capture("%{unknown_var}", &r, out, sizeof(out));
+    ASSERT_STR_EQ(out, "", "unknown var prints nothing");
+    free(r.hops);
+}
+
+TEST(test_output_filename_from_url_basic) {
+    char out[256];
+    output_filename_from_url("https://example.com/path/file.html", out, sizeof(out));
+    ASSERT_STR_EQ(out, "file.html", "filename from path");
+}
+
+TEST(test_output_filename_from_url_root) {
+    char out[256];
+    output_filename_from_url("https://example.com/", out, sizeof(out));
+    ASSERT_STR_EQ(out, "index.html", "root path defaults");
+}
+
+TEST(test_output_filename_from_url_query) {
+    char out[256];
+    output_filename_from_url("https://example.com/file.html?q=1", out, sizeof(out));
+    ASSERT_STR_EQ(out, "file.html", "query stripped");
+}
+
+TEST(test_output_filename_from_url_fragment) {
+    char out[256];
+    output_filename_from_url("https://example.com/file.html#section", out, sizeof(out));
+    ASSERT_STR_EQ(out, "file.html", "fragment stripped");
+}
+
+TEST(test_output_filename_from_url_empty) {
+    char out[256];
+    output_filename_from_url("https://example.com", out, sizeof(out));
+    ASSERT_STR_EQ(out, "index.html", "bare host defaults");
+}
+
+TEST(test_output_filename_from_url_overflow) {
+    char out[4];
+    int rc = output_filename_from_url("https://example.com/longname.html", out, sizeof(out));
+    ASSERT_INT_EQ(rc, -1, "overflow returns -1");
+}
+
+TEST(test_find_header_end_rnrn) {
+    char buf[] = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+    char *body = find_header_end(buf, strlen(buf));
+    ASSERT_PTR_NOTNULL(body, "found delimiter");
+    ASSERT_STR_EQ(body, "hello", "body starts correctly");
+}
+
+TEST(test_find_header_end_nn) {
+    char buf[] = "HTTP/1.1 200 OK\nContent-Length: 5\n\nhello";
+    char *body = find_header_end(buf, strlen(buf));
+    ASSERT_PTR_NOTNULL(body, "found LF-only delimiter");
+    ASSERT_STR_EQ(body, "hello", "body starts correctly");
+}
+
+TEST(test_find_header_end_no_delimiter) {
+    char buf[] = "HTTP/1.1 200 OK\r\nContent-Length: 5";
+    char *body = find_header_end(buf, strlen(buf));
+    ASSERT_TRUE(body == NULL, "no delimiter returns NULL");
+}
+
+TEST(test_find_header_end_at_start) {
+    char buf[] = "\r\n\r\nbody here";
+    char *body = find_header_end(buf, strlen(buf));
+    ASSERT_PTR_NOTNULL(body, "found at start");
+    ASSERT_STR_EQ(body, "body here", "body at start");
+}
+
+TEST(test_write_body_data_to_file) {
+    struct response_info out;
+    memset(&out, 0, sizeof(out));
+    FILE *tmp = tmpfile();
+    write_body_data("hello", 5, tmp, &out);
+    rewind(tmp);
+    char got[16];
+    size_t n = fread(got, 1, sizeof(got) - 1, tmp);
+    got[n] = '\0';
+    ASSERT_STR_EQ(got, "hello", "data written to file");
+    fclose(tmp);
+}
+
+TEST(test_write_body_data_preview) {
+    struct response_info out;
+    memset(&out, 0, sizeof(out));
+    write_body_data("abcdefghij", 10, NULL, &out);
+    ASSERT_INT_EQ(out.preview_len, 10, "preview length");
+    ASSERT_STR_EQ(out.preview, "abcdefghij", "preview content");
+}
+
+TEST(test_write_body_data_null_file) {
+    struct response_info out;
+    memset(&out, 0, sizeof(out));
+    size_t rc = write_body_data("ok", 2, NULL, &out);
+    ASSERT_INT_EQ((int)rc, 0, "null file succeeds");
+}
+
+TEST(test_final_status_code_no_hops) {
+    struct run_result r;
+    memset(&r, 0, sizeof(r));
+    r.hop_count = 0;
+    ASSERT_INT_EQ(final_status_code(&r), 0, "no hops returns 0");
+}
+
+TEST(test_final_status_code_one_hop) {
+    struct run_result r;
+    memset(&r, 0, sizeof(r));
+    r.hop_count = 1;
+    r.hops = calloc(1, sizeof(r.hops[0]));
+    r.hops[0].status_code = 200;
+    ASSERT_INT_EQ(final_status_code(&r), 200, "one hop");
+    free(r.hops);
+}
+
+TEST(test_final_status_code_multi_hop) {
+    struct run_result r;
+    memset(&r, 0, sizeof(r));
+    r.hop_count = 3;
+    r.hops = calloc(3, sizeof(r.hops[0]));
+    r.hops[0].status_code = 302;
+    r.hops[1].status_code = 301;
+    r.hops[2].status_code = 200;
+    ASSERT_INT_EQ(final_status_code(&r), 200, "last hop status");
+    free(r.hops);
+}
+
+TEST(test_final_endpoint_ipv4) {
+    struct run_result r;
+    memset(&r, 0, sizeof(r));
+    r.hop_count = 1;
+    r.hops = calloc(1, sizeof(r.hops[0]));
+    strcpy(r.hops[0].connected_ip, "10.0.0.1");
+    r.hops[0].connected_family = AF_INET;
+    char out[64];
+    final_endpoint(&r, out, sizeof(out));
+    ASSERT_STR_EQ(out, "10.0.0.1 (IPv4)", "IPv4 endpoint");
+    free(r.hops);
+}
+
+TEST(test_final_endpoint_no_hops) {
+    struct run_result r;
+    memset(&r, 0, sizeof(r));
+    r.hop_count = 0;
+    char out[64];
+    final_endpoint(&r, out, sizeof(out));
+    ASSERT_STR_EQ(out, "n/a", "no hops endpoint");
+}
+
+TEST(test_family_short_name_v4) {
+    ASSERT_STR_EQ(family_short_name(AF_INET), "v4", "AF_INET");
+}
+
+TEST(test_family_short_name_v6) {
+    ASSERT_STR_EQ(family_short_name(AF_INET6), "v6", "AF_INET6");
+}
+
+TEST(test_family_short_name_other) {
+    ASSERT_STR_EQ(family_short_name(AF_UNIX), "?", "other family");
+}
+
+TEST(test_is_loopback_ip_v4) {
+    ASSERT_TRUE(is_loopback_ip("127.0.0.1"), "127.0.0.1 is loopback");
+}
+
+TEST(test_is_loopback_ip_v6) {
+    ASSERT_TRUE(is_loopback_ip("::1"), "::1 is loopback");
+}
+
+TEST(test_is_loopback_ip_remote) {
+    ASSERT_FALSE(is_loopback_ip("8.8.8.8"), "8.8.8.8 not loopback");
+}
+
+TEST(test_is_localhost_url_localhost) {
+    ASSERT_TRUE(is_localhost_url("http://localhost:8080/path"), "localhost hostname");
+}
+
+TEST(test_is_localhost_url_ipv4) {
+    ASSERT_TRUE(is_localhost_url("https://127.0.0.1/"), "127.0.0.1");
+}
+
+TEST(test_is_localhost_url_ipv6) {
+    ASSERT_TRUE(is_localhost_url("http://[::1]:80"), "::1 IPv6");
+}
+
+TEST(test_is_localhost_url_remote) {
+    ASSERT_FALSE(is_localhost_url("https://example.com"), "remote host");
+}
+
+TEST(test_fill_connected_endpoint_ipv4) {
+    struct addrinfo ai;
+    struct sockaddr_in sin;
+    memset(&ai, 0, sizeof(ai));
+    memset(&sin, 0, sizeof(sin));
+    sin.sin_family = AF_INET;
+    sin.sin_port = htons(80);
+    inet_pton(AF_INET, "1.2.3.4", &sin.sin_addr);
+    ai.ai_family = AF_INET;
+    ai.ai_addr = (struct sockaddr *)&sin;
+    ai.ai_addrlen = sizeof(sin);
+    char ip[64];
+    int family = 0;
+    fill_connected_endpoint(&ai, ip, sizeof(ip), &family);
+    ASSERT_STR_EQ(ip, "1.2.3.4", "IP address");
+    ASSERT_INT_EQ(family, AF_INET, "family set");
+}
+
+TEST(test_fill_connected_endpoint_null) {
+    char ip[64] = "unchanged";
+    int family = 99;
+    fill_connected_endpoint(NULL, ip, sizeof(ip), &family);
+    ASSERT_STR_EQ(ip, "unchanged", "null addrinfo leaves buffer unchanged");
+}
+
+TEST(test_set_nonblocking) {
+    int fds[2];
+    ASSERT_INT_EQ(pipe(fds), 0, "pipe created");
+    ASSERT_INT_EQ(set_nonblocking(fds[0], true), 0, "set nonblocking");
+    int flags = fcntl(fds[0], F_GETFL);
+    ASSERT_TRUE(flags & O_NONBLOCK, "O_NONBLOCK set");
+    ASSERT_INT_EQ(set_nonblocking(fds[0], false), 0, "clear nonblocking");
+    flags = fcntl(fds[0], F_GETFL);
+    ASSERT_FALSE(flags & O_NONBLOCK, "O_NONBLOCK cleared");
+    close(fds[0]);
+    close(fds[1]);
+}
+
 /* ================================================================
  * Main
  * ================================================================ */
@@ -939,6 +1281,60 @@ int main(void) {
     test_resolve_host_dns();
     test_resolve_host_cache();
     test_resolve_host_resolve_entry();
+
+    test_set_error();
+    test_set_error_truncated();
+    test_set_error_null_buffer();
+    test_set_error_zero_length();
+
+    test_write_out_expand_http_code();
+    test_write_out_expand_time_total();
+    test_write_out_expand_url_effective();
+    test_write_out_expand_num_redirects();
+    test_write_out_expand_redirect_url();
+    test_write_out_expand_newline_escape();
+    test_write_out_expand_unknown_var();
+
+    test_output_filename_from_url_basic();
+    test_output_filename_from_url_root();
+    test_output_filename_from_url_query();
+    test_output_filename_from_url_fragment();
+    test_output_filename_from_url_empty();
+    test_output_filename_from_url_overflow();
+
+    test_find_header_end_rnrn();
+    test_find_header_end_nn();
+    test_find_header_end_no_delimiter();
+    test_find_header_end_at_start();
+
+    test_write_body_data_to_file();
+    test_write_body_data_preview();
+    test_write_body_data_null_file();
+
+    test_final_status_code_no_hops();
+    test_final_status_code_one_hop();
+    test_final_status_code_multi_hop();
+
+    test_final_endpoint_ipv4();
+    test_final_endpoint_no_hops();
+
+    test_family_short_name_v4();
+    test_family_short_name_v6();
+    test_family_short_name_other();
+
+    test_is_loopback_ip_v4();
+    test_is_loopback_ip_v6();
+    test_is_loopback_ip_remote();
+
+    test_is_localhost_url_localhost();
+    test_is_localhost_url_ipv4();
+    test_is_localhost_url_ipv6();
+    test_is_localhost_url_remote();
+
+    test_fill_connected_endpoint_ipv4();
+    test_fill_connected_endpoint_null();
+
+    test_set_nonblocking();
 
     printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
            tests_run - tests_failed, tests_failed, tests_run);
