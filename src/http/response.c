@@ -155,7 +155,7 @@ static size_t write_body_maybe_decomp(const char *buf, size_t len, FILE *body_ou
     return 0;
 }
 
-static size_t chunked_write(const char *buf, size_t len, FILE *body_out, struct response_info *out,
+size_t chunked_write(const char *buf, size_t len, FILE *body_out, struct response_info *out,
                             int *state, unsigned long *chunk_rem, char *line_buf, size_t *line_len,
                             z_stream *decomp_strm, bool decompress, char *error, size_t error_len) {
     size_t consumed = 0;

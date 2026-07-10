@@ -7,7 +7,7 @@
 #include <strings.h>
 #include <unistd.h>
 
-static int build_body_headers(char *body_headers, size_t body_headers_size,
+int build_body_headers(char *body_headers, size_t body_headers_size,
                                const char *verb, const char *data, size_t data_len,
                                const FILE *upload_file, size_t upload_size,
                                bool has_content_type, bool has_content_length,
@@ -60,7 +60,7 @@ static int build_body_headers(char *body_headers, size_t body_headers_size,
     return 0;
 }
 
-static int build_request_buffer(const char *verb, size_t verb_len,
+int build_request_buffer(const char *verb, size_t verb_len,
                                  const char *request_target, size_t request_target_len,
                                  const char *host_header, size_t host_header_len,
                                  const char *user_agent, size_t user_agent_len,

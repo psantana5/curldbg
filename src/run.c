@@ -67,7 +67,7 @@ void run_two_requests_parallel(const char *url_a, const struct run_options *opts
     *ok_b = task_b.ok;
 }
 
-static int setup_upload_file(const char *upload_path, FILE **upload_file,
+int setup_upload_file(const char *upload_path, FILE **upload_file,
                               size_t *upload_size, bool *chunked_upload,
                               char *error, size_t error_len) {
     *upload_file = NULL;
@@ -271,7 +271,7 @@ static int establish_connection(struct connection *conn,
     return 0;
 }
 
-static bool is_connection_error(const char *error) {
+bool is_connection_error(const char *error) {
     return (strncmp(error, "Write failed", 12) == 0 ||
             strncmp(error, "Read failed", 11) == 0 ||
             strncmp(error, "Write timeout", 13) == 0 ||

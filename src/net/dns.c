@@ -13,7 +13,7 @@
 
 #define DNS_CACHE_SIZE 32
 
-static const struct resolve_entry *find_resolve_entry(
+const struct resolve_entry *find_resolve_entry(
     const struct resolve_entry *entries, int count, const char *host, const char *port)
 {
     for (int i = 0; i < count; i++) {
@@ -23,7 +23,7 @@ static const struct resolve_entry *find_resolve_entry(
     return NULL;
 }
 
-static struct addrinfo *build_addrinfo_from_resolve(const struct resolve_entry *re) {
+struct addrinfo *build_addrinfo_from_resolve(const struct resolve_entry *re) {
     size_t total = sizeof(struct addrinfo) + re->ss_len;
     struct addrinfo *ai = calloc(1, total);
     if (ai == NULL) return NULL;
@@ -72,7 +72,7 @@ static pthread_mutex_t g_dns_cache_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct dns_cache_entry g_dns_cache[DNS_CACHE_SIZE];
 static int g_dns_cache_count = 0;
 
-static void dns_cache_key(const char *host, const char *port, int family,
+void dns_cache_key(const char *host, const char *port, int family,
                           char *out, size_t out_size, uint32_t *hash_out) {
     int n = snprintf(out, out_size, "%s:%s:%d", host, port ? port : "", family);
     if (hash_out != NULL && n > 0) {
@@ -83,7 +83,7 @@ static void dns_cache_key(const char *host, const char *port, int family,
     }
 }
 
-static struct addrinfo *copy_addrinfo_list(const struct addrinfo *src) {
+struct addrinfo *copy_addrinfo_list(const struct addrinfo *src) {
     struct addrinfo *head = NULL;
     struct addrinfo **tail = &head;
 

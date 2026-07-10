@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include <arpa/inet.h>
+#include <zlib.h>
 
 static int tests_run = 0;
 static int tests_failed = 0;
@@ -853,6 +854,25 @@ extern size_t write_body_data(const char *buf, size_t len, FILE *body_out, struc
 extern bool is_loopback_ip(const char *ip);
 extern const char *family_short_name(int family);
 extern bool is_localhost_url(const char *input_url);
+extern const struct resolve_entry *find_resolve_entry(
+    const struct resolve_entry *entries, int count, const char *host, const char *port);
+extern struct addrinfo *build_addrinfo_from_resolve(const struct resolve_entry *re);
+extern void dns_cache_key(const char *host, const char *port, int family,
+                          char *key_out, size_t key_size, uint32_t *hash_out);
+extern struct addrinfo *copy_addrinfo_list(const struct addrinfo *src);
+extern int build_body_headers(char *body_headers, size_t body_headers_size,
+    const char *verb, const char *data, size_t data_len,
+    const FILE *upload_file, size_t upload_size,
+    bool has_content_type, bool has_content_length, bool chunked_upload,
+    size_t *content_len_out, bool *include_body_headers_out,
+    char *error, size_t error_len);
+extern size_t chunked_write(const char *buf, size_t len, FILE *body_out,
+    struct response_info *out, int *state, unsigned long *chunk_rem,
+    char *line_buf, size_t *line_len,
+    z_stream *strm, bool decompress, char *error, size_t error_len);
+extern int setup_upload_file(const char *upload_path, FILE **upload_file,
+    size_t *upload_size, bool *chunked_upload, char *error, size_t error_len);
+extern bool is_connection_error(const char *error);
 
 TEST(test_set_error) {
     char buf[64];
@@ -1189,6 +1209,334 @@ TEST(test_set_nonblocking) {
     close(fds[1]);
 }
 
+TEST(test_is_connection_error_write) {
+    ASSERT_TRUE(is_connection_error("Write failed: connection reset"), "write failed");
+    ASSERT_TRUE(is_connection_error("Write failed: broken pipe"), "broken pipe");
+}
+
+TEST(test_is_connection_error_read) {
+    ASSERT_TRUE(is_connection_error("Read failed"), "read failed");
+    ASSERT_TRUE(is_connection_error("Read failed on response body"), "read body");
+}
+
+TEST(test_is_connection_error_timeout) {
+    ASSERT_TRUE(is_connection_error("Write timeout"), "write timeout");
+    ASSERT_TRUE(is_connection_error("Read timeout on socket"), "read timeout");
+}
+
+TEST(test_is_connection_error_dns) {
+    ASSERT_FALSE(is_connection_error("DNS resolution failed"), "dns");
+    ASSERT_FALSE(is_connection_error("TLS handshake failed"), "tls");
+}
+
+TEST(test_is_connection_error_ok) {
+    ASSERT_FALSE(is_connection_error(""), "empty");
+    ASSERT_FALSE(is_connection_error("OK"), "ok");
+}
+
+TEST(test_init_run_options_basic) {
+    struct cmdline_opts c;
+    memset(&c, 0, sizeof(c));
+    c.follow_redirects = true;
+    c.insecure_tls = true;
+    c.verbose = true;
+    c.silent = true;
+    strcpy(c.request_method, "POST");
+    c.request_data = "k=v";
+    c.request_data_len = 3;
+    c.connect_timeout_ms = 5000;
+    c.read_timeout_ms = 30000;
+    c.max_time_ms = 60000;
+    c.max_redirects = 3;
+    c.retry_count = 2;
+    c.retry_delay_ms = 1000;
+    c.compressed = true;
+    c.user_agent = "TestAgent";
+    c.basic_auth = "u:p";
+
+    struct run_options o;
+    memset(&o, 0, sizeof(o));
+    init_run_options(&o, &c);
+    ASSERT_TRUE(o.follow_redirects, "follow_redirects");
+    ASSERT_TRUE(o.insecure_tls, "insecure_tls");
+    ASSERT_TRUE(o.verbose, "verbose");
+    ASSERT_STR_EQ(o.method, "POST", "method");
+    ASSERT_FALSE(o.is_head_method, "not head");
+    ASSERT_INT_EQ(o.connect_timeout_ms, 5000, "connect_timeout");
+    ASSERT_INT_EQ(o.read_timeout_ms, 30000, "read_timeout");
+    ASSERT_INT_EQ(o.max_time_ms, 60000, "max_time");
+    ASSERT_INT_EQ(o.max_redirects, 3, "max_redirects");
+    ASSERT_INT_EQ(o.retry_count, 2, "retry_count");
+    ASSERT_INT_EQ(o.retry_delay_ms, 1000, "retry_delay");
+}
+
+TEST(test_init_run_options_head_method) {
+    struct cmdline_opts c;
+    memset(&c, 0, sizeof(c));
+    strcpy(c.request_method, "HEAD");
+    struct run_options o;
+    memset(&o, 0, sizeof(o));
+    init_run_options(&o, &c);
+    ASSERT_TRUE(o.is_head_method, "HEAD detected");
+}
+
+TEST(test_find_resolve_entry_match) {
+    struct resolve_entry entries[2];
+    memset(entries, 0, sizeof(entries));
+    strcpy(entries[0].host, "a.com");
+    strcpy(entries[0].port, "80");
+    strcpy(entries[1].host, "b.com");
+    strcpy(entries[1].port, "443");
+    const struct resolve_entry *r = find_resolve_entry(entries, 2, "b.com", "443");
+    ASSERT_PTR_NOTNULL(r, "found match");
+    ASSERT_STR_EQ(r->host, "b.com", "correct host");
+}
+
+TEST(test_find_resolve_entry_no_match) {
+    struct resolve_entry entries[1];
+    memset(entries, 0, sizeof(entries));
+    strcpy(entries[0].host, "a.com");
+    strcpy(entries[0].port, "80");
+    const struct resolve_entry *r = find_resolve_entry(entries, 1, "b.com", "80");
+    ASSERT_TRUE(r == NULL, "no match");
+}
+
+TEST(test_find_resolve_entry_empty) {
+    const struct resolve_entry *r = find_resolve_entry(NULL, 0, "a.com", "80");
+    ASSERT_TRUE(r == NULL, "empty entries");
+}
+
+TEST(test_dns_cache_key) {
+    char key[256 + 16 + 16];
+    uint32_t hash;
+    dns_cache_key("example.com", "443", AF_INET, key, sizeof(key), &hash);
+    ASSERT_STR_EQ(key, "example.com:443:2", "cache key");
+    ASSERT_TRUE(hash != 0, "non-zero hash");
+}
+
+TEST(test_build_addrinfo_from_resolve_ipv4) {
+    struct resolve_entry re;
+    memset(&re, 0, sizeof(re));
+    struct sockaddr_in *sin = (struct sockaddr_in *)&re.ss;
+    sin->sin_family = AF_INET;
+    sin->sin_port = htons(80);
+    inet_pton(AF_INET, "1.2.3.4", &sin->sin_addr);
+    re.ss_len = sizeof(*sin);
+    re.family = AF_INET;
+    struct addrinfo *ai = build_addrinfo_from_resolve(&re);
+    ASSERT_PTR_NOTNULL(ai, "build_addrinfo_from_resolve");
+    ASSERT_INT_EQ(ai->ai_family, AF_INET, "family");
+    ASSERT_INT_EQ(ai->ai_socktype, SOCK_STREAM, "socktype");
+    ASSERT_TRUE(ai->ai_next == NULL, "no next");
+    freeaddrinfo(ai);
+}
+
+TEST(test_copy_addrinfo_list_single) {
+    struct addrinfo ai;
+    struct sockaddr_in sin;
+    memset(&ai, 0, sizeof(ai));
+    memset(&sin, 0, sizeof(sin));
+    sin.sin_family = AF_INET;
+    inet_pton(AF_INET, "10.0.0.1", &sin.sin_addr);
+    ai.ai_family = AF_INET;
+    ai.ai_addrlen = sizeof(sin);
+    ai.ai_addr = (struct sockaddr *)&sin;
+    struct addrinfo *copy = copy_addrinfo_list(&ai);
+    ASSERT_PTR_NOTNULL(copy, "copy not null");
+    ASSERT_INT_EQ(copy->ai_family, AF_INET, "family copied");
+    freeaddrinfo(copy);
+}
+
+TEST(test_copy_addrinfo_list_null) {
+    struct addrinfo *copy = copy_addrinfo_list(NULL);
+    ASSERT_TRUE(copy == NULL, "null in null out");
+}
+
+TEST(test_build_body_headers_chunked_upload) {
+    char hdrs[256];
+    size_t cl = 0;
+    bool inc = false;
+    char err[64] = "";
+    FILE *f = tmpfile();
+    int rc = build_body_headers(hdrs, sizeof(hdrs), "POST", NULL, 0, f, 100,
+        false, false, true, &cl, &inc, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "chunked upload ok");
+    ASSERT_TRUE(inc, "include body headers");
+    ASSERT_TRUE(strstr(hdrs, "Transfer-Encoding: chunked") != NULL, "chunked header");
+    ASSERT_TRUE(strstr(hdrs, "Content-Type: application/octet-stream") != NULL, "content type");
+    fclose(f);
+}
+
+TEST(test_build_body_headers_content_length) {
+    char hdrs[256];
+    size_t cl = 0;
+    bool inc = false;
+    char err[64] = "";
+    FILE *f = tmpfile();
+    int rc = build_body_headers(hdrs, sizeof(hdrs), "PUT", NULL, 0, f, 42,
+        false, false, false, &cl, &inc, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "content-length ok");
+    ASSERT_STR_EQ(err, "", "no error");
+    fclose(f);
+}
+
+TEST(test_build_body_headers_post_data) {
+    char hdrs[256];
+    size_t cl = 0;
+    bool inc = false;
+    char err[64] = "";
+    int rc = build_body_headers(hdrs, sizeof(hdrs), "POST", "key=val", 6, NULL, 0,
+        false, false, false, &cl, &inc, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "post data ok");
+    ASSERT_TRUE(strstr(hdrs, "application/x-www-form-urlencoded") != NULL, "form type");
+}
+
+TEST(test_build_body_headers_no_upload) {
+    char hdrs[256];
+    size_t cl = 0;
+    bool inc = true;
+    char err[64] = "";
+    int rc = build_body_headers(hdrs, sizeof(hdrs), "GET", NULL, 0, NULL, 0,
+        false, false, false, &cl, &inc, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "no upload ok");
+    ASSERT_FALSE(inc, "no body headers");
+}
+
+TEST(test_build_body_headers_overflow) {
+    char hdrs[4];
+    size_t cl = 0;
+    bool inc = false;
+    char err[64] = "";
+    FILE *f = tmpfile();
+    int rc = build_body_headers(hdrs, sizeof(hdrs), "PUT", NULL, 0, f, 999,
+        false, false, false, &cl, &inc, err, sizeof(err));
+    ASSERT_INT_EQ(rc, -1, "overflow error");
+    fclose(f);
+}
+
+TEST(test_chunked_write_simple) {
+    struct response_info out;
+    memset(&out, 0, sizeof(out));
+    int state = 0;
+    unsigned long rem = 0;
+    char line_buf[32];
+    size_t line_len = 0;
+    char err[64] = "";
+    chunked_write("5\r\nhello\r\n0\r\n\r\n", 15, NULL, &out,
+        &state, &rem, line_buf, &line_len, NULL, false, err, sizeof(err));
+    ASSERT_INT_EQ(state, 3, "state done");
+}
+
+TEST(test_chunked_write_multiple) {
+    struct response_info out;
+    memset(&out, 0, sizeof(out));
+    int state = 0;
+    unsigned long rem = 0;
+    char line_buf[32];
+    size_t line_len = 0;
+    char err[64] = "";
+    chunked_write("3\r\nabc\r\n0\r\n\r\n", 13, NULL, &out,
+        &state, &rem, line_buf, &line_len, NULL, false, err, sizeof(err));
+    ASSERT_INT_EQ(state, 3, "state done");
+}
+
+TEST(test_chunked_write_split) {
+    struct response_info out;
+    memset(&out, 0, sizeof(out));
+    int state = 0;
+    unsigned long rem = 0;
+    char line_buf[32];
+    size_t line_len = 0;
+    char err[64] = "";
+    chunked_write("4\r\nab", 5, NULL, &out,
+        &state, &rem, line_buf, &line_len, NULL, false, err, sizeof(err));
+    chunked_write("cd\r\n0\r\n\r\n", 10, NULL, &out,
+        &state, &rem, line_buf, &line_len, NULL, false, err, sizeof(err));
+    ASSERT_INT_EQ(state, 3, "state done");
+}
+
+TEST(test_setup_upload_file_stdin) {
+    FILE *uf = NULL;
+    size_t us = 0;
+    bool chunked = false;
+    char err[64] = "";
+    int rc = setup_upload_file("-", &uf, &us, &chunked, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "stdin ok");
+    ASSERT_TRUE(uf == stdin, "stdin file");
+    ASSERT_TRUE(chunked, "chunked for stdin");
+}
+
+TEST(test_setup_upload_file_missing) {
+    FILE *uf = NULL;
+    size_t us = 0;
+    bool chunked = false;
+    char err[64] = "";
+    int rc = setup_upload_file("/nonexistent/file_12345", &uf, &us, &chunked, err, sizeof(err));
+    ASSERT_INT_EQ(rc, -1, "missing file error");
+}
+
+TEST(test_setup_upload_file_null) {
+    FILE *uf = NULL;
+    size_t us = 0;
+    bool chunked = false;
+    char err[64] = "";
+    int rc = setup_upload_file(NULL, &uf, &us, &chunked, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "null upload ok");
+    ASSERT_TRUE(uf == NULL, "no file");
+}
+
+TEST(test_parse_cmdline_boolean_flags) {
+    struct cmdline_opts c;
+    char *argv[] = {(char *)"prog", (char *)"-v", (char *)"-k", (char *)"-s",
+                    (char *)"--no-happy-eyeballs", (char *)"--compressed", NULL};
+    parse_cmdline(6, argv, &c);
+    ASSERT_TRUE(c.verbose, "verbose");
+    ASSERT_TRUE(c.insecure_tls, "insecure");
+    ASSERT_TRUE(c.silent, "silent");
+    ASSERT_FALSE(c.happy_eyeballs, "no happy eyeballs");
+    ASSERT_TRUE(c.compressed, "compressed");
+    free((void *)c.urls);
+}
+
+TEST(test_parse_cmdline_value_flags) {
+    struct cmdline_opts c;
+    char *argv[] = {(char *)"prog", (char *)"-A", (char *)"MyAgent",
+                    (char *)"--connect-timeout", (char *)"5000",
+                    (char *)"--max-redirs", (char *)"3",
+                    (char *)"-u", (char *)"user:pass",
+                    (char *)"-H", (char *)"X-Foo: bar",
+                    (char *)"-X", (char *)"DELETE", NULL};
+    parse_cmdline(13, argv, &c);
+    ASSERT_STR_EQ(c.user_agent, "MyAgent", "user agent");
+    ASSERT_INT_EQ(c.connect_timeout_ms, 5000, "connect timeout");
+    ASSERT_INT_EQ(c.max_redirects, 3, "max redirects");
+    ASSERT_STR_EQ(c.basic_auth, "user:pass", "basic auth");
+    ASSERT_INT_EQ(c.extra_header_count, 1, "one extra header");
+    ASSERT_STR_EQ(c.request_method, "DELETE", "DELETE method");
+    ASSERT_TRUE(c.method_explicit, "method explicit");
+    free((void *)c.urls);
+    free((void *)c.extra_headers);
+}
+
+TEST(test_parse_cmdline_urls) {
+    struct cmdline_opts c;
+    char *argv[] = {(char *)"prog", (char *)"http://a.com", (char *)"https://b.com", NULL};
+    parse_cmdline(3, argv, &c);
+    ASSERT_INT_EQ(c.url_count, 2, "two urls");
+    ASSERT_STR_EQ(c.input_url, "http://a.com", "first url");
+    free((void *)c.urls);
+}
+
+TEST(test_parse_cmdline_defaults) {
+    struct cmdline_opts c;
+    char *argv[] = {(char *)"prog", (char *)"http://example.com", NULL};
+    parse_cmdline(2, argv, &c);
+    ASSERT_STR_EQ(c.request_method, "GET", "default GET");
+    ASSERT_TRUE(c.happy_eyeballs, "default happy eyeballs");
+    ASSERT_INT_EQ(c.address_family, AF_UNSPEC, "default AF_UNSPEC");
+    free((void *)c.urls);
+}
+
 /* ================================================================
  * Main
  * ================================================================ */
@@ -1335,6 +1683,45 @@ int main(void) {
     test_fill_connected_endpoint_null();
 
     test_set_nonblocking();
+
+    test_is_connection_error_write();
+    test_is_connection_error_read();
+    test_is_connection_error_timeout();
+    test_is_connection_error_dns();
+    test_is_connection_error_ok();
+
+    test_init_run_options_basic();
+    test_init_run_options_head_method();
+
+    test_find_resolve_entry_match();
+    test_find_resolve_entry_no_match();
+    test_find_resolve_entry_empty();
+
+    test_dns_cache_key();
+
+    test_build_addrinfo_from_resolve_ipv4();
+
+    test_copy_addrinfo_list_single();
+    test_copy_addrinfo_list_null();
+
+    test_build_body_headers_chunked_upload();
+    test_build_body_headers_content_length();
+    test_build_body_headers_post_data();
+    test_build_body_headers_no_upload();
+    test_build_body_headers_overflow();
+
+    test_chunked_write_simple();
+    test_chunked_write_multiple();
+    test_chunked_write_split();
+
+    test_setup_upload_file_stdin();
+    test_setup_upload_file_missing();
+    test_setup_upload_file_null();
+
+    test_parse_cmdline_boolean_flags();
+    test_parse_cmdline_value_flags();
+    test_parse_cmdline_urls();
+    test_parse_cmdline_defaults();
 
     printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
            tests_run - tests_failed, tests_failed, tests_run);
