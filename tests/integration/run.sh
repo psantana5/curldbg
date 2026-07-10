@@ -40,6 +40,9 @@ run_test test_basic.sh "$PORT"
 run_test test_redirect.sh "$PORT"
 run_test test_chunked.sh "$PORT"
 run_test test_malformed.sh "$PORT"
+run_test test_gzip.sh "$PORT"
+run_test test_cookies.sh "$PORT"
+run_test test_post.sh "$PORT"
 
 kill $TDPID 2>/dev/null
 wait $TDPID 2>/dev/null
