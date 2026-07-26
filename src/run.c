@@ -327,8 +327,15 @@ static int run_request(const char *input_url, const struct run_options *opts,
     if (setup_upload_file(opts->upload_path, &upload_file, &upload_size,
                           &chunked_upload, out->error, sizeof(out->error)) != 0) return -1;
 
+    if (opts->max_redirects < 0 || opts->max_redirects > 100) {
+        snprintf(out->error, sizeof(out->error), "Invalid max_redirects value");
+        return -1;
+    }
     out->hops = calloc((size_t)opts->max_redirects + 1, sizeof(*out->hops));
-    if (out->hops == NULL) die("calloc");
+    if (out->hops == NULL) {
+        snprintf(out->error, sizeof(out->error), "Out of memory");
+        return -1;
+    }
 
     if (__builtin_expect(clock_gettime(CLOCK_MONOTONIC, &total_start) != 0, 0)) die("clock_gettime");
 
@@ -472,18 +479,21 @@ static int run_request(const char *input_url, const struct run_options *opts,
                 if (cookie_header_str != NULL) stack_headers[idx++] = cookie_header_str;
                 if (referer_header_buf[0] != '\0') stack_headers[idx++] = referer_header_buf;
                 send_headers = stack_headers;
+                send_header_count = total;
             } else {
                 const char **dh = malloc(total * sizeof(*dh));
-                if (dh != NULL) {
-                    for (size_t i = 0; i < opts->extra_header_count; i++)
-                        dh[i] = opts->extra_headers[i];
-                    size_t idx = opts->extra_header_count;
-                    if (cookie_header_str != NULL) dh[idx++] = cookie_header_str;
-                    if (referer_header_buf[0] != '\0') dh[idx++] = referer_header_buf;
-                    send_headers = dh;
+                if (dh == NULL) {
+                    snprintf(out->error, sizeof(out->error), "Out of memory");
+                    goto error_cleanup;
                 }
+                for (size_t i = 0; i < opts->extra_header_count; i++)
+                    dh[i] = opts->extra_headers[i];
+                size_t idx = opts->extra_header_count;
+                if (cookie_header_str != NULL) dh[idx++] = cookie_header_str;
+                if (referer_header_buf[0] != '\0') dh[idx++] = referer_header_buf;
+                send_headers = dh;
+                send_header_count = total;
             }
-            send_header_count = total;
         }
 
         int sr;
@@ -598,6 +608,8 @@ static int run_request(const char *input_url, const struct run_options *opts,
 
 error_cleanup:
     rc = -1;
+    free(out->hops);
+    out->hops = NULL;
 done:
     close_upload_file(&upload_file);
     clock_gettime(CLOCK_MONOTONIC, &total_end);
