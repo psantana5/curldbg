@@ -88,7 +88,7 @@ int setup_upload_file(const char *upload_path, FILE **upload_file,
                  upload_path, strerror(errno));
         return -1;
     }
-    if (stat(upload_path, &st) != 0) {
+    if (fstat(fileno(*upload_file), &st) != 0) {
         snprintf(error, error_len, "Unable to stat upload file '%s': %s",
                  upload_path, strerror(errno));
         fclose(*upload_file);
