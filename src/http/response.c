@@ -15,7 +15,7 @@ bool is_redirect_status(int status_code) {
     return false;
 }
 
-void parse_response_headers(char *headers, struct response_info *out) {
+void parse_response_headers(const char *headers, struct response_info *out) {
     out->status_code = 0;
     out->location[0] = '\0';
     out->chunked = false;
@@ -26,14 +26,20 @@ void parse_response_headers(char *headers, struct response_info *out) {
     size_t len = strlen(headers);
     if (len > HEADER_MAX) len = HEADER_MAX;
 
-    char *nl = (char *)memchr(headers, '\n', len);
-    if (nl == NULL || nl == headers) return;
+    /* Work on a local copy so the caller's buffer is never modified. */
+    char copy[HEADER_MAX + 1];
+    memcpy(copy, headers, len);
+    copy[len] = '\0';
+    char *headers_mut = copy;
+
+    char *nl = (char *)memchr(headers_mut, '\n', len);
+    if (nl == NULL || nl == headers_mut) return;
     if (*(nl - 1) == '\r') *(nl - 1) = '\0';
     *nl = '\0';
 
-    const char *end = headers + len;
+    const char *end = headers_mut + len;
     {
-        const char *sp = headers;
+        const char *sp = headers_mut;
         while (*sp && *sp != ' ') sp++;
         if (*sp == ' ') {
             sp++;
@@ -192,10 +198,10 @@ size_t chunked_write(const char *buf, size_t len, FILE *body_out, struct respons
                 line_buf[*line_len] = '\0';
                 char *semi = strchr(line_buf, ';');
                 if (semi) *semi = '\0';
-                char *end = NULL;
-                unsigned long val = strtoul(line_buf, &end, 16);
+                char *endp = NULL;
+                unsigned long val = strtoul(line_buf, &endp, 16);
                 *line_len = 0;
-                if (end == NULL || end == line_buf || *end != '\0') {
+                if (endp == NULL || endp == line_buf || *endp != '\0') {
                     set_error(error, error_len, "Invalid chunk size");
                     return (size_t)-1;
                 }
@@ -316,13 +322,13 @@ int receive_response(
                     if (headers_only != NULL) {
                         memcpy(headers_only, recv_buf, header_bytes);
                         headers_only[header_bytes] = '\0';
-                        char *line = headers_only;
-                        while (*line != '\0') {
-                            char *nl = strstr(line, "\r\n");
-                            if (nl == NULL) break;
-                            *nl = '\0';
-                            fprintf(stderr, "< %s\n", line);
-                            line = nl + 2;
+                        char *h = headers_only;
+                        while (*h != '\0') {
+                            char *h_n = strstr(h, "\r\n");
+                            if (h_n == NULL) break;
+                            *h_n = '\0';
+                            fprintf(stderr, "< %s\n", h);
+                            h = h_n + 2;
                         }
                         free(headers_only);
                     }

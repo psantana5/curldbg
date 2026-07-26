@@ -319,7 +319,7 @@ int connection_writev_all(struct connection *conn, const struct iovec *iov, int 
 
 /* --- http.c --- */
 bool is_redirect_status(int status_code);
-void parse_response_headers(char *headers, struct response_info *out);
+void parse_response_headers(const char *headers, struct response_info *out);
 int send_request(struct connection *conn, const struct url_info *url, const char *method,
                  const char *data, size_t data_len, FILE *upload_file, size_t upload_size,
                  const char **extra_headers, size_t extra_header_count,
