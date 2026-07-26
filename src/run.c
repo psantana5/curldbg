@@ -227,7 +227,7 @@ static int establish_connection(struct connection *conn,
             if (proxy_connect(conn, url, effective_connect_ms, error, error_len) != 0) return -1;
             if (init_tls(conn, url->host, opts->insecure_tls,
                          opts->tls_min_version, opts->tls_max_version,
-                         error, error_len) != 0) return -1;
+                         &opts->tls_params, error, error_len) != 0) return -1;
         }
     } else {
         fd = connect_tcp(*conn_addrs, hop->connected_ip, sizeof(hop->connected_ip),
@@ -263,7 +263,7 @@ static int establish_connection(struct connection *conn,
     if (!use_proxy && url->use_tls) {
         if (init_tls(conn, url->host, opts->insecure_tls,
                      opts->tls_min_version, opts->tls_max_version,
-                     error, error_len) != 0) return -1;
+                     &opts->tls_params, error, error_len) != 0) return -1;
     }
     return 0;
 }
@@ -664,6 +664,10 @@ void init_run_options(struct run_options *opts, const struct cmdline_opts *c) {
     opts->retry_delay_ms = c->retry_delay_ms;
     opts->compressed = c->compressed;
     opts->unix_socket_path = c->unix_socket_path;
+    opts->cacert = c->cacert;
+    opts->capath = c->capath;
+    opts->tls_params.cacert = c->cacert;
+    opts->tls_params.capath = c->capath;
     opts->is_head_method = (strcasecmp(opts->method, "HEAD") == 0);
 }
 

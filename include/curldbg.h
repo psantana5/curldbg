@@ -164,6 +164,9 @@ struct run_options {
     const char *referer;
     const char *bind_interface;
     const char *unix_socket_path;
+    const char *cacert;
+    const char *capath;
+    struct tls_params tls_params;
 };
 
 struct run_result {
@@ -229,9 +232,8 @@ struct cmdline_opts {
     const char *capath;
     const char **urls;
     int url_count;
+    struct tls_params tls_params;
 };
-
-extern struct tls_params g_tls_params;
 
 /* --- cli/parse.c --- */
 void parse_cmdline(int argc, char **argv, struct cmdline_opts *c);
@@ -296,9 +298,9 @@ struct addrinfo *resolve_host(const struct url_info *url, int address_family,
                                int *gai_error);
 
 /* --- tls.c --- */
-void warmup_tls(void);
 int init_tls(struct connection *conn, const char *hostname, bool insecure,
              int tls_min_version, int tls_max_version,
+             const struct tls_params *params,
              char *error, size_t error_len);
 
 /* --- connect.c --- */

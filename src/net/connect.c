@@ -515,6 +515,10 @@ void close_connection(struct connection *conn) {
         SSL_free(conn->ssl);
         conn->ssl = NULL;
     }
+    if (conn->ctx != NULL) {
+        SSL_CTX_free(conn->ctx);
+        conn->ctx = NULL;
+    }
     if (conn->fd >= 0) {
         close(conn->fd);
         conn->fd = -1;

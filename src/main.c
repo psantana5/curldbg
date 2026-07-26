@@ -27,10 +27,6 @@ int main(int argc, char **argv) {
     struct cookie_jar *cookie_jar_ptr = NULL;
     parse_cmdline(argc, argv, c);
 
-    /* Apply TLS params globally before any TLS operation */
-    g_tls_params.cacert = c->cacert;
-    g_tls_params.capath = c->capath;
-
     /* Free allocated memory on exit */
     int exit_code = EXIT_SUCCESS;
 

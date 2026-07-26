@@ -8,80 +8,50 @@
 
 #include <openssl/err.h>
 
-struct tls_params g_tls_params = {NULL, NULL};
-
-static SSL_CTX *g_shared_tls_ctx = NULL;
-static pthread_once_t g_tls_ctx_once = PTHREAD_ONCE_INIT;
-static int g_tls_ctx_init_status = -1;
-static char g_tls_ctx_init_error[256];
-
-static void init_shared_tls_ctx_once(void) {
-    g_tls_ctx_init_error[0] = '\0';
+static SSL_CTX *create_tls_context(const struct tls_params *params,
+                                   char *error, size_t error_len) {
     if (OPENSSL_init_ssl(0, NULL) != 1) {
-        set_ssl_error(g_tls_ctx_init_error, sizeof(g_tls_ctx_init_error), "OPENSSL_init_ssl failed");
-        return;
+        set_ssl_error(error, error_len, "OPENSSL_init_ssl failed");
+        return NULL;
     }
-    g_shared_tls_ctx = SSL_CTX_new(TLS_client_method());
-    if (g_shared_tls_ctx == NULL) {
-        set_ssl_error(g_tls_ctx_init_error, sizeof(g_tls_ctx_init_error), "SSL_CTX_new failed");
-        return;
+    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+    if (ctx == NULL) {
+        set_ssl_error(error, error_len, "SSL_CTX_new failed");
+        return NULL;
     }
 #ifdef SSL_OP_IGNORE_UNEXPECTED_EOF
-    SSL_CTX_set_options(g_shared_tls_ctx, SSL_OP_IGNORE_UNEXPECTED_EOF);
+    SSL_CTX_set_options(ctx, SSL_OP_IGNORE_UNEXPECTED_EOF);
 #endif
-    SSL_CTX_set_session_cache_mode(g_shared_tls_ctx, SSL_SESS_CACHE_CLIENT);
-    SSL_CTX_set_read_ahead(g_shared_tls_ctx, 1);
-    SSL_CTX_set_verify(g_shared_tls_ctx, SSL_VERIFY_PEER, NULL);
-    if (g_tls_params.cacert != NULL || g_tls_params.capath != NULL) {
-        if (SSL_CTX_load_verify_locations(g_shared_tls_ctx, g_tls_params.cacert, g_tls_params.capath) != 1) {
-            set_ssl_error(g_tls_ctx_init_error, sizeof(g_tls_ctx_init_error), "Could not load CA certificates");
-            SSL_CTX_free(g_shared_tls_ctx);
-            g_shared_tls_ctx = NULL;
-            return;
+    SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_CLIENT);
+    SSL_CTX_set_read_ahead(ctx, 1);
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+    if (params != NULL && (params->cacert != NULL || params->capath != NULL)) {
+        if (SSL_CTX_load_verify_locations(ctx, params->cacert, params->capath) != 1) {
+            set_ssl_error(error, error_len, "Could not load CA certificates");
+            SSL_CTX_free(ctx);
+            return NULL;
         }
     } else {
-        if (SSL_CTX_load_verify_file(g_shared_tls_ctx, X509_get_default_cert_file()) != 1) {
-            if (SSL_CTX_set_default_verify_paths(g_shared_tls_ctx) != 1) {
-                set_ssl_error(g_tls_ctx_init_error, sizeof(g_tls_ctx_init_error), "Could not load system CA certificates");
-                SSL_CTX_free(g_shared_tls_ctx);
-                g_shared_tls_ctx = NULL;
-                return;
+        if (SSL_CTX_load_verify_file(ctx, X509_get_default_cert_file()) != 1) {
+            if (SSL_CTX_set_default_verify_paths(ctx) != 1) {
+                set_ssl_error(error, error_len, "Could not load system CA certificates");
+                SSL_CTX_free(ctx);
+                return NULL;
             }
         }
     }
-    g_tls_ctx_init_status = 0;
-}
-
-static int get_shared_tls_ctx(SSL_CTX **ctx, char *error, size_t error_len) {
-    int rc = pthread_once(&g_tls_ctx_once, init_shared_tls_ctx_once);
-    if (rc != 0) {
-        set_error(error, error_len, "pthread_once failed: %s", strerror(rc));
-        return -1;
-    }
-    if (g_tls_ctx_init_status != 0 || g_shared_tls_ctx == NULL) {
-        if (g_tls_ctx_init_error[0] != '\0')
-            set_error(error, error_len, "%s", g_tls_ctx_init_error);
-        else
-            set_error(error, error_len, "TLS context initialization failed");
-        return -1;
-    }
-    *ctx = g_shared_tls_ctx;
-    return 0;
-}
-
-void warmup_tls(void) {
-    SSL_CTX *ctx = NULL;
-    char err[256];
-    (void)get_shared_tls_ctx(&ctx, err, sizeof(err));
+    return ctx;
 }
 
 int init_tls(struct connection *conn, const char *hostname, bool insecure,
              int tls_min_version, int tls_max_version,
+             const struct tls_params *params,
              char *error, size_t error_len) {
-    SSL_CTX *shared_ctx = NULL;
-    if (get_shared_tls_ctx(&shared_ctx, error, error_len) != 0) return -1;
+    SSL_CTX *ctx = create_tls_context(params, error, error_len);
+    if (ctx == NULL) return -1;
+    conn->ctx = ctx;
 
-    conn->ssl = SSL_new(shared_ctx);
+    conn->ssl = SSL_new(ctx);
     if (conn->ssl == NULL) { set_ssl_error(error, error_len, "SSL_new failed"); return -1; }
 
     if (tls_min_version > 0) {
