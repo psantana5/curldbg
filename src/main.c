@@ -236,6 +236,8 @@ int main(int argc, char **argv) {
     }
 
 cleanup:
+    tls_context_free(session_opts.tls_ctx);
+    dns_cache_destroy(session_opts.dns_cache);
     free(c->extra_headers);
     free(c->request_data_alloc);
     if (c->request_data_urlencode_alloc != NULL && c->request_data_urlencode_alloc != c->request_data_alloc) {

@@ -145,7 +145,7 @@ static int establish_connection(struct connection *conn,
         }
         struct addrinfo *addrs = resolve_host(url, opts->address_family,
                                                opts->resolve_entries, opts->resolve_count,
-                                               dns_timeout_ms,
+                                               opts->dns_cache, dns_timeout_ms,
                                                &dns_start, &dns_end, &gai_error);
         if (addrs == NULL) {
             snprintf(error, error_len, "DNS resolution failed: %s", gai_strerror(gai_error));
@@ -196,7 +196,8 @@ static int establish_connection(struct connection *conn,
         freeaddrinfo(*conn_addrs);
         *conn_addrs = NULL;
         int pgai_error = 0;
-        struct addrinfo *paddrs = resolve_dns_timeout(&proxy_ui, opts->address_family, &pgai_error, 5000);
+        struct addrinfo *paddrs = resolve_dns_timeout(&proxy_ui, opts->address_family,
+                                                       opts->dns_cache, &pgai_error, 5000);
         if (paddrs == NULL) {
             snprintf(error, error_len, "Proxy DNS resolution failed: %s", gai_strerror(pgai_error));
             return -1;
@@ -227,7 +228,7 @@ static int establish_connection(struct connection *conn,
             if (proxy_connect(conn, url, effective_connect_ms, error, error_len) != 0) return -1;
             if (init_tls(conn, url->host, opts->insecure_tls,
                          opts->tls_min_version, opts->tls_max_version,
-                         &opts->tls_params, error, error_len) != 0) return -1;
+                         &opts->tls_params, opts->tls_ctx, error, error_len) != 0) return -1;
         }
     } else {
         fd = connect_tcp(*conn_addrs, hop->connected_ip, sizeof(hop->connected_ip),
@@ -266,7 +267,7 @@ static int establish_connection(struct connection *conn,
     if (!use_proxy && url->use_tls) {
         if (init_tls(conn, url->host, opts->insecure_tls,
                      opts->tls_min_version, opts->tls_max_version,
-                     &opts->tls_params, error, error_len) != 0) return -1;
+                     &opts->tls_params, opts->tls_ctx, error, error_len) != 0) return -1;
     }
     return 0;
 }
@@ -622,13 +623,15 @@ done:
     close_upload_file(&upload_file);
     clock_gettime(CLOCK_MONOTONIC, &total_end);
     out->total_ms = ms_between(&total_start, &total_end);
-    /* Connection reuse is disabled because response bodies may leave unread
-     * bytes in the socket buffer, corrupting the next request. */
-    close_connection(conn);
-    freeaddrinfo(*conn_addrs);
-    *conn_addrs = NULL;
-    conn_host[0] = '\0';
-    conn_port[0] = '\0';
+    /* Keep connection open for reuse when a reuse state is provided and the
+     * request succeeded. The caller owns the connection and must close it. */
+    if (rc != 0 || reuse == NULL) {
+        close_connection(conn);
+        freeaddrinfo(*conn_addrs);
+        *conn_addrs = NULL;
+        conn_host[0] = '\0';
+        conn_port[0] = '\0';
+    }
 
     if (rc != 0 && out->error[0] == '\0')
         snprintf(out->error, sizeof(out->error), "Request failed");
@@ -679,11 +682,29 @@ int run_single_request(const struct cmdline_opts *c, struct run_options *opts,
                                struct run_result *result, FILE *body_out,
                                struct connection_state *reuse) {
     struct cookie_jar *cookie_jar = opts->cookie_jar;
+    SSL_CTX *existing_tls_ctx = opts->tls_ctx;
+    struct dns_cache *existing_dns_cache = opts->dns_cache;
     init_run_options(opts, c);
+    opts->tls_ctx = existing_tls_ctx;
+    opts->dns_cache = existing_dns_cache;
     opts->body_out = body_out;
     opts->proxy_host = NULL;
     opts->proxy_port = NULL;
     opts->cookie_jar = cookie_jar;
+
+    if (opts->tls_ctx == NULL) {
+        char err[256];
+        opts->tls_ctx = tls_context_create(&opts->tls_params, err, sizeof(err));
+        if (opts->tls_ctx == NULL) {
+            fprintf(stderr, "TLS context setup failed: %s\n", err); return -1;
+        }
+    }
+    if (opts->dns_cache == NULL) {
+        opts->dns_cache = dns_cache_create(300000);
+        if (opts->dns_cache == NULL) {
+            fprintf(stderr, "DNS cache setup failed: out of memory\n"); return -1;
+        }
+    }
 
     if (c->proxy_url != NULL) {
         struct url_info proxy_ui;
