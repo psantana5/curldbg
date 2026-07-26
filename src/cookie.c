@@ -6,11 +6,80 @@
 
 #include <arpa/inet.h>
 
+static void copy_string(char *dest, size_t dest_size, const char *src) {
+    if (dest_size == 0) return;
+    size_t n = strlen(src);
+    if (n >= dest_size) n = dest_size - 1;
+    memcpy(dest, src, n);
+    dest[n] = '\0';
+}
+
 static bool is_ip_address(const char *s) {
     struct in_addr a4;
     struct in6_addr a6;
     if (inet_pton(AF_INET, s, &a4) == 1) return true;
     if (inet_pton(AF_INET6, s, &a6) == 1) return true;
+    return false;
+}
+
+#ifdef HAVE_LIBPSL
+#include <libpsl.h>
+
+static bool cookie_domain_matches(const char *host, const char *domain, bool include_subdomains) {
+    if (domain == NULL || domain[0] == '\0' || host == NULL || host[0] == '\0') return false;
+    if (is_ip_address(domain)) return strcmp(host, domain) == 0;
+
+    const psl_ctx_t *psl = psl_builtin();
+    if (psl == NULL) return false;
+
+    const char *d = domain;
+    while (*d == '.') d++;
+    if (psl_registrable_domain(psl, d) == NULL) return false;
+
+    size_t host_len = strlen(host);
+    size_t dom_len = strlen(d);
+    if (dom_len > host_len) return false;
+
+    if (include_subdomains) {
+        if (dom_len == host_len)
+            return strcasecmp(host, d) == 0;
+        if (host[host_len - dom_len - 1] != '.')
+            return false;
+        return strcasecmp(host + host_len - dom_len, d) == 0;
+    }
+    return host_len == dom_len && strcasecmp(host, d) == 0;
+}
+
+#else /* !HAVE_LIBPSL */
+
+/* Minimal static public suffix list. This is used only when libpsl is not
+ * available at compile time. It is not a full PSL. */
+static const char * const public_suffixes[] = {
+    "com", "net", "org", "edu", "gov", "mil", "int",
+    "co.uk", "org.uk", "net.uk", "ac.uk", "gov.uk", "me.uk", "ltd.uk", "plc.uk",
+    "com.au", "net.au", "org.au", "gov.au", "edu.au", "asn.au", "id.au",
+    "co.jp", "ne.jp", "or.jp", "go.jp", "ac.jp", "gr.jp",
+    "com.br", "net.br", "org.br", "gov.br", "edu.br", "mil.br",
+    "co.nz", "org.nz", "net.nz", "govt.nz", "ac.nz",
+    "co.za", "org.za", "net.za", "gov.za", "ac.za",
+    "com.de", "co.de", "com.fr", "co.fr", "com.es", "com.it", "co.it",
+    "com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn",
+    "co.kr", "or.kr", "go.kr", "ac.kr",
+    "com.mx", "net.mx", "org.mx", "gob.mx", "edu.mx",
+    "com.sg", "com.my", "co.in", "com.in", "org.in", "net.in", "gov.in", "ac.in",
+    "co.il", "org.il", "net.il", "ac.il", "gov.il",
+    "com.hk", "co.id", "co.th", "co.ph", "com.vn", "com.tw", "co.tw",
+    "github.io", "gitlab.io", "herokuapp.com", "firebaseapp.com", "appspot.com",
+    NULL,
+};
+
+static bool is_public_suffix(const char *domain) {
+    if (domain == NULL || domain[0] == '\0') return false;
+    const char *d = domain;
+    while (*d == '.') d++;
+    for (const char * const *p = public_suffixes; *p != NULL; p++) {
+        if (strcasecmp(d, *p) == 0) return true;
+    }
     return false;
 }
 
@@ -32,6 +101,7 @@ static bool cookie_domain_matches(const char *host, const char *domain, bool inc
     if (domain == NULL || domain[0] == '\0' || host == NULL || host[0] == '\0') return false;
     if (is_ip_address(domain)) return strcmp(host, domain) == 0;
     if (!domain_has_public_suffix(domain)) return false;
+    if (is_public_suffix(domain)) return false;
 
     size_t host_len = strlen(host);
     size_t dom_len = strlen(domain);
@@ -46,6 +116,7 @@ static bool cookie_domain_matches(const char *host, const char *domain, bool inc
     }
     return host_len == dom_len && strcasecmp(host, domain) == 0;
 }
+#endif /* HAVE_LIBPSL */
 
 void cookie_jar_init(struct cookie_jar *jar) {
     if (jar == NULL) return;
@@ -58,8 +129,8 @@ void cookie_jar_add_set_cookie(struct cookie_jar *jar, const char *set_cookie, c
     struct cookie_entry *entry = &jar->entries[jar->count];
     memset(entry, 0, sizeof(*entry));
 
-    strncpy(entry->domain, request_host, sizeof(entry->domain) - 1);
-    strcpy(entry->path, "/");
+    copy_string(entry->domain, sizeof(entry->domain), request_host);
+    snprintf(entry->path, sizeof(entry->path), "/");
 
     const char *eq = strchr(set_cookie, '=');
     const char *semi = strchr(set_cookie, ';');
@@ -104,12 +175,18 @@ void cookie_jar_add_set_cookie(struct cookie_jar *jar, const char *set_cookie, c
             const char *d = attr_buf + 7;
             while (*d == ' ') d++;
             if (*d == '.') d++;
-            snprintf(entry->domain, sizeof(entry->domain), "%.255s", d);
+            size_t dlen = strlen(d);
+            if (dlen >= sizeof(entry->domain)) dlen = sizeof(entry->domain) - 1;
+            memcpy(entry->domain, d, dlen);
+            entry->domain[dlen] = '\0';
             entry->include_subdomains = true;
         } else if (strncasecmp(attr_buf, "path=", 5) == 0) {
             const char *pa = attr_buf + 5;
             while (*pa == ' ') pa++;
-            strncpy(entry->path, pa, sizeof(entry->path) - 1);
+            size_t palen = strlen(pa);
+            if (palen >= sizeof(entry->path)) palen = sizeof(entry->path) - 1;
+            memcpy(entry->path, pa, palen);
+            entry->path[palen] = '\0';
         } else if (strcasecmp(attr_buf, "secure") == 0) {
             entry->secure = true;
         } else if (strcasecmp(attr_buf, "httponly") == 0) {
@@ -117,9 +194,9 @@ void cookie_jar_add_set_cookie(struct cookie_jar *jar, const char *set_cookie, c
         } else if (strncasecmp(attr_buf, "samesite=", 9) == 0) {
             const char *v = attr_buf + 9;
             while (*v == ' ') v++;
-            if (strcasecmp(v, "strict") == 0) strcpy(entry->samesite, "Strict");
-            else if (strcasecmp(v, "lax") == 0) strcpy(entry->samesite, "Lax");
-            else if (strcasecmp(v, "none") == 0) strcpy(entry->samesite, "None");
+            if (strcasecmp(v, "strict") == 0) snprintf(entry->samesite, sizeof(entry->samesite), "Strict");
+            else if (strcasecmp(v, "lax") == 0) snprintf(entry->samesite, sizeof(entry->samesite), "Lax");
+            else if (strcasecmp(v, "none") == 0) snprintf(entry->samesite, sizeof(entry->samesite), "None");
         }
 
         if (attr_end == NULL) break;
@@ -227,12 +304,12 @@ void cookie_jar_load(struct cookie_jar *jar, const char *filepath) {
         if (jar->count >= MAX_COOKIES) break;
         struct cookie_entry *e = &jar->entries[jar->count];
         memset(e, 0, sizeof(*e));
-        snprintf(e->domain, sizeof(e->domain), "%.255s", domain);
+        copy_string(e->domain, sizeof(e->domain), domain);
         e->include_subdomains = (strcasecmp(subdomains, "TRUE") == 0);
-        strncpy(e->path, path, sizeof(e->path) - 1);
+        copy_string(e->path, sizeof(e->path), path);
         e->secure = (strcasecmp(secure, "TRUE") == 0);
-        strncpy(e->name, name, sizeof(e->name) - 1);
-        strncpy(e->value, value, sizeof(e->value) - 1);
+        copy_string(e->name, sizeof(e->name), name);
+        copy_string(e->value, sizeof(e->value), value);
         jar->count++;
     }
 
