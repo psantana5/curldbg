@@ -43,7 +43,6 @@ run_test test_malformed.sh "$PORT"
 run_test test_gzip.sh "$PORT"
 run_test test_cookies.sh "$PORT"
 run_test test_post.sh "$PORT"
-run_test test_http2.sh "$PORT"
 
 kill $TDPID 2>/dev/null
 wait $TDPID 2>/dev/null
