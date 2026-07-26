@@ -38,8 +38,6 @@ int run_compare_family(const struct cmdline_opts *c, struct run_options *opts) {
     printf("Input URL:         %s\n", c->input_url);
     printf("Follow redirects:  %s\n", c->follow_redirects ? "yes" : "no");
     printf("Max redirects:     %d\n", c->max_redirects);
-    if (is_localhost_url(c->input_url))
-        printf("IPv4 and IPv6 are both trapped inside your machine.\n");
     printf("\n");
 
     print_compare_family_run("IPv4 run", &result_v4, ok_v4);

@@ -52,10 +52,6 @@ void parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_help(argv[0]); exit(EXIT_SUCCESS);
         }
-        if (strcmp(argv[i], "--wizard") == 0) { c->wizard_mode = true; continue; }
-        if (strcmp(argv[i], "--debug-chaos") == 0) { c->debug_chaos = true; continue; }
-        if (strcmp(argv[i], "--lore") == 0) { c->lore_mode = true; continue; }
-        if (strcmp(argv[i], "--fika") == 0) { c->fika_mode = true; continue; }
         if (strcmp(argv[i], "--no-happy-eyeballs") == 0) { c->happy_eyeballs = false; continue; }
         if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) { c->verbose = true; continue; }
         if (strcmp(argv[i], "-k") == 0 || strcmp(argv[i], "--insecure") == 0) { c->insecure_tls = true; continue; }

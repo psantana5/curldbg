@@ -42,14 +42,6 @@ void print_single_output(const struct run_result *result) {
     printf("Total:             %.2f ms\n", result->total_ms);
     if (status_code > 0) printf("HTTP status:       %d\n", status_code);
     printf("Endpoint:          %s\n", endpoint);
-    if (final_hop != NULL && is_loopback_ip(final_hop->connected_ip))
-        printf("Congratulations, you found yourself.\n");
-    if (status_code == 418)
-        printf("The server acknowledges your coffee infrastructure.\n");
-    if (result->ttfb_ms >= 0.0 && result->ttfb_ms < 5.0)
-        printf("WARNING: request arrived before it was sent\n");
-    if (result->dns_ms >= 2000.0)
-        printf("DNS resolver currently communicating through astral plane\n");
     if (final_hop != NULL && final_hop->has_loser && final_hop->loser_connect_ms >= 0.0)
         printf("Other:             %s (%s, %+0.2f ms)\n",
                final_hop->loser_ip, family_short_name(final_hop->loser_family),
@@ -64,9 +56,6 @@ void print_single_output(const struct run_result *result) {
         else
             printf("[%d] %s\n", result->hops[i].status_code, result->hops[i].host);
     }
-    if (result->hop_count > 7)
-        printf("Redirect chain resembles enterprise architecture.\n");
-
     printf("\nPer-hop timing:\n");
     for (int i = 0; i < result->hop_count; i++) {
         printf("Hop %d:\n", i + 1);

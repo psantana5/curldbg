@@ -197,10 +197,6 @@ struct cmdline_opts {
     const char *upload_path;
     const char **extra_headers;
     size_t extra_header_count;
-    bool wizard_mode;
-    bool debug_chaos;
-    bool lore_mode;
-    bool fika_mode;
     bool happy_eyeballs;
     bool verbose;
     const char *user_agent;

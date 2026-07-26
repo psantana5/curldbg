@@ -9,7 +9,6 @@
 #include <strings.h>
 #include <stdint.h>
 #include <sys/stat.h>
-#include <time.h>
 #include <unistd.h>
 #include <netinet/tcp.h>
 #include <poll.h>
@@ -19,35 +18,6 @@ int output_filename_from_url(const char *input_url, char *out, size_t out_size);
 static void configure_output_buffering(void) {
     if (isatty(fileno(stdout))) { (void)setvbuf(stdout, NULL, _IOLBF, 0); return; }
     (void)setvbuf(stdout, NULL, _IOFBF, 64 * 1024);
-}
-
-static void maybe_print_april_fools(void) {
-    static bool printed = false;
-    time_t now = time(NULL);
-    if (now == (time_t)-1 || printed) return;
-    struct tm local_tm;
-    if (localtime_r(&now, &local_tm) == NULL) return;
-    if (local_tm.tm_mon == 3 && local_tm.tm_mday == 1) {
-        printf("HTTP/3 disabled due to mercury retrograde\n");
-        printed = true;
-    }
-}
-
-static void print_wizard_banner(void) {
-    printf("You are now entering advanced networking wizard mode.\n");
-    printf("Latency is temporary. Packets are eternal.\n");
-    printf("OH NOW WE'RE TALKING \xf0\x9f\x98\xad\xf0\x9f\x92\x80\n");
-}
-
-static void print_fika_banner(void) {
-    printf("Pausing requests for mandatory Swedish coffee break...\n");
-}
-
-static void print_easter_eggs(const struct cmdline_opts *c) {
-    maybe_print_april_fools();
-    if (c->wizard_mode) print_wizard_banner();
-    if (c->fika_mode) print_fika_banner();
-    if (c->debug_chaos) fprintf(stderr, "Segmentation fault (not really)\n");
 }
 
 /* --- main --- */
@@ -90,17 +60,6 @@ int main(int argc, char **argv) {
         if (!c->method_explicit) strcpy(c->request_method, "PUT");
     }
     if (c->request_data != NULL && !c->method_explicit) strcpy(c->request_method, "POST");
-    if (c->lore_mode) {
-        printf("ORIGIN STORY:\n");
-        printf("Someone wanted better timing diagnostics.\n");
-        printf("Things escalated.\n");
-        goto cleanup;
-    }
-    if (!c->compare_family_mode && !c->compare_urls_mode && c->input_url == NULL &&
-        (c->wizard_mode || c->fika_mode || c->debug_chaos)) {
-        print_easter_eggs(c);
-        goto cleanup;
-    }
 
     /* Parse proxy URL */
     char proxy_host_buf[256] = "", proxy_port_buf[16] = "";
@@ -195,9 +154,6 @@ int main(int argc, char **argv) {
         opts.proxy_port = proxy_port;
         opts.cookie_jar = cookie_jar_ptr;
 
-        if (!c->silent && c->url_count > 0)
-            print_easter_eggs(c);
-
         if (c->url_count > 1 && !c->silent)
             printf("=== Multi-URL mode: %d URLs ===\n", c->url_count);
 
@@ -251,9 +207,6 @@ int main(int argc, char **argv) {
             fprintf(stderr, "--compare cannot be combined with -4 or -6\n"); exit_code = EXIT_FAILURE; goto cleanup;
         }
 
-        if (!c->silent)
-            print_easter_eggs(c);
-
         exit_code = run_compare_family(c, &opts);
         goto cleanup;
     }
@@ -268,9 +221,6 @@ int main(int argc, char **argv) {
         if (c->input_url == NULL || c->compare_url == NULL) {
             fprintf(stderr, "Usage: %s --compare-urls <url-a> <url-b>\n", argv[0]); exit_code = EXIT_FAILURE; goto cleanup;
         }
-
-        if (!c->silent)
-            print_easter_eggs(c);
 
         exit_code = run_compare_urls(c, &opts);
         goto cleanup;
