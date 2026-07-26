@@ -339,8 +339,7 @@ int cookie_jar_save(const struct cookie_jar *jar, const char *filepath);
 void cookie_jar_load(struct cookie_jar *jar, const char *filepath);
 
 /* --- proxy.c --- */
-int proxy_connect(struct connection *conn, const char *proxy_host, const char *proxy_port,
-                  const struct url_info *target, int connect_timeout_ms,
-                  char *error, size_t error_len);
+int proxy_connect(struct connection *conn, const struct url_info *target,
+                  int connect_timeout_ms, char *error, size_t error_len);
 
 #endif

@@ -225,8 +225,7 @@ static int establish_connection(struct connection *conn,
         conn->verbose = opts->verbose;
 
         if (url->use_tls) {
-            if (proxy_connect(conn, proxy_ui.host, proxy_ui.port, url,
-                              effective_connect_ms, error, error_len) != 0) return -1;
+            if (proxy_connect(conn, url, effective_connect_ms, error, error_len) != 0) return -1;
             if (init_tls(conn, url->host, opts->insecure_tls,
                          opts->tls_min_version, opts->tls_max_version,
                          error, error_len) != 0) return -1;

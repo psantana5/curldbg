@@ -14,17 +14,14 @@ static char *find_connect_end(char *buf, size_t len) {
     return NULL;
 }
 
-int proxy_connect(struct connection *conn, const char *proxy_host, const char *proxy_port,
-                  const struct url_info *target, int connect_timeout_ms,
-                  char *error, size_t error_len) {
-    (void)proxy_host;
-    (void)proxy_port;
-    (void)connect_timeout_ms;
-
+int proxy_connect(struct connection *conn, const struct url_info *target,
+                  int connect_timeout_ms, char *error, size_t error_len) {
     char request[2048];
     char response[4096];
     char host_header[320];
     size_t total = 0;
+
+    apply_socket_timeout(conn->fd, connect_timeout_ms);
 
     format_host_header(target, host_header, sizeof(host_header));
     int nw = snprintf(request, sizeof(request), "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n",
