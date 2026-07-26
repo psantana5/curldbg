@@ -70,8 +70,8 @@ int run_compare_family(const struct cmdline_opts *c, struct run_options *opts) {
         }
     }
 
-    if (ok_v4) free_run_result(&result_v4);
-    if (ok_v6) free_run_result(&result_v6);
+    free_run_result(&result_v4);
+    free_run_result(&result_v6);
 
     return (ok_v4 && ok_v6) ? EXIT_SUCCESS : EXIT_FAILURE;
 }
@@ -129,8 +129,8 @@ int run_compare_urls(const struct cmdline_opts *c, struct run_options *opts) {
         printf("\nComparison incomplete: one or both profiles failed.\n");
     }
 
-    if (ok_a) free_run_result(&result_a);
-    if (ok_b) free_run_result(&result_b);
+    free_run_result(&result_a);
+    free_run_result(&result_b);
 
     return (ok_a && ok_b) ? EXIT_SUCCESS : EXIT_FAILURE;
 }
