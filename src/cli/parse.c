@@ -7,6 +7,34 @@
 #include <signal.h>
 #include <arpa/inet.h>
 
+#define MAX_DATA_FILE_SIZE (16 * 1024 * 1024)
+
+static char *read_data_file(FILE *fp, size_t *out_len) {
+    size_t cap = 4096, total = 0;
+    char *data = malloc(cap);
+    if (data == NULL) return NULL;
+    char buf[4096];
+    size_t nread;
+    while ((nread = fread(buf, 1, sizeof(buf), fp)) > 0) {
+        if (total + nread > MAX_DATA_FILE_SIZE) {
+            free(data);
+            return NULL;
+        }
+        if (total + nread >= cap) {
+            cap = (cap > SIZE_MAX / 2) ? SIZE_MAX : cap * 2;
+            char *tmp = realloc(data, cap);
+            if (tmp == NULL) { free(data); return NULL; }
+            data = tmp;
+        }
+        memcpy(data + total, buf, nread);
+        total += nread;
+    }
+    if (ferror(fp)) { free(data); return NULL; }
+    data[total] = '\0';
+    if (out_len != NULL) *out_len = total;
+    return data;
+}
+
 static int parse_non_negative_int(const char *value, const char *flag_name) {
     char *end = NULL;
     long parsed;
@@ -119,16 +147,13 @@ void parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
                 bool close_fp = false;
                 if (spec[0] == '-' && spec[1] == '\0') { fp = stdin; }
                 else { fp = fopen(spec, "rb"); if (fp == NULL) { fprintf(stderr, "Unable to open data file '%s': %s\n", spec, strerror(errno)); exit(EXIT_FAILURE); } close_fp = true; }
-                size_t cap = 4096, total = 0;
-                char *data = malloc(cap);
-                if (data == NULL) { fprintf(stderr, "Out of memory reading data\n"); if (close_fp) fclose(fp); exit(EXIT_FAILURE); }
-                char buf[4096]; size_t nread;
-                while ((nread = fread(buf, 1, sizeof(buf), fp)) > 0) {
-                    if (total + nread >= cap) { cap = (cap > SIZE_MAX / 2) ? SIZE_MAX : cap * 2; char *tmp = realloc(data, cap); if (tmp == NULL) { free(data); if (close_fp) fclose(fp); fprintf(stderr, "Out of memory reading data\n"); exit(EXIT_FAILURE); } data = tmp; }
-                    memcpy(data + total, buf, nread); total += nread;
-                }
-                if (ferror(fp)) { free(data); if (close_fp) fclose(fp); fprintf(stderr, "Failed to read data from '%s'\n", spec); exit(EXIT_FAILURE); }
+                size_t total = 0;
+                char *data = read_data_file(fp, &total);
                 if (close_fp) fclose(fp);
+                if (data == NULL) {
+                    fprintf(stderr, "Failed to read data from '%s' (too large or out of memory)\n", spec);
+                    exit(EXIT_FAILURE);
+                }
                 if (c->request_data != NULL) {
                     size_t old_len = c->request_data_len;
                     char *combined = malloc(old_len + 1 + total + 1);
@@ -318,17 +343,13 @@ void parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
                 if (fpath[0] == '-' && fpath[1] == '\0') fp = stdin;
                 else fp = fopen(fpath, "rb");
                 if (fp == NULL) { fprintf(stderr, "Cannot open '%s' for --data-urlencode\n", fpath); exit(EXIT_FAILURE); }
-                size_t cap = 4096, total = 0;
-                file_buf = malloc(cap);
-                if (file_buf == NULL) { fprintf(stderr, "Out of memory\n"); if (fp != stdin) fclose(fp); exit(EXIT_FAILURE); }
-                char tmp[4096]; size_t nread;
-                while ((nread = fread(tmp, 1, sizeof(tmp), fp)) > 0) {
-                    if (total + nread >= cap) { cap = (cap > SIZE_MAX / 2) ? SIZE_MAX : cap * 2; char *t = realloc(file_buf, cap); if (t == NULL) { free(file_buf); if (fp != stdin) fclose(fp); fprintf(stderr, "Out of memory\n"); exit(EXIT_FAILURE); } file_buf = t; }
-                    memcpy(file_buf + total, tmp, nread); total += nread;
-                }
-                if (ferror(fp)) { free(file_buf); if (fp != stdin) fclose(fp); fprintf(stderr, "Failed to read '%s'\n", fpath); exit(EXIT_FAILURE); }
+                size_t total = 0;
+                file_buf = read_data_file(fp, &total);
                 if (fp != stdin) fclose(fp);
-                file_buf[total] = '\0';
+                if (file_buf == NULL) {
+                    fprintf(stderr, "Failed to read '%s' (too large or out of memory)\n", fpath);
+                    exit(EXIT_FAILURE);
+                }
                 content = file_buf;
             } else if (arg[0] == '=') {
                 content = arg + 1;
@@ -355,17 +376,13 @@ void parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
                     if (fpath[0] == '-' && fpath[1] == '\0') fp = stdin;
                     else fp = fopen(fpath, "rb");
                     if (fp == NULL) { fprintf(stderr, "Cannot open '%s' for --data-urlencode\n", fpath); exit(EXIT_FAILURE); }
-                    size_t cap = 4096, total = 0;
-                    file_buf = malloc(cap);
-                    if (file_buf == NULL) { fprintf(stderr, "Out of memory\n"); if (fp != stdin) fclose(fp); exit(EXIT_FAILURE); }
-                    char tmp[4096]; size_t nread;
-                    while ((nread = fread(tmp, 1, sizeof(tmp), fp)) > 0) {
-                        if (total + nread >= cap) { cap = (cap > SIZE_MAX / 2) ? SIZE_MAX : cap * 2; char *t = realloc(file_buf, cap); if (t == NULL) { free(file_buf); if (fp != stdin) fclose(fp); fprintf(stderr, "Out of memory\n"); exit(EXIT_FAILURE); } file_buf = t; }
-                        memcpy(file_buf + total, tmp, nread); total += nread;
-                    }
-                    if (ferror(fp)) { free(file_buf); if (fp != stdin) fclose(fp); fprintf(stderr, "Failed to read '%s'\n", fpath); exit(EXIT_FAILURE); }
+                    size_t total = 0;
+                    file_buf = read_data_file(fp, &total);
                     if (fp != stdin) fclose(fp);
-                    file_buf[total] = '\0';
+                    if (file_buf == NULL) {
+                        fprintf(stderr, "Failed to read '%s' (too large or out of memory)\n", fpath);
+                        exit(EXIT_FAILURE);
+                    }
                     content = file_buf;
                 } else {
                     content = arg;
