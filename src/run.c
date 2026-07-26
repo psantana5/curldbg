@@ -215,7 +215,6 @@ static int establish_connection(struct connection *conn,
             snprintf(error, error_len, "Proxy TCP connect failed: %s", strerror(errno));
             return -1;
         }
-        *preferred_family = hop->connected_family;
         *connect_ms_out = (race_info->winner_connect_ms > 0.0) ? race_info->winner_connect_ms
                             : ms_between(&connect_start, &connect_end);
         conn->fd = fd;
@@ -240,7 +239,6 @@ static int establish_connection(struct connection *conn,
             snprintf(error, error_len, "TCP connect failed: %s", strerror(errno));
             return -1;
         }
-        *preferred_family = hop->connected_family;
         *connect_ms_out = (race_info->winner_connect_ms > 0.0) ? race_info->winner_connect_ms
                             : ms_between(&connect_start, &connect_end);
         conn->fd = fd;
@@ -295,7 +293,7 @@ static int run_request(const char *input_url, const struct run_options *opts,
     size_t upload_size = 0;
     bool chunked_upload = false;
     struct timespec total_start, total_end;
-    int preferred_family = AF_INET;
+    int preferred_family = opts->address_family;
     struct connection_state local_state;
     struct connection_state *state;
     int rc = -1;
@@ -613,13 +611,14 @@ done:
     close_upload_file(&upload_file);
     clock_gettime(CLOCK_MONOTONIC, &total_end);
     out->total_ms = ms_between(&total_start, &total_end);
-    if (reuse == NULL || rc != 0) {
-        close_connection(conn);
-        freeaddrinfo(*conn_addrs);
-        *conn_addrs = NULL;
-        conn_host[0] = '\0';
-        conn_port[0] = '\0';
-    }
+    /* Connection reuse is disabled because response bodies may leave unread
+     * bytes in the socket buffer, corrupting the next request. */
+    close_connection(conn);
+    freeaddrinfo(*conn_addrs);
+    *conn_addrs = NULL;
+    conn_host[0] = '\0';
+    conn_port[0] = '\0';
+
     if (rc != 0 && out->error[0] == '\0')
         snprintf(out->error, sizeof(out->error), "Request failed");
     return rc;
