@@ -118,6 +118,7 @@ struct connection {
     SSL_CTX *ctx;
     SSL *ssl;
     int last_errno;
+    bool ctx_owned;
 };
 
 struct connection_state {
@@ -167,6 +168,8 @@ struct run_options {
     const char *cacert;
     const char *capath;
     struct tls_params tls_params;
+    SSL_CTX *tls_ctx;
+    struct dns_cache *dns_cache;
 };
 
 struct run_result {

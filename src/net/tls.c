@@ -9,7 +9,7 @@
 #include <openssl/err.h>
 
 static SSL_CTX *create_tls_context(const struct tls_params *params,
-                                   char *error, size_t error_len) {
+                                    char *error, size_t error_len) {
     if (OPENSSL_init_ssl(0, NULL) != 1) {
         set_ssl_error(error, error_len, "OPENSSL_init_ssl failed");
         return NULL;
@@ -25,6 +25,7 @@ static SSL_CTX *create_tls_context(const struct tls_params *params,
     SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_CLIENT);
     SSL_CTX_set_read_ahead(ctx, 1);
     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+
     if (params != NULL && (params->cacert != NULL || params->capath != NULL)) {
         if (SSL_CTX_load_verify_locations(ctx, params->cacert, params->capath) != 1) {
             set_ssl_error(error, error_len, "Could not load CA certificates");
@@ -43,13 +44,28 @@ static SSL_CTX *create_tls_context(const struct tls_params *params,
     return ctx;
 }
 
+SSL_CTX *tls_context_create(const struct tls_params *params,
+                            char *error, size_t error_len) {
+    return create_tls_context(params, error, error_len);
+}
+
+void tls_context_free(SSL_CTX *ctx) {
+    if (ctx != NULL) SSL_CTX_free(ctx);
+}
+
 int init_tls(struct connection *conn, const char *hostname, bool insecure,
              int tls_min_version, int tls_max_version,
-             const struct tls_params *params,
+             const struct tls_params *params, SSL_CTX *shared_ctx,
              char *error, size_t error_len) {
-    SSL_CTX *ctx = create_tls_context(params, error, error_len);
-    if (ctx == NULL) return -1;
+    SSL_CTX *ctx = shared_ctx;
+    bool ctx_owned = false;
+    if (ctx == NULL) {
+        ctx = create_tls_context(params, error, error_len);
+        if (ctx == NULL) return -1;
+        ctx_owned = true;
+    }
     conn->ctx = ctx;
+    conn->ctx_owned = ctx_owned;
 
     conn->ssl = SSL_new(ctx);
     if (conn->ssl == NULL) { set_ssl_error(error, error_len, "SSL_new failed"); return -1; }
@@ -100,5 +116,6 @@ int init_tls(struct connection *conn, const char *hostname, bool insecure,
             set_error(error, error_len, "TLS certificate verification failed"); return -1;
         }
     }
+
     return 0;
 }
