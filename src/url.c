@@ -3,6 +3,13 @@
 #include <stdio.h>
 #include <string.h>
 
+static void copy_bounded(char *dst, size_t dst_size, const char *src) {
+    size_t len = strlen(src);
+    if (len >= dst_size) len = dst_size - 1;
+    memcpy(dst, src, len);
+    dst[len] = '\0';
+}
+
 /* Parse [http(s)://]host[:port][/path] into host/port/path. */
 int parse_url(const char *url, struct url_info *out) {
     const char *authority_start, *path_start;
@@ -12,16 +19,16 @@ int parse_url(const char *url, struct url_info *out) {
     if (strncasecmp(url, "http://", 7) == 0) {
         authority_start = url + 7;
         out->use_tls = false;
-        strcpy(out->port, "80");
+        snprintf(out->port, sizeof(out->port), "80");
     } else if (strncasecmp(url, "https://", 8) == 0) {
         authority_start = url + 8;
         out->use_tls = true;
-        strcpy(out->port, "443");
+        snprintf(out->port, sizeof(out->port), "443");
     } else {
         if (strstr(url, "://") != NULL) return -1;
         authority_start = url;
         out->use_tls = true;
-        strcpy(out->port, "443");
+        snprintf(out->port, sizeof(out->port), "443");
     }
 
     out->has_explicit_port = false;
@@ -41,11 +48,11 @@ int parse_url(const char *url, struct url_info *out) {
                 *colon = '\0';
                 if (strlen(authority) >= sizeof(out->user) || strlen(colon + 1) >= sizeof(out->pass))
                     return -1;
-                strcpy(out->user, authority);
-                strcpy(out->pass, colon + 1);
+                copy_bounded(out->user, sizeof(out->user), authority);
+                copy_bounded(out->pass, sizeof(out->pass), colon + 1);
             } else {
                 if (strlen(authority) >= sizeof(out->user)) return -1;
-                strcpy(out->user, authority);
+                copy_bounded(out->user, sizeof(out->user), authority);
                 out->pass[0] = '\0';
             }
             memmove(authority, at + 1, strlen(at + 1) + 1);
@@ -57,10 +64,10 @@ int parse_url(const char *url, struct url_info *out) {
         if (closing == NULL) return -1;
         *closing = '\0';
         if (strlen(authority + 1) >= sizeof(out->host)) return -1;
-        strcpy(out->host, authority + 1);
+        copy_bounded(out->host, sizeof(out->host), authority + 1);
         if (*(closing + 1) == ':') {
             if (strlen(closing + 2) == 0 || strlen(closing + 2) >= sizeof(out->port)) return -1;
-            strcpy(out->port, closing + 2);
+            copy_bounded(out->port, sizeof(out->port), closing + 2);
             out->has_explicit_port = true;
         } else if (*(closing + 1) != '\0') {
             return -1;
@@ -70,18 +77,18 @@ int parse_url(const char *url, struct url_info *out) {
         if (colon != NULL) {
             *colon = '\0';
             if (strlen(colon + 1) == 0 || strlen(colon + 1) >= sizeof(out->port)) return -1;
-            strcpy(out->port, colon + 1);
+            copy_bounded(out->port, sizeof(out->port), colon + 1);
             out->has_explicit_port = true;
         }
         if (strlen(authority) == 0 || strlen(authority) >= sizeof(out->host)) return -1;
-        strcpy(out->host, authority);
+        copy_bounded(out->host, sizeof(out->host), authority);
     }
 
     if (path_start == NULL) {
-        strcpy(out->path, "/");
+        snprintf(out->path, sizeof(out->path), "/");
     } else {
         if (strlen(path_start) >= sizeof(out->path)) return -1;
-        strcpy(out->path, path_start);
+        copy_bounded(out->path, sizeof(out->path), path_start);
     }
     return 0;
 }
