@@ -232,6 +232,28 @@ TEST(test_format_host_header_ipv6) {
     ASSERT_STR_EQ(out, "[::1]:8080", "IPv6 host header");
 }
 
+TEST(test_format_host_header_overflow) {
+    struct url_info u;
+    memset(&u, 0, sizeof(u));
+    memset(u.host, 'a', sizeof(u.host) - 1);
+    u.host[sizeof(u.host) - 1] = '\0';
+    u.has_explicit_port = false;
+    char out[8];
+    ASSERT_INT_EQ(format_host_header(&u, out, sizeof(out)), -1, "host header overflow returns error");
+    ASSERT_INT_EQ(out[0], '\0', "overflow output is empty");
+}
+
+TEST(test_format_absolute_uri_overflow) {
+    struct url_info u;
+    memset(&u, 0, sizeof(u));
+    strcpy(u.host, "example.com");
+    strcpy(u.path, "/");
+    u.use_tls = false;
+    char out[16];
+    ASSERT_INT_EQ(format_absolute_uri(&u, out, sizeof(out)), -1, "absolute URI overflow returns error");
+    ASSERT_INT_EQ(out[0], '\0', "overflow output is empty");
+}
+
 TEST(test_format_absolute_uri_http) {
     struct url_info u;
     memset(&u, 0, sizeof(u));
@@ -552,6 +574,36 @@ TEST(test_parse_response_headers_bad_status) {
     ASSERT_INT_EQ(ri.status_code, 0, "bad status line gives 0");
 }
 
+TEST(test_parse_response_headers_transfer_encoding_list) {
+    char buf[HEADER_MAX + 1];
+    struct response_info ri;
+    memset(buf, 0, sizeof(buf));
+    snprintf(buf, sizeof(buf), "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\n");
+    memset(&ri, 0, sizeof(ri));
+    parse_response_headers(buf, &ri);
+    ASSERT_TRUE(ri.chunked, "chunked at end of list recognized");
+}
+
+TEST(test_parse_response_headers_content_length_duplicate) {
+    char buf[HEADER_MAX + 1];
+    struct response_info ri;
+    memset(buf, 0, sizeof(buf));
+    snprintf(buf, sizeof(buf), "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 6\r\n\r\n");
+    memset(&ri, 0, sizeof(ri));
+    parse_response_headers(buf, &ri);
+    ASSERT_INT_EQ(ri.content_length, -2, "duplicate Content-Length marked invalid");
+}
+
+TEST(test_parse_response_headers_content_length_negative) {
+    char buf[HEADER_MAX + 1];
+    struct response_info ri;
+    memset(buf, 0, sizeof(buf));
+    snprintf(buf, sizeof(buf), "HTTP/1.1 200 OK\r\nContent-Length: -1\r\n\r\n");
+    memset(&ri, 0, sizeof(ri));
+    parse_response_headers(buf, &ri);
+    ASSERT_INT_EQ(ri.content_length, -2, "negative Content-Length marked invalid");
+}
+
 /* ================================================================
  * cookie_jar
  * ================================================================ */
@@ -648,6 +700,50 @@ TEST(test_cookie_jar_init) {
     jar.count = 999;
     cookie_jar_init(&jar);
     ASSERT_INT_EQ(jar.count, 0, "cookie_jar_init resets count");
+}
+
+TEST(test_cookie_jar_reject_tld_domain) {
+    struct cookie_jar jar;
+    cookie_jar_init(&jar);
+    cookie_jar_add_set_cookie(&jar, "x=1; Domain=.com", "example.com");
+    ASSERT_INT_EQ(jar.count, 0, "TLD domain cookie rejected");
+}
+
+TEST(test_cookie_jar_reject_ip_domain) {
+    struct cookie_jar jar;
+    cookie_jar_init(&jar);
+    cookie_jar_add_set_cookie(&jar, "x=1; Domain=192.168.1.1", "example.com");
+    ASSERT_INT_EQ(jar.count, 0, "IP domain cookie rejected for non-matching host");
+}
+
+TEST(test_cookie_jar_secure_roundtrip) {
+    struct cookie_jar jar;
+    cookie_jar_init(&jar);
+    cookie_jar_add_set_cookie(&jar, "session=abc; Path=/; Secure", "example.com");
+
+    const char *tmpfile = "/tmp/curldbg_test_secure_cookies.txt";
+    ASSERT_INT_EQ(cookie_jar_save(&jar, tmpfile), 0, "cookie_jar_save secure");
+
+    struct cookie_jar loaded;
+    cookie_jar_init(&loaded);
+    cookie_jar_load(&loaded, tmpfile);
+
+    char header[512];
+    cookie_jar_get_header(&loaded, "example.com", "/", true, header, sizeof(header));
+    ASSERT_STR_EQ(header, "session=abc", "secure cookie loaded and sent over HTTPS");
+    cookie_jar_get_header(&loaded, "example.com", "/", false, header, sizeof(header));
+    ASSERT_STR_EQ(header, "", "secure cookie not sent over HTTP after load");
+
+    remove(tmpfile);
+}
+
+TEST(test_cookie_jar_httponly_samesite_parsed) {
+    struct cookie_jar jar;
+    cookie_jar_init(&jar);
+    cookie_jar_add_set_cookie(&jar, "x=1; HttpOnly; SameSite=Strict", "example.com");
+    ASSERT_INT_EQ(jar.count, 1, "HttpOnly/SameSite cookie stored");
+    ASSERT_TRUE(strcmp(jar.entries[0].samesite, "Strict") == 0, "SameSite=Strict parsed");
+    ASSERT_TRUE(jar.entries[0].httponly, "HttpOnly parsed");
 }
 
 /* ================================================================
@@ -1582,6 +1678,8 @@ int main(void) {
     test_format_host_header_standard();
     test_format_host_header_explicit_port();
     test_format_host_header_ipv6();
+    test_format_host_header_overflow();
+    test_format_absolute_uri_overflow();
     test_format_absolute_uri_http();
 
     test_is_redirect_status();
@@ -1624,6 +1722,9 @@ int main(void) {
     test_parse_response_headers_content_encoding_deflate();
     test_parse_response_headers_multiple_set_cookie();
     test_parse_response_headers_bad_status();
+    test_parse_response_headers_transfer_encoding_list();
+    test_parse_response_headers_content_length_duplicate();
+    test_parse_response_headers_content_length_negative();
 
     test_cookie_jar_add_and_get();
     test_cookie_jar_path_mismatch();
@@ -1633,6 +1734,10 @@ int main(void) {
     test_cookie_jar_save_load_roundtrip();
     test_cookie_jar_max_capacity();
     test_cookie_jar_init();
+    test_cookie_jar_reject_tld_domain();
+    test_cookie_jar_reject_ip_domain();
+    test_cookie_jar_secure_roundtrip();
+    test_cookie_jar_httponly_samesite_parsed();
 
     test_build_redirect_url_absolute();
     test_build_redirect_url_relative();
