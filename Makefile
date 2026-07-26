@@ -14,35 +14,26 @@ SRCS := src/main.c src/run.c src/results.c src/util.c src/url.c \
         src/cookie.c src/cli/parse.c src/cli/help.c src/output.c src/compare.c
 TESTD_SRCS := tests/server/testd.c tests/server/route.c tests/server/handlers.c
 
-# --- Optional dependencies ---
-HAVE_LIBPSL := $(shell pkg-config --exists libpsl && echo 1 || echo 0)
-ifeq ($(HAVE_LIBPSL),1)
-    LIBPSL_CFLAGS := $(shell pkg-config --cflags libpsl)
-    LIBPSL_LIBS := $(shell pkg-config --libs libpsl)
+# --- Required dependencies ---
+LIBPSL_CFLAGS := $(shell pkg-config --cflags libpsl)
+LIBPSL_LIBS := $(shell pkg-config --libs libpsl)
+ifeq ($(LIBPSL_LIBS),)
+    $(error libpsl is required. Install libpsl-dev or similar and ensure pkg-config can find it.)
 endif
 
 # --- Regular build ---
-CFLAGS := $(OPT) -Wall -Wextra -Wshadow -fstack-protector-strong -D_FORTIFY_SOURCE=2 -pthread -Iinclude $(LIBPSL_CFLAGS)
+CFLAGS := $(OPT) -Wall -Wextra -Wshadow -fstack-protector-strong -D_FORTIFY_SOURCE=2 -pthread -Iinclude -DHAVE_LIBPSL $(LIBPSL_CFLAGS)
 LDLIBS := -pthread -lssl -lcrypto -lz $(LIBPSL_LIBS)
-ifeq ($(HAVE_LIBPSL),1)
-    CFLAGS += -DHAVE_LIBPSL
-endif
 OBJS := $(SRCS:src/%.c=$(OBJDIR)/%.o)
 UNIT_OBJS := $(filter-out $(OBJDIR)/main.o,$(OBJS))
 
 # --- ASan/UBSan ---
-SAN_CFLAGS := -g -O0 -fsanitize=address,undefined -Wall -Wextra -Werror -pthread -Iinclude $(LIBPSL_CFLAGS)
-ifeq ($(HAVE_LIBPSL),1)
-    SAN_CFLAGS += -DHAVE_LIBPSL
-endif
+SAN_CFLAGS := -g -O0 -fsanitize=address,undefined -Wall -Wextra -Werror -pthread -Iinclude -DHAVE_LIBPSL $(LIBPSL_CFLAGS)
 SAN_OBJS := $(SRCS:src/%.c=$(SAN_OBJDIR)/%.o)
 SAN_UNIT_OBJS := $(filter-out $(SAN_OBJDIR)/main.o,$(SAN_OBJS))
 
 # --- TSan ---
-TSAN_CFLAGS := -g -O1 -fsanitize=thread -Wall -Wextra -Werror -pthread -Iinclude $(LIBPSL_CFLAGS)
-ifeq ($(HAVE_LIBPSL),1)
-    TSAN_CFLAGS += -DHAVE_LIBPSL
-endif
+TSAN_CFLAGS := -g -O1 -fsanitize=thread -Wall -Wextra -Werror -pthread -Iinclude -DHAVE_LIBPSL $(LIBPSL_CFLAGS)
 TSAN_OBJS := $(SRCS:src/%.c=$(TSAN_OBJDIR)/%.o)
 TSAN_UNIT_OBJS := $(filter-out $(TSAN_OBJDIR)/main.o,$(TSAN_OBJS))
 

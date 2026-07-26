@@ -22,7 +22,6 @@ static bool is_ip_address(const char *s) {
     return false;
 }
 
-#ifdef HAVE_LIBPSL
 #include <libpsl.h>
 
 static bool cookie_domain_matches(const char *host, const char *domain, bool include_subdomains) {
@@ -49,74 +48,6 @@ static bool cookie_domain_matches(const char *host, const char *domain, bool inc
     }
     return host_len == dom_len && strcasecmp(host, d) == 0;
 }
-
-#else /* !HAVE_LIBPSL */
-
-/* Minimal static public suffix list. This is used only when libpsl is not
- * available at compile time. It is not a full PSL. */
-static const char * const public_suffixes[] = {
-    "com", "net", "org", "edu", "gov", "mil", "int",
-    "co.uk", "org.uk", "net.uk", "ac.uk", "gov.uk", "me.uk", "ltd.uk", "plc.uk",
-    "com.au", "net.au", "org.au", "gov.au", "edu.au", "asn.au", "id.au",
-    "co.jp", "ne.jp", "or.jp", "go.jp", "ac.jp", "gr.jp",
-    "com.br", "net.br", "org.br", "gov.br", "edu.br", "mil.br",
-    "co.nz", "org.nz", "net.nz", "govt.nz", "ac.nz",
-    "co.za", "org.za", "net.za", "gov.za", "ac.za",
-    "com.de", "co.de", "com.fr", "co.fr", "com.es", "com.it", "co.it",
-    "com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn",
-    "co.kr", "or.kr", "go.kr", "ac.kr",
-    "com.mx", "net.mx", "org.mx", "gob.mx", "edu.mx",
-    "com.sg", "com.my", "co.in", "com.in", "org.in", "net.in", "gov.in", "ac.in",
-    "co.il", "org.il", "net.il", "ac.il", "gov.il",
-    "com.hk", "co.id", "co.th", "co.ph", "com.vn", "com.tw", "co.tw",
-    "github.io", "gitlab.io", "herokuapp.com", "firebaseapp.com", "appspot.com",
-    NULL,
-};
-
-static bool is_public_suffix(const char *domain) {
-    if (domain == NULL || domain[0] == '\0') return false;
-    const char *d = domain;
-    while (*d == '.') d++;
-    for (const char * const *p = public_suffixes; *p != NULL; p++) {
-        if (strcasecmp(d, *p) == 0) return true;
-    }
-    return false;
-}
-
-static bool domain_has_public_suffix(const char *domain) {
-    if (domain == NULL || domain[0] == '\0') return false;
-    if (is_ip_address(domain)) return false;
-
-    const char *p = domain;
-    while (*p == '.') p++;
-    if (*p == '\0') return false;
-
-    const char *dot = strchr(p, '.');
-    if (dot == NULL) return false; /* single label such as "com" or "localhost" */
-    if (dot[1] == '\0') return false; /* trailing dot only after the label */
-    return true;
-}
-
-static bool cookie_domain_matches(const char *host, const char *domain, bool include_subdomains) {
-    if (domain == NULL || domain[0] == '\0' || host == NULL || host[0] == '\0') return false;
-    if (is_ip_address(domain)) return strcmp(host, domain) == 0;
-    if (!domain_has_public_suffix(domain)) return false;
-    if (is_public_suffix(domain)) return false;
-
-    size_t host_len = strlen(host);
-    size_t dom_len = strlen(domain);
-    if (dom_len > host_len) return false;
-
-    if (include_subdomains) {
-        if (dom_len == host_len)
-            return strcasecmp(host, domain) == 0;
-        if (host[host_len - dom_len - 1] != '.')
-            return false;
-        return strcasecmp(host + host_len - dom_len, domain) == 0;
-    }
-    return host_len == dom_len && strcasecmp(host, domain) == 0;
-}
-#endif /* HAVE_LIBPSL */
 
 void cookie_jar_init(struct cookie_jar *jar) {
     if (jar == NULL) return;
