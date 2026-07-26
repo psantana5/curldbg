@@ -778,6 +778,20 @@ TEST(test_build_redirect_url_relative) {
     ASSERT_STR_EQ(out, "http://example.com/dir/new-path", "relative redirect resolves to dir");
 }
 
+TEST(test_build_redirect_url_relative_dotdot) {
+    struct url_info base;
+    memset(&base, 0, sizeof(base));
+    snprintf(base.host, sizeof(base.host), "example.com");
+    snprintf(base.port, sizeof(base.port), "80");
+    base.use_tls = false;
+    base.has_explicit_port = false;
+    snprintf(base.path, sizeof(base.path), "/dir/page");
+
+    char out[2048];
+    ASSERT_INT_EQ(build_redirect_url("../next", &base, out, sizeof(out)), 0, "relative dotdot redirect");
+    ASSERT_STR_EQ(out, "http://example.com/next", "dotdot segments normalized");
+}
+
 TEST(test_build_redirect_url_absolute_path) {
     struct url_info base;
     memset(&base, 0, sizeof(base));
@@ -790,6 +804,20 @@ TEST(test_build_redirect_url_absolute_path) {
     char out[2048];
     ASSERT_INT_EQ(build_redirect_url("/absolute", &base, out, sizeof(out)), 0, "absolute path redirect");
     ASSERT_STR_EQ(out, "http://example.com/absolute", "absolute path redirect URL resolves");
+}
+
+TEST(test_build_redirect_url_absolute_path_dot_segments) {
+    struct url_info base;
+    memset(&base, 0, sizeof(base));
+    snprintf(base.host, sizeof(base.host), "example.com");
+    snprintf(base.port, sizeof(base.port), "80");
+    base.use_tls = false;
+    base.has_explicit_port = false;
+    snprintf(base.path, sizeof(base.path), "/dir/page");
+
+    char out[2048];
+    ASSERT_INT_EQ(build_redirect_url("/a/b/../c/./", &base, out, sizeof(out)), 0, "absolute dot segments redirect");
+    ASSERT_STR_EQ(out, "http://example.com/a/c/", "absolute dot segments normalized");
 }
 
 TEST(test_build_redirect_url_protocol_relative) {
@@ -1741,7 +1769,9 @@ int main(void) {
 
     test_build_redirect_url_absolute();
     test_build_redirect_url_relative();
+    test_build_redirect_url_relative_dotdot();
     test_build_redirect_url_absolute_path();
+    test_build_redirect_url_absolute_path_dot_segments();
     test_build_redirect_url_protocol_relative();
     test_build_redirect_url_relative_no_slash();
 
