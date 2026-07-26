@@ -4,7 +4,7 @@
 [![Coverage](https://img.shields.io/badge/coverage-report-blue)](https://github.com/psantana5/curldbg/actions/workflows/ci.yml)
 
 curldbg is a lightweight HTTP/HTTPS client that doubles as both a **debugging tool**
-and a **curl-compatible CLI** for scripting. It speaks raw HTTP/1.1 over TLS, reports
+and a **curl-inspired CLI** for scripting. It speaks raw HTTP/1.1 over TLS, reports
 per-request timing metrics, and handles real-world HTTP features like redirects,
 chunked transfer encoding, gzip decompression, and cookie jars.
 
@@ -13,17 +13,21 @@ It was born from a practical need — during the Ubuntu mirrors outage on April 
 into DNS, TCP connect, and TTFB timing was essential for diagnosing what was
 actually failing and where.
 
+> **Note:** curldbg is not a complete curl replacement. It supports a subset of
+curl's most common flags and only HTTP/1.1 at the moment. Review the flag list
+below before using it in existing scripts.
+
 ## Key capabilities
 
 - **Request profiling** — per-hop DNS, TCP, TTFB, and total timing, with connected
   IP and address family for each hop
-- **curl-compatible CLI** — supports common curl flags (`-d`, `-L`, `-f`, `-sS`,
+- **curl-inspired CLI** — supports common curl flags (`-d`, `-L`, `-f`, `-sS`,
   `-I`, `-A`, `-H`, `-u`, `-X`, `-o`, `-O`, `-T`, `-k`, `-4`/`-6`, `-v`,
   `-b`/`-c`, `-e`, `-w`, `--proxy`, `--max-time`, `--connect-timeout`,
   `--read-timeout`, `--max-redirs`, `--compressed`, `--data-urlencode`,
   `--resolve`, `--interface`, `--tlsv1.2`, `--tlsv1.3`, `--retry`,
   `--retry-delay`, `--cacert`, `--capath`, `--unix-socket`, `--no-happy-eyeballs`)
-  for drop-in use in scripts
+  for scripting where only these features are needed
 - **Redirect following** — tracks the full redirect chain with per-hop timing,
   301/302/303/307/308, with correct 303 GET-downgrade behavior
 - **Post data from files/stdin** — `-d @file` and `-d @-` avoid shell escaping;
@@ -43,9 +47,8 @@ actually failing and where.
 
 ## Use cases
 
-- **Scripting** — replace `/usr/bin/curl` with a symlink to curldbg for a compatible
-  CLI that handles JSON-RPC workflows (Zabbix API, etc.) with chunked encoding and
-  pipe-friendly output
+- **Scripting** — use curldbg in scripts that only need the supported subset of
+  curl flags; verify compatibility before swapping it in for existing curl calls
 - **Network debugging** — quick visibility into DNS resolution, connect latency,
   TTFB, redirect chains, and happy-eyeballs races
 - **Embedded/low-resource** — single ~96KB binary, no libcurl dependency, minimal
@@ -80,14 +83,14 @@ src/
 ├── compare.c                — --compare (IPv4 vs IPv6) and --compare-urls modes
 ├── net/
 │   ├── connect.c            — TCP connection, Happy Eyeballs (RFC 8305), Unix sockets, socket I/O
-│   ├── dns.c                — DNS resolution with thread-based timeout, DNS cache, resolve helpers
-│   ├── tls.c                — TLS handshake via OpenSSL, shared SSL_CTX, SNI, cert verification
+│   ├── dns.c                — DNS resolution with thread-based timeout, per-session DNS cache with TTL, resolve helpers
+│   ├── tls.c                — TLS handshake via OpenSSL, session-scoped SSL_CTX, SNI, cert verification
 │   └── proxy.c              — HTTP CONNECT proxy handshake
 ├── http/
 │   ├── request.c            — HTTP/1.1 request building and sending
 │   └── response.c           — HTTP/1.1 response receive, header parsing, chunked decoding, gzip/deflate
 ├── cli/
-│   ├── parse.c              — CLI option parsing, combined flags (-sfvk), signal setup
+│   ├── parse.c              — CLI option parsing with error returns, combined flags (-sfvk), signal setup
 │   └── help.c               — --help flag rendering
 └── include/
     ├── curldbg.h            — shared structs, constants, function declarations
