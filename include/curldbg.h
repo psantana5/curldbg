@@ -117,6 +117,7 @@ struct connection {
     bool verbose;
     SSL_CTX *ctx;
     SSL *ssl;
+    int last_errno;
 };
 
 struct connection_state {

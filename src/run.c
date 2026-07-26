@@ -268,11 +268,19 @@ static int establish_connection(struct connection *conn,
     return 0;
 }
 
-bool is_connection_error(const char *error) {
-    return (strncmp(error, "Write failed", 12) == 0 ||
-            strncmp(error, "Read failed", 11) == 0 ||
-            strncmp(error, "Write timeout", 13) == 0 ||
-            strncmp(error, "Read timeout", 12) == 0);
+bool is_connection_error(struct connection *conn) {
+    if (conn == NULL) return false;
+    switch (conn->last_errno) {
+        case ECONNRESET:
+        case EPIPE:
+        case ETIMEDOUT:
+        case ECONNREFUSED:
+        case ENETUNREACH:
+        case EHOSTUNREACH:
+            return true;
+        default:
+            return false;
+    }
 }
 
 static int run_request(const char *input_url, const struct run_options *opts,
@@ -507,7 +515,7 @@ static int run_request(const char *input_url, const struct run_options *opts,
                 sr = -1;
         }
         /* On connection-level error with a reused socket, retry once with a fresh TCP/TLS */
-        if (sr != 0 && reuse_connection && !request_retried && is_connection_error(out->error)) {
+        if (sr != 0 && reuse_connection && !request_retried && is_connection_error(conn)) {
             close_connection(conn);
             freeaddrinfo(*conn_addrs);
             *conn_addrs = NULL;

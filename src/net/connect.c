@@ -525,6 +525,7 @@ ssize_t connection_read(struct connection *conn, void *buf, size_t len, char *er
     if (__builtin_expect(!conn->use_tls, 1)) {
         ssize_t n = recv(conn->fd, buf, len, 0);
         if (__builtin_expect(n >= 0, 1)) return n;
+        conn->last_errno = errno;
         if (is_timeout_errno(errno)) { set_error(error, error_len, "Read timeout"); return -1; }
         set_error(error, error_len, "Read failed: %s", strerror(errno)); return -1;
     }
@@ -536,13 +537,16 @@ ssize_t connection_read(struct connection *conn, void *buf, size_t len, char *er
     if (ssl_err == SSL_ERROR_ZERO_RETURN) return 0;
     if ((ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) ||
         (ssl_err == SSL_ERROR_SYSCALL && is_timeout_errno(errno))) {
+        conn->last_errno = ETIMEDOUT;
         set_error(error, error_len, "Read timeout"); return -1;
     }
     if (ssl_err == SSL_ERROR_SYSCALL && errno != 0) {
+        conn->last_errno = errno;
         set_error(error, error_len, "Read failed: %s", strerror(errno)); return -1;
     }
     if (ssl_err == SSL_ERROR_SYSCALL && errno == 0) return 0;
 
+    conn->last_errno = EIO;
     set_ssl_error(error, error_len, "SSL_read failed"); return -1;
 }
 
@@ -552,6 +556,7 @@ int connection_write_all(struct connection *conn, const char *buf, size_t len, c
         if (__builtin_expect(!conn->use_tls, 1)) {
             ssize_t n = send(conn->fd, buf + sent, len - sent, 0);
             if (n < 0) {
+                conn->last_errno = errno;
                 if (is_timeout_errno(errno)) set_error(error, error_len, "Write timeout");
                 else set_error(error, error_len, "Write failed: %s", strerror(errno));
                 return -1;
@@ -565,14 +570,18 @@ int connection_write_all(struct connection *conn, const char *buf, size_t len, c
             int ssl_err = SSL_get_error(conn->ssl, n);
             if ((ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) ||
                 (ssl_err == SSL_ERROR_SYSCALL && is_timeout_errno(errno))) {
+                conn->last_errno = ETIMEDOUT;
                 set_error(error, error_len, "Write timeout"); return -1;
             }
             if (ssl_err == SSL_ERROR_SYSCALL && errno != 0) {
+                conn->last_errno = errno;
                 set_error(error, error_len, "Write failed: %s", strerror(errno)); return -1;
             }
             if (ssl_err == SSL_ERROR_SYSCALL && errno == 0) {
+                conn->last_errno = EPIPE;
                 set_error(error, error_len, "Write failed: unexpected EOF"); return -1;
             }
+            conn->last_errno = EIO;
             set_ssl_error(error, error_len, "SSL_write failed"); return -1;
         }
         sent += (size_t)n;
@@ -616,6 +625,7 @@ int connection_writev_all(struct connection *conn, const struct iovec *iov, int 
         ssize_t n = writev(conn->fd, iov_copy, remaining);
         if (n < 0) {
             if (iov_orig != local_iov) free(iov_orig);
+            conn->last_errno = errno;
             if (is_timeout_errno(errno)) set_error(error, error_len, "Write timeout");
             else set_error(error, error_len, "Write failed: %s", strerror(errno));
             return -1;

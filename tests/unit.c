@@ -872,7 +872,7 @@ extern size_t chunked_write(const char *buf, size_t len, FILE *body_out,
     z_stream *strm, bool decompress, char *error, size_t error_len);
 extern int setup_upload_file(const char *upload_path, FILE **upload_file,
     size_t *upload_size, bool *chunked_upload, char *error, size_t error_len);
-extern bool is_connection_error(const char *error);
+extern bool is_connection_error(struct connection *conn);
 
 TEST(test_set_error) {
     char buf[64];
@@ -1210,28 +1210,45 @@ TEST(test_set_nonblocking) {
 }
 
 TEST(test_is_connection_error_write) {
-    ASSERT_TRUE(is_connection_error("Write failed: connection reset"), "write failed");
-    ASSERT_TRUE(is_connection_error("Write failed: broken pipe"), "broken pipe");
+    struct connection conn;
+    memset(&conn, 0, sizeof(conn));
+    conn.last_errno = ECONNRESET;
+    ASSERT_TRUE(is_connection_error(&conn), "write failed");
+    conn.last_errno = EPIPE;
+    ASSERT_TRUE(is_connection_error(&conn), "broken pipe");
 }
 
 TEST(test_is_connection_error_read) {
-    ASSERT_TRUE(is_connection_error("Read failed"), "read failed");
-    ASSERT_TRUE(is_connection_error("Read failed on response body"), "read body");
+    struct connection conn;
+    memset(&conn, 0, sizeof(conn));
+    conn.last_errno = ECONNRESET;
+    ASSERT_TRUE(is_connection_error(&conn), "read failed");
+    conn.last_errno = EPIPE;
+    ASSERT_TRUE(is_connection_error(&conn), "read body");
 }
 
 TEST(test_is_connection_error_timeout) {
-    ASSERT_TRUE(is_connection_error("Write timeout"), "write timeout");
-    ASSERT_TRUE(is_connection_error("Read timeout on socket"), "read timeout");
+    struct connection conn;
+    memset(&conn, 0, sizeof(conn));
+    conn.last_errno = ETIMEDOUT;
+    ASSERT_TRUE(is_connection_error(&conn), "write timeout");
+    ASSERT_TRUE(is_connection_error(&conn), "read timeout");
 }
 
 TEST(test_is_connection_error_dns) {
-    ASSERT_FALSE(is_connection_error("DNS resolution failed"), "dns");
-    ASSERT_FALSE(is_connection_error("TLS handshake failed"), "tls");
+    struct connection conn;
+    memset(&conn, 0, sizeof(conn));
+    conn.last_errno = EAI_FAIL;
+    ASSERT_FALSE(is_connection_error(&conn), "dns");
+    conn.last_errno = EIO;
+    ASSERT_FALSE(is_connection_error(&conn), "tls");
 }
 
 TEST(test_is_connection_error_ok) {
-    ASSERT_FALSE(is_connection_error(""), "empty");
-    ASSERT_FALSE(is_connection_error("OK"), "ok");
+    struct connection conn;
+    memset(&conn, 0, sizeof(conn));
+    ASSERT_FALSE(is_connection_error(&conn), "empty");
+    ASSERT_FALSE(is_connection_error(NULL), "null");
 }
 
 TEST(test_init_run_options_basic) {
