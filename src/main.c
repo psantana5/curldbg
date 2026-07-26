@@ -22,13 +22,24 @@ static void configure_output_buffering(void) {
 
 /* --- main --- */
 int main(int argc, char **argv) {
+    int exit_code = EXIT_SUCCESS;
     struct cmdline_opts *c = calloc(1, sizeof(*c));
     if (c == NULL) die("calloc");
     struct cookie_jar *cookie_jar_ptr = NULL;
-    parse_cmdline(argc, argv, c);
+    struct run_options session_opts;
+    memset(&session_opts, 0, sizeof(session_opts));
+    int parse_rc = parse_cmdline(argc, argv, c);
+    if (parse_rc < 0) {
+        fprintf(stderr, "%s\n", c->error[0] != '\0' ? c->error : "Invalid command line");
+        exit_code = EXIT_FAILURE;
+        goto cleanup;
+    }
+    if (parse_rc > 0) {
+        exit_code = EXIT_SUCCESS;
+        goto cleanup;
+    }
 
     /* Free allocated memory on exit */
-    int exit_code = EXIT_SUCCESS;
 
     if (c->compare_family_mode && c->compare_urls_mode) {
         fprintf(stderr, "--compare and --compare-urls are mutually exclusive\n");
@@ -106,7 +117,6 @@ int main(int argc, char **argv) {
     configure_output_buffering();
 
     if (!c->compare_family_mode && !c->compare_urls_mode) {
-        struct run_options opts;
         struct run_result result;
         struct connection_state rconn;
         FILE *body_out = NULL;
@@ -145,10 +155,9 @@ int main(int argc, char **argv) {
             }
         }
 
-        memset(&opts, 0, sizeof(opts));
-        opts.proxy_host = proxy_host;
-        opts.proxy_port = proxy_port;
-        opts.cookie_jar = cookie_jar_ptr;
+        session_opts.proxy_host = proxy_host;
+        session_opts.proxy_port = proxy_port;
+        session_opts.cookie_jar = cookie_jar_ptr;
 
         if (c->url_count > 1 && !c->silent)
             printf("=== Multi-URL mode: %d URLs ===\n", c->url_count);
@@ -160,7 +169,7 @@ int main(int argc, char **argv) {
             if (c->url_count > 1 && !c->silent)
                 printf("\n--- URL %d/%d: %s ---\n", ui + 1, c->url_count, c->input_url);
 
-            int rc = run_single_request(c, &opts, &result, body_out, &rconn);
+            int rc = run_single_request(c, &session_opts, &result, body_out, &rconn);
 
             if (c->write_out_format != NULL) {
                 write_out_expand(c->write_out_format, &result);

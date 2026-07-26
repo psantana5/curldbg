@@ -182,6 +182,7 @@ struct run_result {
 };
 
 struct cmdline_opts {
+    char error[256];
     const char *input_url;
     const char *compare_url;
     char request_method[32];
@@ -236,7 +237,7 @@ struct cmdline_opts {
 };
 
 /* --- cli/parse.c --- */
-void parse_cmdline(int argc, char **argv, struct cmdline_opts *c);
+int parse_cmdline(int argc, char **argv, struct cmdline_opts *c);
 
 /* --- cli/help.c --- */
 void print_help(const char *prog);
