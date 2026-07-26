@@ -125,6 +125,14 @@ void trim_spaces(char **start) {
     while (**start == ' ' || **start == '\t') (*start)++;
 }
 
+bool contains_crlf(const char *s) {
+    if (s == NULL) return false;
+    for (const char *p = s; *p != '\0'; p++) {
+        if (*p == '\r' || *p == '\n') return true;
+    }
+    return false;
+}
+
 long deadline_remaining_ms(const struct timespec *start, int max_ms) {
     if (max_ms <= 0) return -1;
     struct timespec now;

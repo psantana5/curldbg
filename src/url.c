@@ -159,20 +159,22 @@ int build_redirect_url(
     int n;
 
     if (strncasecmp(location, "http://", 7) == 0 || strncasecmp(location, "https://", 8) == 0) {
+        if (contains_crlf(location)) return -1;
         if (strlen(location) >= out_size) return -1;
-        strcpy(out_url, location);
+        snprintf(out_url, out_size, "%s", location);
         return 0;
     }
 
     if (location[0] == '/' && location[1] == '/') {
         const char *proto = base->use_tls ? "https:" : "http:";
+        if (contains_crlf(location)) return -1;
         if (strlen(proto) + strlen(location) >= out_size) return -1;
-        strcpy(out_url, proto);
-        strcat(out_url, location);
+        snprintf(out_url, out_size, "%s%s", proto, location);
         return 0;
     }
 
     if (location[0] == '/') {
+        if (contains_crlf(location)) return -1;
         path_to_use = location;
     } else {
         /* Relative path: resolve against base path directory */

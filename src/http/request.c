@@ -170,9 +170,17 @@ int send_request(
     size_t auth_len = 0, content_len = 0;
     bool include_body_headers = false;
 
+    if (contains_crlf(verb) || contains_crlf(user_agent)) {
+        set_error(error, error_len, "Request contains invalid characters"); return -1;
+    }
+
     if (format_host_header(url, host_header, sizeof(host_header)) != 0) {
         set_error(error, error_len, "Host header too large"); return -1;
     }
+    if (contains_crlf(host_header)) {
+        set_error(error, error_len, "Host header contains invalid characters"); return -1;
+    }
+
 
     bool has_content_type = (header_flags & HF_CONTENT_TYPE) != 0;
     bool has_content_length = (header_flags & HF_CONTENT_LENGTH) != 0;
@@ -199,6 +207,9 @@ int send_request(
             }
         }
         if (effective_auth != NULL && effective_auth[0] != '\0') {
+            if (contains_crlf(effective_auth)) {
+                set_error(error, error_len, "Authorization value contains invalid characters"); return -1;
+            }
             char auth_b64[512];
             if (base64_encode((const unsigned char *)effective_auth, strlen(effective_auth), auth_b64, sizeof(auth_b64)) != 0) {
                 set_error(error, error_len, "Basic auth value is too large"); return -1;
@@ -220,6 +231,15 @@ int send_request(
         request_target = proxy_abs_uri;
     } else {
         request_target = url->path;
+    }
+    if (contains_crlf(request_target)) {
+        set_error(error, error_len, "Request target contains invalid characters"); return -1;
+    }
+
+    for (size_t i = 0; i < extra_header_count; i++) {
+        if (extra_headers[i] != NULL && contains_crlf(extra_headers[i])) {
+            set_error(error, error_len, "Extra header contains invalid characters"); return -1;
+        }
     }
 
     size_t verb_len = strlen(verb);
