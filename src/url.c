@@ -10,6 +10,69 @@ static void copy_bounded(char *dst, size_t dst_size, const char *src) {
     dst[len] = '\0';
 }
 
+static int normalize_path(const char *path, char *out, size_t out_size) {
+    char tmp[2048];
+    char *segments[512];
+    size_t seg_count = 0;
+    size_t path_len, suffix_len, out_len = 0;
+    bool trailing_slash;
+    char *suffix;
+    char *p;
+
+    if (path == NULL || out_size == 0 || path[0] != '/') return -1;
+    if (strlen(path) >= sizeof(tmp)) return -1;
+
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    path_len = strcspn(tmp, "?#");
+    suffix = tmp + path_len;
+    suffix_len = strlen(suffix);
+    trailing_slash = (path_len > 0 && tmp[path_len - 1] == '/');
+    *suffix = '\0';
+
+    p = tmp;
+    while (*p == '/') p++;
+    while (*p != '\0') {
+        char *start = p;
+        while (*p != '\0' && *p != '/') p++;
+        if (*p == '/') *p++ = '\0';
+
+        if (strcmp(start, ".") == 0) {
+            /* skip */
+        } else if (strcmp(start, "..") == 0) {
+            if (seg_count > 0) seg_count--;
+        } else {
+            if (seg_count >= sizeof(segments) / sizeof(segments[0])) return -1;
+            segments[seg_count++] = start;
+        }
+
+        while (*p == '/') p++;
+    }
+
+    if (out_size < 2) return -1;
+    out[out_len++] = '/';
+
+    for (size_t i = 0; i < seg_count; i++) {
+        size_t seg_len = strlen(segments[i]);
+        if (out_len + seg_len + 1 >= out_size) return -1;
+        if (i > 0) out[out_len++] = '/';
+        memcpy(out + out_len, segments[i], seg_len);
+        out_len += seg_len;
+    }
+    if (seg_count > 0 && trailing_slash) {
+        if (out_len + 1 >= out_size) return -1;
+        out[out_len++] = '/';
+    }
+
+    if (suffix_len > 0) {
+        if (out_len + suffix_len + 1 > out_size) return -1;
+        memcpy(out + out_len, suffix, suffix_len + 1);
+    } else {
+        if (out_len >= out_size) return -1;
+        out[out_len] = '\0';
+    }
+    return 0;
+}
+
 /* Parse [http(s)://]host[:port][/path] into host/port/path. */
 int parse_url(const char *url, struct url_info *out) {
     const char *authority_start, *path_start;
@@ -198,6 +261,10 @@ int build_redirect_url(
             return -1;
         path_to_use = base_dir;
     }
+
+    if (normalize_path(path_to_use, base_dir, sizeof(base_dir)) != 0)
+        return -1;
+    path_to_use = base_dir;
 
     if (base->has_explicit_port) {
         if (is_ipv6_literal)
