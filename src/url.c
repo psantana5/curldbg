@@ -86,7 +86,7 @@ int parse_url(const char *url, struct url_info *out) {
     return 0;
 }
 
-void format_absolute_uri(const struct url_info *url, char *out, size_t out_size) {
+int format_absolute_uri(const struct url_info *url, char *out, size_t out_size) {
     const char *scheme = url->use_tls ? "https" : "http";
     bool is_ipv6_literal = strchr(url->host, ':') != NULL;
     int n;
@@ -101,7 +101,11 @@ void format_absolute_uri(const struct url_info *url, char *out, size_t out_size)
         else
             n = snprintf(out, out_size, "%s://%s%s", scheme, url->host, url->path);
     }
-    if (n < 0 || (size_t)n >= out_size) out[0] = '\0';
+    if (n < 0 || (size_t)n >= out_size) {
+        if (out_size > 0) out[0] = '\0';
+        return -1;
+    }
+    return 0;
 }
 
 int format_url(const struct url_info *url, char *out_url, size_t out_size) {
@@ -123,19 +127,25 @@ int format_url(const struct url_info *url, char *out_url, size_t out_size) {
     return 0;
 }
 
-void format_host_header(const struct url_info *url, char *out, size_t out_size) {
+int format_host_header(const struct url_info *url, char *out, size_t out_size) {
     bool is_ipv6_literal = strchr(url->host, ':') != NULL;
+    int n;
     if (url->has_explicit_port) {
         if (is_ipv6_literal)
-            snprintf(out, out_size, "[%s]:%s", url->host, url->port);
+            n = snprintf(out, out_size, "[%s]:%s", url->host, url->port);
         else
-            snprintf(out, out_size, "%s:%s", url->host, url->port);
-        return;
+            n = snprintf(out, out_size, "%s:%s", url->host, url->port);
+    } else {
+        if (is_ipv6_literal)
+            n = snprintf(out, out_size, "[%s]", url->host);
+        else
+            n = snprintf(out, out_size, "%s", url->host);
     }
-    if (is_ipv6_literal)
-        snprintf(out, out_size, "[%s]", url->host);
-    else
-        snprintf(out, out_size, "%s", url->host);
+    if (n < 0 || (size_t)n >= out_size) {
+        if (out_size > 0) out[0] = '\0';
+        return -1;
+    }
+    return 0;
 }
 
 int build_redirect_url(

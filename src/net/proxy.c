@@ -23,7 +23,9 @@ int proxy_connect(struct connection *conn, const struct url_info *target,
 
     apply_socket_timeout(conn->fd, connect_timeout_ms);
 
-    format_host_header(target, host_header, sizeof(host_header));
+    if (format_host_header(target, host_header, sizeof(host_header)) != 0) {
+        set_error(error, error_len, "CONNECT target host header too large"); return -1;
+    }
     int nw = snprintf(request, sizeof(request), "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n",
                       host_header, host_header);
     if (nw < 0 || (size_t)nw >= sizeof(request)) {

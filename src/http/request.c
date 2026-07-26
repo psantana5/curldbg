@@ -170,7 +170,9 @@ int send_request(
     size_t auth_len = 0, content_len = 0;
     bool include_body_headers = false;
 
-    format_host_header(url, host_header, sizeof(host_header));
+    if (format_host_header(url, host_header, sizeof(host_header)) != 0) {
+        set_error(error, error_len, "Host header too large"); return -1;
+    }
 
     bool has_content_type = (header_flags & HF_CONTENT_TYPE) != 0;
     bool has_content_length = (header_flags & HF_CONTENT_LENGTH) != 0;
@@ -212,7 +214,9 @@ int send_request(
     char proxy_abs_uri[2048];
     const char *request_target;
     if (use_proxy) {
-        format_absolute_uri(url, proxy_abs_uri, sizeof(proxy_abs_uri));
+        if (format_absolute_uri(url, proxy_abs_uri, sizeof(proxy_abs_uri)) != 0) {
+            set_error(error, error_len, "Proxy request target too large"); return -1;
+        }
         request_target = proxy_abs_uri;
     } else {
         request_target = url->path;
