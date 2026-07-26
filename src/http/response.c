@@ -75,13 +75,33 @@ void parse_response_headers(char *headers, struct response_info *out) {
                     trim_spaces((char **)&val);
                     char *endp = NULL;
                     long cl = strtol(val, &endp, 10);
-                    if (*endp == '\0' && cl >= 0) out->content_length = cl;
+                    if (endp == NULL || *endp != '\0' || cl < 0 ||
+                        (out->content_length >= 0 && out->content_length != cl)) {
+                        out->content_length = -2; /* malformed / duplicate */
+                    } else {
+                        out->content_length = cl;
+                    }
                 }
             } else if (c == 't' && line_len >= 18 && line[1] == 'r' &&
                        strncasecmp(line + 2, "ansfer-Encoding:", 16) == 0) {
                 const char *val = line + 18;
                 trim_spaces((char **)&val);
-                if (strcasecmp(val, "chunked") == 0) out->chunked = true;
+                /* Transfer-Encoding may be a comma-separated list; the last
+                 * token must be "chunked" for this parser to handle it. */
+                const char *last = val;
+                const char *tok = val;
+                while (*tok != '\0') {
+                    while (*tok == ' ' || *tok == ',') tok++;
+                    const char *start = tok;
+                    while (*tok != '\0' && *tok != ',') tok++;
+                    const char *e = tok;
+                    while (e > start && *(e - 1) == ' ') e--;
+                    if (e > start) last = start;
+                }
+                size_t last_len = 0;
+                while (last[last_len] != '\0' && last[last_len] != ',') last_len++;
+                while (last_len > 0 && last[last_len - 1] == ' ') last_len--;
+                if (last_len == 7 && strncasecmp(last, "chunked", 7) == 0) out->chunked = true;
             } else if (c == 's' && line_len >= 12 && line[1] == 'e' &&
                        strncasecmp(line + 2, "t-Cookie:", 9) == 0) {
                 const char *val = line + 11;
@@ -173,8 +193,13 @@ size_t chunked_write(const char *buf, size_t len, FILE *body_out, struct respons
                 char *semi = strchr(line_buf, ';');
                 if (semi) *semi = '\0';
                 char *end = NULL;
-                *chunk_rem = (unsigned long)strtoul(line_buf, &end, 16);
+                unsigned long val = strtoul(line_buf, &end, 16);
                 *line_len = 0;
+                if (end == NULL || end == line_buf || *end != '\0') {
+                    set_error(error, error_len, "Invalid chunk size");
+                    return (size_t)-1;
+                }
+                *chunk_rem = val;
                 if (*chunk_rem == 0) *state = 3;
                 else *state = 1;
             }
@@ -308,6 +333,11 @@ int receive_response(
 
                 if (out->status_code == 0) {
                     set_error(error, error_len, "Invalid HTTP response status line");
+                    if (decomp_init) inflateEnd(&decomp_strm);
+                    return -1;
+                }
+                if (out->content_length == -2) {
+                    set_error(error, error_len, "Invalid Content-Length header");
                     if (decomp_init) inflateEnd(&decomp_strm);
                     return -1;
                 }
