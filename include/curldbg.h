@@ -76,6 +76,8 @@ struct cookie_entry {
     char path[1024];
     char name[256];
     char value[4096];
+    bool has_expiry;
+    time_t expires_at;
     bool secure;
     bool httponly;
     char samesite[16];
@@ -349,7 +351,8 @@ int run_compare_urls(const struct cmdline_opts *c, struct run_options *opts);
 
 /* --- cookie.c --- */
 void cookie_jar_init(struct cookie_jar *jar);
-void cookie_jar_add_set_cookie(struct cookie_jar *jar, const char *set_cookie, const char *request_host);
+void cookie_jar_add_set_cookie(struct cookie_jar *jar, const char *set_cookie,
+                               const char *request_host, const char *request_path);
 void cookie_jar_get_header(struct cookie_jar *jar, const char *host, const char *path,
                            bool secure_connection, char *out, size_t out_size);
 int cookie_jar_save(const struct cookie_jar *jar, const char *filepath);
