@@ -4,13 +4,56 @@
 #include <string.h>
 #include <strings.h>
 
+#include <arpa/inet.h>
+
+static bool is_ip_address(const char *s) {
+    struct in_addr a4;
+    struct in6_addr a6;
+    if (inet_pton(AF_INET, s, &a4) == 1) return true;
+    if (inet_pton(AF_INET6, s, &a6) == 1) return true;
+    return false;
+}
+
+static bool domain_has_public_suffix(const char *domain) {
+    if (domain == NULL || domain[0] == '\0') return false;
+    if (is_ip_address(domain)) return false;
+
+    const char *p = domain;
+    while (*p == '.') p++;
+    if (*p == '\0') return false;
+
+    const char *dot = strchr(p, '.');
+    if (dot == NULL) return false; /* single label such as "com" or "localhost" */
+    if (dot[1] == '\0') return false; /* trailing dot only after the label */
+    return true;
+}
+
+static bool cookie_domain_matches(const char *host, const char *domain, bool include_subdomains) {
+    if (domain == NULL || domain[0] == '\0' || host == NULL || host[0] == '\0') return false;
+    if (is_ip_address(domain)) return strcmp(host, domain) == 0;
+    if (!domain_has_public_suffix(domain)) return false;
+
+    size_t host_len = strlen(host);
+    size_t dom_len = strlen(domain);
+    if (dom_len > host_len) return false;
+
+    if (include_subdomains) {
+        if (dom_len == host_len)
+            return strcasecmp(host, domain) == 0;
+        if (host[host_len - dom_len - 1] != '.')
+            return false;
+        return strcasecmp(host + host_len - dom_len, domain) == 0;
+    }
+    return host_len == dom_len && strcasecmp(host, domain) == 0;
+}
+
 void cookie_jar_init(struct cookie_jar *jar) {
     if (jar == NULL) return;
     memset(jar, 0, sizeof(*jar));
 }
 
 void cookie_jar_add_set_cookie(struct cookie_jar *jar, const char *set_cookie, const char *request_host) {
-    if (jar->count >= MAX_COOKIES || set_cookie == NULL || *set_cookie == '\0') return;
+    if (jar->count >= MAX_COOKIES || set_cookie == NULL || *set_cookie == '\0' || request_host == NULL) return;
 
     struct cookie_entry *entry = &jar->entries[jar->count];
     memset(entry, 0, sizeof(*entry));
@@ -32,6 +75,8 @@ void cookie_jar_add_set_cookie(struct cookie_jar *jar, const char *set_cookie, c
         if (val_len >= sizeof(entry->value)) val_len = sizeof(entry->value) - 1;
         memcpy(entry->value, eq + 1, val_len);
         entry->value[val_len] = '\0';
+        if (!cookie_domain_matches(request_host, entry->domain, entry->include_subdomains))
+            return;
         jar->count++;
         return;
     }
@@ -67,11 +112,22 @@ void cookie_jar_add_set_cookie(struct cookie_jar *jar, const char *set_cookie, c
             strncpy(entry->path, pa, sizeof(entry->path) - 1);
         } else if (strcasecmp(attr_buf, "secure") == 0) {
             entry->secure = true;
+        } else if (strcasecmp(attr_buf, "httponly") == 0) {
+            entry->httponly = true;
+        } else if (strncasecmp(attr_buf, "samesite=", 9) == 0) {
+            const char *v = attr_buf + 9;
+            while (*v == ' ') v++;
+            if (strcasecmp(v, "strict") == 0) strcpy(entry->samesite, "Strict");
+            else if (strcasecmp(v, "lax") == 0) strcpy(entry->samesite, "Lax");
+            else if (strcasecmp(v, "none") == 0) strcpy(entry->samesite, "None");
         }
 
         if (attr_end == NULL) break;
         p = attr_end + 1;
     }
+
+    if (!cookie_domain_matches(request_host, entry->domain, entry->include_subdomains))
+        return;
 
     jar->count++;
 }
@@ -80,24 +136,13 @@ void cookie_jar_get_header(struct cookie_jar *jar, const char *host, const char 
                            bool secure_connection, char *out, size_t out_size) {
     out[0] = '\0';
     size_t offset = 0;
-    size_t host_len = strlen(host);
     size_t path_len = strlen(path);
 
     for (int i = 0; i < jar->count; i++) {
         const struct cookie_entry *e = &jar->entries[i];
 
         if (e->secure && !secure_connection) continue;
-
-        size_t dom_len = strlen(e->domain);
-        bool domain_match;
-        if (e->include_subdomains) {
-            domain_match = (host_len >= dom_len &&
-                (dom_len == 0 || strncasecmp(host + host_len - dom_len, e->domain, dom_len) == 0) &&
-                (host_len == dom_len || host[host_len - dom_len - 1] == '.'));
-        } else {
-            domain_match = (host_len == dom_len && strncasecmp(host, e->domain, dom_len) == 0);
-        }
-        if (!domain_match) continue;
+        if (!cookie_domain_matches(host, e->domain, e->include_subdomains)) continue;
 
         size_t e_path_len = strlen(e->path);
         if (path_len < e_path_len || strncmp(path, e->path, e_path_len) != 0) continue;
@@ -165,9 +210,11 @@ void cookie_jar_load(struct cookie_jar *jar, const char *filepath) {
         tab = strchr(path, '\t');
         if (tab == NULL) continue;
         *tab = '\0'; tab++;
-        tab = strchr(tab + 1, '\t');
+        const char *secure = tab;
+        tab = strchr(secure, '\t');
         if (tab == NULL) continue;
-        tab++;
+        *tab = '\0'; tab++;
+        /* skip expiry column */
         tab = strchr(tab + 1, '\t');
         if (tab == NULL) continue;
         tab++;
@@ -183,7 +230,7 @@ void cookie_jar_load(struct cookie_jar *jar, const char *filepath) {
         snprintf(e->domain, sizeof(e->domain), "%.255s", domain);
         e->include_subdomains = (strcasecmp(subdomains, "TRUE") == 0);
         strncpy(e->path, path, sizeof(e->path) - 1);
-        e->secure = false;
+        e->secure = (strcasecmp(secure, "TRUE") == 0);
         strncpy(e->name, name, sizeof(e->name) - 1);
         strncpy(e->value, value, sizeof(e->value) - 1);
         jar->count++;

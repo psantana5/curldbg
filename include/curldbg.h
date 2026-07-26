@@ -77,6 +77,8 @@ struct cookie_entry {
     char name[256];
     char value[4096];
     bool secure;
+    bool httponly;
+    char samesite[16];
 };
 
 struct cookie_jar {
