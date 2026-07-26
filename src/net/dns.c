@@ -42,6 +42,7 @@ struct addrinfo *resolve_host(const struct url_info *url,
                                int address_family,
                                const struct resolve_entry *resolve_entries,
                                int resolve_count,
+                               struct dns_cache *cache,
                                int dns_timeout_ms,
                                struct timespec *dns_start,
                                struct timespec *dns_end,
@@ -57,7 +58,7 @@ struct addrinfo *resolve_host(const struct url_info *url,
     }
     if (dns_timeout_ms <= 0) dns_timeout_ms = 5000;
     clock_gettime(CLOCK_MONOTONIC, dns_start);
-    struct addrinfo *addrs = resolve_dns_timeout(url, address_family, gai_error, dns_timeout_ms);
+    struct addrinfo *addrs = resolve_dns_timeout(url, address_family, cache, gai_error, dns_timeout_ms);
     clock_gettime(CLOCK_MONOTONIC, dns_end);
     return addrs;
 }
@@ -66,11 +67,35 @@ struct dns_cache_entry {
     uint32_t hash;
     char key[256 + 16 + 16];
     struct addrinfo *addrs;
+    struct timespec expires;
 };
 
-static pthread_mutex_t g_dns_cache_lock = PTHREAD_MUTEX_INITIALIZER;
-static struct dns_cache_entry g_dns_cache[DNS_CACHE_SIZE];
-static int g_dns_cache_count = 0;
+struct dns_cache {
+    pthread_mutex_t lock;
+    struct dns_cache_entry entries[DNS_CACHE_SIZE];
+    int count;
+    int ttl_ms;
+};
+
+struct dns_cache *dns_cache_create(int ttl_ms) {
+    struct dns_cache *cache = calloc(1, sizeof(*cache));
+    if (cache == NULL) return NULL;
+    pthread_mutex_init(&cache->lock, NULL);
+    cache->ttl_ms = (ttl_ms > 0) ? ttl_ms : 300000; /* default 5 minutes */
+    return cache;
+}
+
+void dns_cache_destroy(struct dns_cache *cache) {
+    if (cache == NULL) return;
+    pthread_mutex_lock(&cache->lock);
+    for (int i = 0; i < cache->count; i++) {
+        if (cache->entries[i].addrs != NULL)
+            freeaddrinfo(cache->entries[i].addrs);
+    }
+    pthread_mutex_unlock(&cache->lock);
+    pthread_mutex_destroy(&cache->lock);
+    free(cache);
+}
 
 void dns_cache_key(const char *host, const char *port, int family,
                           char *out, size_t out_size, uint32_t *hash_out) {
@@ -110,26 +135,56 @@ struct addrinfo *copy_addrinfo_list(const struct addrinfo *src) {
     return head;
 }
 
-static struct addrinfo *dns_cache_lookup(const char *host, const char *port, int family) {
+static bool timespec_expired(const struct timespec *expires) {
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return true;
+    if (now.tv_sec > expires->tv_sec) return true;
+    if (now.tv_sec == expires->tv_sec && now.tv_nsec >= expires->tv_nsec) return true;
+    return false;
+}
+
+static void dns_cache_evict_expired(struct dns_cache *cache) {
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return;
+    int i = 0;
+    while (i < cache->count) {
+        if (timespec_expired(&cache->entries[i].expires)) {
+            freeaddrinfo(cache->entries[i].addrs);
+            cache->entries[i].addrs = NULL;
+            if (i + 1 < cache->count) {
+                memmove(&cache->entries[i], &cache->entries[i + 1],
+                        (size_t)(cache->count - i - 1) * sizeof(cache->entries[0]));
+            }
+            cache->count--;
+        } else {
+            i++;
+        }
+    }
+}
+
+static struct addrinfo *dns_cache_lookup(struct dns_cache *cache,
+                                          const char *host, const char *port, int family) {
+    if (cache == NULL) return NULL;
     char key[256 + 16 + 16];
     uint32_t hash = 0;
     dns_cache_key(host, port, family, key, sizeof(key), &hash);
 
-    pthread_mutex_lock(&g_dns_cache_lock);
-    for (int i = 0; i < g_dns_cache_count; i++) {
-        if (g_dns_cache[i].hash == hash && strcmp(g_dns_cache[i].key, key) == 0) {
-            struct addrinfo *copy = copy_addrinfo_list(g_dns_cache[i].addrs);
-            pthread_mutex_unlock(&g_dns_cache_lock);
+    pthread_mutex_lock(&cache->lock);
+    dns_cache_evict_expired(cache);
+    for (int i = 0; i < cache->count; i++) {
+        if (cache->entries[i].hash == hash && strcmp(cache->entries[i].key, key) == 0) {
+            struct addrinfo *copy = copy_addrinfo_list(cache->entries[i].addrs);
+            pthread_mutex_unlock(&cache->lock);
             return copy;
         }
     }
-    pthread_mutex_unlock(&g_dns_cache_lock);
+    pthread_mutex_unlock(&cache->lock);
     return NULL;
 }
 
-static void dns_cache_store(const char *host, const char *port, int family,
+static void dns_cache_store(struct dns_cache *cache, const char *host, const char *port, int family,
                             const struct addrinfo *addrs) {
-    if (addrs == NULL) return;
+    if (cache == NULL || addrs == NULL) return;
 
     char key[256 + 16 + 16];
     uint32_t hash = 0;
@@ -138,31 +193,47 @@ static void dns_cache_store(const char *host, const char *port, int family,
     struct addrinfo *copy = copy_addrinfo_list(addrs);
     if (copy == NULL) return;
 
-    pthread_mutex_lock(&g_dns_cache_lock);
-    for (int i = 0; i < g_dns_cache_count; i++) {
-        if (g_dns_cache[i].hash == hash && strcmp(g_dns_cache[i].key, key) == 0) {
-            freeaddrinfo(g_dns_cache[i].addrs);
-            g_dns_cache[i].addrs = copy;
-            pthread_mutex_unlock(&g_dns_cache_lock);
+    struct timespec expires;
+    if (clock_gettime(CLOCK_MONOTONIC, &expires) != 0) {
+        freeaddrinfo(copy);
+        return;
+    }
+    expires.tv_sec += cache->ttl_ms / 1000;
+    expires.tv_nsec += (cache->ttl_ms % 1000) * 1000000L;
+    if (expires.tv_nsec >= 1000000000LL) {
+        expires.tv_sec++;
+        expires.tv_nsec -= 1000000000LL;
+    }
+
+    pthread_mutex_lock(&cache->lock);
+    dns_cache_evict_expired(cache);
+    for (int i = 0; i < cache->count; i++) {
+        if (cache->entries[i].hash == hash && strcmp(cache->entries[i].key, key) == 0) {
+            freeaddrinfo(cache->entries[i].addrs);
+            cache->entries[i].addrs = copy;
+            cache->entries[i].expires = expires;
+            pthread_mutex_unlock(&cache->lock);
             return;
         }
     }
-    if (g_dns_cache_count < DNS_CACHE_SIZE) {
-        g_dns_cache[g_dns_cache_count].hash = hash;
-        snprintf(g_dns_cache[g_dns_cache_count].key,
-                 sizeof(g_dns_cache[0].key), "%s", key);
-        g_dns_cache[g_dns_cache_count].addrs = copy;
-        g_dns_cache_count++;
+    if (cache->count < DNS_CACHE_SIZE) {
+        cache->entries[cache->count].hash = hash;
+        snprintf(cache->entries[cache->count].key,
+                 sizeof(cache->entries[0].key), "%s", key);
+        cache->entries[cache->count].addrs = copy;
+        cache->entries[cache->count].expires = expires;
+        cache->count++;
     } else {
-        freeaddrinfo(g_dns_cache[0].addrs);
-        memmove(&g_dns_cache[0], &g_dns_cache[1],
-                (size_t)(DNS_CACHE_SIZE - 1) * sizeof(g_dns_cache[0]));
-        g_dns_cache[DNS_CACHE_SIZE - 1].hash = hash;
-        snprintf(g_dns_cache[DNS_CACHE_SIZE - 1].key,
-                 sizeof(g_dns_cache[0].key), "%s", key);
-        g_dns_cache[DNS_CACHE_SIZE - 1].addrs = copy;
+        freeaddrinfo(cache->entries[0].addrs);
+        memmove(&cache->entries[0], &cache->entries[1],
+                (size_t)(DNS_CACHE_SIZE - 1) * sizeof(cache->entries[0]));
+        cache->entries[DNS_CACHE_SIZE - 1].hash = hash;
+        snprintf(cache->entries[DNS_CACHE_SIZE - 1].key,
+                 sizeof(cache->entries[0].key), "%s", key);
+        cache->entries[DNS_CACHE_SIZE - 1].addrs = copy;
+        cache->entries[DNS_CACHE_SIZE - 1].expires = expires;
     }
-    pthread_mutex_unlock(&g_dns_cache_lock);
+    pthread_mutex_unlock(&cache->lock);
 }
 
 /* Resolve all candidate IPs (IPv4/IPv6) for host:port. */
@@ -214,6 +285,7 @@ static void *dns_thread_run(void *arg) {
 struct addrinfo *resolve_dns_timeout(
     const struct url_info *url,
     int address_family,
+    struct dns_cache *cache,
     int *gai_error,
     int timeout_ms
 ) {
@@ -227,7 +299,7 @@ struct addrinfo *resolve_dns_timeout(
             return resolve_dns(url, address_family, gai_error);
     }
 
-    struct addrinfo *cached = dns_cache_lookup(url->host, url->port, address_family);
+    struct addrinfo *cached = dns_cache_lookup(cache, url->host, url->port, address_family);
     if (cached != NULL) {
         if (gai_error != NULL) *gai_error = 0;
         return cached;
@@ -278,7 +350,7 @@ struct addrinfo *resolve_dns_timeout(
         free(finished);
     }
     if (result != NULL && gai_error != NULL && *gai_error == 0) {
-        dns_cache_store(url->host, url->port, address_family, result);
+        dns_cache_store(cache, url->host, url->port, address_family, result);
     }
     return result;
 }

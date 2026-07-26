@@ -291,18 +291,27 @@ int format_host_header(const struct url_info *url, char *out, size_t out_size);
 int build_redirect_url(const char *location, const struct url_info *base, char *out_url, size_t out_size);
 
 /* --- dns.c --- */
+struct dns_cache;
+struct dns_cache *dns_cache_create(int ttl_ms);
+void dns_cache_destroy(struct dns_cache *cache);
 struct addrinfo *resolve_dns(const struct url_info *url, int address_family, int *gai_error);
-struct addrinfo *resolve_dns_timeout(const struct url_info *url, int address_family, int *gai_error, int timeout_ms);
+struct addrinfo *resolve_dns_timeout(const struct url_info *url, int address_family,
+                                      struct dns_cache *cache,
+                                      int *gai_error, int timeout_ms);
 struct addrinfo *resolve_host(const struct url_info *url, int address_family,
                                const struct resolve_entry *resolve_entries,
-                               int resolve_count, int dns_timeout_ms,
+                               int resolve_count, struct dns_cache *cache,
+                               int dns_timeout_ms,
                                struct timespec *dns_start, struct timespec *dns_end,
                                int *gai_error);
 
 /* --- tls.c --- */
+SSL_CTX *tls_context_create(const struct tls_params *params,
+                            char *error, size_t error_len);
+void tls_context_free(SSL_CTX *ctx);
 int init_tls(struct connection *conn, const char *hostname, bool insecure,
              int tls_min_version, int tls_max_version,
-             const struct tls_params *params,
+             const struct tls_params *params, SSL_CTX *shared_ctx,
              char *error, size_t error_len);
 
 /* --- connect.c --- */

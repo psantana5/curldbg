@@ -890,7 +890,7 @@ TEST(test_resolve_host_dns) {
     strcpy(url.port, "80");
     struct timespec dns_start, dns_end;
     int gai_error = 0;
-    struct addrinfo *addrs = resolve_host(&url, AF_UNSPEC, NULL, 0, 5000,
+    struct addrinfo *addrs = resolve_host(&url, AF_UNSPEC, NULL, 0, NULL, 5000,
                                            &dns_start, &dns_end, &gai_error);
     ASSERT_PTR_NOTNULL(addrs, "resolve_host 127.0.0.1");
     ASSERT_INT_EQ(gai_error, 0, "gai_error 0 for valid host");
@@ -905,12 +905,12 @@ TEST(test_resolve_host_cache) {
     struct timespec dns_start, dns_end;
     int gai_error = 0;
 
-    struct addrinfo *a1 = resolve_host(&url, AF_UNSPEC, NULL, 0, 5000,
+    struct addrinfo *a1 = resolve_host(&url, AF_UNSPEC, NULL, 0, NULL, 5000,
                                         &dns_start, &dns_end, &gai_error);
     ASSERT_PTR_NOTNULL(a1, "resolve_host localhost first");
     freeaddrinfo(a1);
 
-    struct addrinfo *a2 = resolve_host(&url, AF_UNSPEC, NULL, 0, 5000,
+    struct addrinfo *a2 = resolve_host(&url, AF_UNSPEC, NULL, 0, NULL, 5000,
                                         &dns_start, &dns_end, &gai_error);
     ASSERT_PTR_NOTNULL(a2, "resolve_host localhost second (cached)");
     ASSERT_INT_EQ(gai_error, 0, "cached lookup succeeds");
@@ -936,7 +936,7 @@ TEST(test_resolve_host_resolve_entry) {
 
     struct timespec dns_start, dns_end;
     int gai_error = 0;
-    struct addrinfo *addrs = resolve_host(&url, AF_UNSPEC, entries, 1, 5000,
+    struct addrinfo *addrs = resolve_host(&url, AF_UNSPEC, entries, 1, NULL, 5000,
                                            &dns_start, &dns_end, &gai_error);
     ASSERT_PTR_NOTNULL(addrs, "resolve_host custom resolve entry");
     ASSERT_INT_EQ(gai_error, 0, "gai_error 0 for resolve entry");
