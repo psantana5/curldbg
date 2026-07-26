@@ -178,6 +178,10 @@ int main(int argc, char **argv) {
 
             if (rc != 0) {
                 if (close_body) fclose(body_out);
+                close_connection(&rconn.conn);
+                freeaddrinfo(rconn.addrs);
+                rconn.addrs = NULL;
+                rconn.conn.fd = -1;
                 exit_code = EXIT_FAILURE;
                 goto cleanup;
             }
