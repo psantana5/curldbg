@@ -21,7 +21,9 @@ int proxy_connect(struct connection *conn, const struct url_info *target,
     char host_header[320];
     size_t total = 0;
 
-    apply_socket_timeout(conn->fd, connect_timeout_ms);
+    if (apply_socket_timeout(conn->fd, connect_timeout_ms) != 0) {
+        set_error(error, error_len, "Failed to set proxy CONNECT socket timeout"); return -1;
+    }
 
     if (format_host_header(target, host_header, sizeof(host_header)) != 0) {
         set_error(error, error_len, "CONNECT target host header too large"); return -1;

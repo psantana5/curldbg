@@ -258,7 +258,10 @@ static int establish_connection(struct connection *conn,
         }
         if ((int)rem < effective_read_ms) effective_read_ms = (int)rem;
     }
-    apply_socket_timeout(conn->fd, effective_read_ms);
+    if (apply_socket_timeout(conn->fd, effective_read_ms) != 0) {
+        snprintf(error, error_len, "Failed to set socket read timeout");
+        return -1;
+    }
 
     if (!use_proxy && url->use_tls) {
         if (init_tls(conn, url->host, opts->insecure_tls,

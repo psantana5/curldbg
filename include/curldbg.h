@@ -309,7 +309,7 @@ int connect_tcp(const struct addrinfo *addrs, char *connected_ip, size_t connect
                 int *connected_family, int connect_timeout_ms,
                 struct connect_race_info *race_info, bool happy_eyeballs, int preferred_family,
                 const char *bind_interface);
-void apply_socket_timeout(int fd, int timeout_ms);
+int apply_socket_timeout(int fd, int timeout_ms);
 void close_connection(struct connection *conn);
 ssize_t connection_read(struct connection *conn, void *buf, size_t len, char *error, size_t error_len);
 int connection_write_all(struct connection *conn, const char *buf, size_t len, char *error, size_t error_len);

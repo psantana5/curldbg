@@ -477,13 +477,14 @@ int connect_tcp(
                                        connect_timeout_ms, race_info, bind_interface);
 }
 
-void apply_socket_timeout(int fd, int timeout_ms) {
+int apply_socket_timeout(int fd, int timeout_ms) {
     struct timeval tv;
-    if (timeout_ms <= 0) return;
+    if (timeout_ms <= 0) return 0;
     tv.tv_sec = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
-    (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    (void)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) != 0) return -1;
+    if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) != 0) return -1;
+    return 0;
 }
 
 int connect_unix_socket(const char *path, char *error, size_t error_len) {
