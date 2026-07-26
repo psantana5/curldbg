@@ -540,7 +540,7 @@ static int run_request(const char *input_url, const struct run_options *opts,
             while (*line != '\0') {
                 char *nl = strchr(line, '\n');
                 if (nl != NULL) *nl = '\0';
-                cookie_jar_add_set_cookie(opts->cookie_jar, line, url.host);
+                cookie_jar_add_set_cookie(opts->cookie_jar, line, url.host, url.path);
                 if (nl == NULL) break;
                 line = nl + 1;
             }

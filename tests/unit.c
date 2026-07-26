@@ -611,7 +611,7 @@ TEST(test_parse_response_headers_content_length_negative) {
 TEST(test_cookie_jar_add_and_get) {
     struct cookie_jar jar;
     cookie_jar_init(&jar);
-    cookie_jar_add_set_cookie(&jar, "session=abc; Path=/; Secure", "example.com");
+    cookie_jar_add_set_cookie(&jar, "session=abc; Path=/; Secure", "example.com", "/");
 
     char header[512];
     cookie_jar_get_header(&jar, "example.com", "/", true, header, sizeof(header));
@@ -621,7 +621,7 @@ TEST(test_cookie_jar_add_and_get) {
 TEST(test_cookie_jar_path_mismatch) {
     struct cookie_jar jar;
     cookie_jar_init(&jar);
-    cookie_jar_add_set_cookie(&jar, "token=xyz; Path=/api", "example.com");
+    cookie_jar_add_set_cookie(&jar, "token=xyz; Path=/api", "example.com", "/api");
 
     char header[512];
     cookie_jar_get_header(&jar, "example.com", "/other", true, header, sizeof(header));
@@ -631,7 +631,7 @@ TEST(test_cookie_jar_path_mismatch) {
 TEST(test_cookie_jar_domain_mismatch) {
     struct cookie_jar jar;
     cookie_jar_init(&jar);
-    cookie_jar_add_set_cookie(&jar, "key=val", "example.com");
+    cookie_jar_add_set_cookie(&jar, "key=val", "example.com", "/");
 
     char header[512];
     cookie_jar_get_header(&jar, "other.com", "/", true, header, sizeof(header));
@@ -641,8 +641,8 @@ TEST(test_cookie_jar_domain_mismatch) {
 TEST(test_cookie_jar_multiple_cookies) {
     struct cookie_jar jar;
     cookie_jar_init(&jar);
-    cookie_jar_add_set_cookie(&jar, "a=1", "example.com");
-    cookie_jar_add_set_cookie(&jar, "b=2", "example.com");
+    cookie_jar_add_set_cookie(&jar, "a=1", "example.com", "/");
+    cookie_jar_add_set_cookie(&jar, "b=2", "example.com", "/");
 
     char header[512];
     cookie_jar_get_header(&jar, "example.com", "/", true, header, sizeof(header));
@@ -653,7 +653,7 @@ TEST(test_cookie_jar_multiple_cookies) {
 TEST(test_cookie_jar_secure_over_http) {
     struct cookie_jar jar;
     cookie_jar_init(&jar);
-    cookie_jar_add_set_cookie(&jar, "session=abc; Path=/; Secure", "example.com");
+    cookie_jar_add_set_cookie(&jar, "session=abc; Path=/; Secure", "example.com", "/");
 
     char header[512];
     cookie_jar_get_header(&jar, "example.com", "/", false, header, sizeof(header));
@@ -666,8 +666,8 @@ TEST(test_cookie_jar_secure_over_http) {
 TEST(test_cookie_jar_save_load_roundtrip) {
     struct cookie_jar jar;
     cookie_jar_init(&jar);
-    cookie_jar_add_set_cookie(&jar, "a=1; Path=/", "example.com");
-    cookie_jar_add_set_cookie(&jar, "b=2; Path=/sub", "example.com");
+    cookie_jar_add_set_cookie(&jar, "a=1; Path=/", "example.com", "/");
+    cookie_jar_add_set_cookie(&jar, "b=2; Path=/sub", "example.com", "/sub/page");
 
     const char *tmpfile = "/tmp/curldbg_test_cookies.txt";
     ASSERT_INT_EQ(cookie_jar_save(&jar, tmpfile), 0, "cookie_jar_save");
@@ -690,7 +690,7 @@ TEST(test_cookie_jar_max_capacity) {
     char val[32];
     for (int i = 0; i < MAX_COOKIES + 10; i++) {
         snprintf(val, sizeof(val), "k%d=v%d; Path=/", i, i);
-        cookie_jar_add_set_cookie(&jar, val, "example.com");
+        cookie_jar_add_set_cookie(&jar, val, "example.com", "/");
     }
     ASSERT_INT_EQ(jar.count, MAX_COOKIES, "cookie jar capped at MAX_COOKIES");
 }
@@ -705,21 +705,21 @@ TEST(test_cookie_jar_init) {
 TEST(test_cookie_jar_reject_tld_domain) {
     struct cookie_jar jar;
     cookie_jar_init(&jar);
-    cookie_jar_add_set_cookie(&jar, "x=1; Domain=.com", "example.com");
+    cookie_jar_add_set_cookie(&jar, "x=1; Domain=.com", "example.com", "/");
     ASSERT_INT_EQ(jar.count, 0, "TLD domain cookie rejected");
 }
 
 TEST(test_cookie_jar_reject_ip_domain) {
     struct cookie_jar jar;
     cookie_jar_init(&jar);
-    cookie_jar_add_set_cookie(&jar, "x=1; Domain=192.168.1.1", "example.com");
+    cookie_jar_add_set_cookie(&jar, "x=1; Domain=192.168.1.1", "example.com", "/");
     ASSERT_INT_EQ(jar.count, 0, "IP domain cookie rejected for non-matching host");
 }
 
 TEST(test_cookie_jar_secure_roundtrip) {
     struct cookie_jar jar;
     cookie_jar_init(&jar);
-    cookie_jar_add_set_cookie(&jar, "session=abc; Path=/; Secure", "example.com");
+    cookie_jar_add_set_cookie(&jar, "session=abc; Path=/; Secure", "example.com", "/");
 
     const char *tmpfile = "/tmp/curldbg_test_secure_cookies.txt";
     ASSERT_INT_EQ(cookie_jar_save(&jar, tmpfile), 0, "cookie_jar_save secure");
@@ -740,7 +740,7 @@ TEST(test_cookie_jar_secure_roundtrip) {
 TEST(test_cookie_jar_httponly_samesite_parsed) {
     struct cookie_jar jar;
     cookie_jar_init(&jar);
-    cookie_jar_add_set_cookie(&jar, "x=1; HttpOnly; SameSite=Strict", "example.com");
+    cookie_jar_add_set_cookie(&jar, "x=1; HttpOnly; SameSite=Strict", "example.com", "/");
     ASSERT_INT_EQ(jar.count, 1, "HttpOnly/SameSite cookie stored");
     ASSERT_TRUE(strcmp(jar.entries[0].samesite, "Strict") == 0, "SameSite=Strict parsed");
     ASSERT_TRUE(jar.entries[0].httponly, "HttpOnly parsed");
