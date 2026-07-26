@@ -189,11 +189,25 @@ struct dns_thread_arg {
     int address_family;
     struct addrinfo *result;
     int gai_error;
+    bool self_free;
+    pthread_mutex_t mutex;
 };
 
 static void *dns_thread_run(void *arg) {
     struct dns_thread_arg *a = arg;
-    a->result = resolve_dns(&a->url, a->address_family, &a->gai_error);
+    struct addrinfo *res = resolve_dns(&a->url, a->address_family, &a->gai_error);
+
+    pthread_mutex_lock(&a->mutex);
+    a->result = res;
+    bool self_free = a->self_free;
+    pthread_mutex_unlock(&a->mutex);
+
+    if (self_free) {
+        if (res != NULL) freeaddrinfo(res);
+        pthread_mutex_destroy(&a->mutex);
+        free(a);
+        return NULL;
+    }
     return arg;
 }
 
@@ -226,9 +240,12 @@ struct addrinfo *resolve_dns_timeout(
     arg->address_family = address_family;
     arg->result = NULL;
     arg->gai_error = 0;
+    arg->self_free = false;
+    pthread_mutex_init(&arg->mutex, NULL);
 
     pthread_t thread;
     if (pthread_create(&thread, NULL, dns_thread_run, arg) != 0) {
+        pthread_mutex_destroy(&arg->mutex);
         free(arg);
         return resolve_dns(url, address_family, gai_error);
     }
@@ -245,16 +262,23 @@ struct addrinfo *resolve_dns_timeout(
     struct dns_thread_arg *finished;
     int rc = pthread_timedjoin_np(thread, (void **)&finished, &ts);
     if (rc == ETIMEDOUT) {
+        pthread_mutex_lock(&arg->mutex);
+        arg->self_free = true;
+        pthread_mutex_unlock(&arg->mutex);
         pthread_detach(thread);
         if (gai_error != NULL) *gai_error = EAI_AGAIN;
         return NULL;
     }
 
-    struct addrinfo *result = finished->result;
-    if (gai_error != NULL) *gai_error = finished->gai_error;
-    if (result != NULL && finished->gai_error == 0) {
+    struct addrinfo *result = NULL;
+    if (finished != NULL) {
+        result = finished->result;
+        if (gai_error != NULL) *gai_error = finished->gai_error;
+        pthread_mutex_destroy(&finished->mutex);
+        free(finished);
+    }
+    if (result != NULL && gai_error != NULL && *gai_error == 0) {
         dns_cache_store(url->host, url->port, address_family, result);
     }
-    free(finished);
     return result;
 }
