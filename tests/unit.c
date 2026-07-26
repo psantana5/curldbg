@@ -872,7 +872,7 @@ extern size_t chunked_write(const char *buf, size_t len, FILE *body_out,
     z_stream *strm, bool decompress, char *error, size_t error_len);
 extern int setup_upload_file(const char *upload_path, FILE **upload_file,
     size_t *upload_size, bool *chunked_upload, char *error, size_t error_len);
-extern bool is_connection_error(struct connection *conn);
+extern bool is_connection_error(const struct connection *conn);
 
 TEST(test_set_error) {
     char buf[64];

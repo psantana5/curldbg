@@ -119,9 +119,9 @@ static int establish_connection(struct connection *conn,
                                  const struct url_info *url,
                                  const struct run_options *opts,
                                  struct hop_info *hop,
-                                 int *preferred_family,
-                                 struct connect_race_info *race_info,
-                                 const struct timespec *total_start,
+                                  const int *preferred_family,
+                                  struct connect_race_info *race_info,
+                                  const struct timespec *total_start,
                                  double *connect_ms_out,
                                  double *dns_ms_out,
                                  char *error, size_t error_len) {
@@ -268,7 +268,7 @@ static int establish_connection(struct connection *conn,
     return 0;
 }
 
-bool is_connection_error(struct connection *conn) {
+bool is_connection_error(const struct connection *conn) {
     if (conn == NULL) return false;
     switch (conn->last_errno) {
         case ECONNRESET:
