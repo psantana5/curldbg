@@ -973,7 +973,6 @@ TEST(test_resolve_host_resolve_entry) {
     freeaddrinfo(addrs);
 }
 
-extern int output_filename_from_url(const char *input_url, char *out, size_t out_size);
 extern char *find_header_end(char *buf, size_t len);
 extern size_t write_body_data(const char *buf, size_t len, FILE *body_out,
                               struct response_info *out, bool capture_preview);
@@ -1090,10 +1089,10 @@ TEST(test_write_out_expand_redirect_url) {
     r.hop_count = 1;
     r.hops = calloc(1, sizeof(r.hops[0]));
     r.hops[0].has_redirect_target = true;
-    strcpy(r.hops[0].redirect_to_host, "other.com");
+    strcpy(r.hops[0].redirect_url, "https://other.com/final");
     char out[256];
     test_write_out_capture("%{redirect_url}", &r, out, sizeof(out));
-    ASSERT_STR_EQ(out, "other.com", "redirect_url hostname");
+    ASSERT_STR_EQ(out, "https://other.com/final", "redirect_url full URL");
     free(r.hops);
 }
 
