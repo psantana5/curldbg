@@ -26,6 +26,9 @@ static SSL_CTX *create_tls_context(const struct tls_params *params,
     SSL_CTX_set_read_ahead(ctx, 1);
     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
 
+    unsigned char alpn_protos[] = { 2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1' };
+    SSL_CTX_set_alpn_protos(ctx, alpn_protos, sizeof(alpn_protos));
+
     if (params != NULL && (params->cacert != NULL || params->capath != NULL)) {
         if (SSL_CTX_load_verify_locations(ctx, params->cacert, params->capath) != 1) {
             set_ssl_error(error, error_len, "Could not load CA certificates");
@@ -116,6 +119,11 @@ int init_tls(struct connection *conn, const char *hostname, bool insecure,
             set_error(error, error_len, "TLS certificate verification failed"); return -1;
         }
     }
+
+    const unsigned char *alpn = NULL;
+    unsigned int alpn_len = 0;
+    SSL_get0_alpn_selected(conn->ssl, &alpn, &alpn_len);
+    conn->http2 = (alpn_len == 2 && alpn != NULL && memcmp(alpn, "h2", 2) == 0);
 
     return 0;
 }
