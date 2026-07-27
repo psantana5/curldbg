@@ -9,7 +9,7 @@ TSAN_OBJDIR := obj-tsan
 
 # --- Sources ---
 SRCS := src/main.c src/run.c src/results.c src/util.c src/url.c \
-        src/net/dns.c src/net/tls.c src/net/connect.c src/net/proxy.c \
+        src/net/dns.c src/net/tls.c src/net/connect.c src/net/proxy.c src/net/http2.c \
         src/http/request.c src/http/response.c \
         src/cookie.c src/cli/parse.c src/cli/help.c src/output.c src/compare.c
 TESTD_SRCS := tests/server/testd.c tests/server/route.c tests/server/handlers.c
