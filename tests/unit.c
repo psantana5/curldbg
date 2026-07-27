@@ -1868,6 +1868,45 @@ TEST(test_parse_cmdline_resolve_unclosed_bracket) {
     free((void *)c.urls);
 }
 
+TEST(test_parse_cmdline_combined_flags_o) {
+    struct cmdline_opts c;
+    memset(&c, 0, sizeof(c));
+    char *argv[] = {(char *)"prog", (char *)"-fsSLo", (char *)"/tmp/out", (char *)"http://example.com", NULL};
+    ASSERT_INT_EQ(parse_cmdline(4, argv, &c), 0, "combined -fsSLo with next arg as -o value");
+    ASSERT_TRUE(c.fail_on_http_error, "-f");
+    ASSERT_TRUE(c.silent, "-s");
+    ASSERT_TRUE(c.show_error, "-S");
+    ASSERT_TRUE(c.follow_redirects, "-L");
+    ASSERT_STR_EQ(c.output_path, "/tmp/out", "-o consumes next arg");
+    free((void *)c.urls);
+}
+
+TEST(test_parse_cmdline_combined_flags_o_attached) {
+    struct cmdline_opts c;
+    memset(&c, 0, sizeof(c));
+    char *argv[] = {(char *)"prog", (char *)"-fsSLo/tmp/out", (char *)"http://example.com", NULL};
+    ASSERT_INT_EQ(parse_cmdline(3, argv, &c), 0, "combined -fsSLo/tmp/out with attached -o value");
+    ASSERT_TRUE(c.fail_on_http_error, "-f");
+    ASSERT_TRUE(c.silent, "-s");
+    ASSERT_TRUE(c.show_error, "-S");
+    ASSERT_TRUE(c.follow_redirects, "-L");
+    ASSERT_STR_EQ(c.output_path, "/tmp/out", "-o attached value");
+    free((void *)c.urls);
+}
+
+TEST(test_parse_cmdline_combined_flags_H) {
+    struct cmdline_opts c;
+    memset(&c, 0, sizeof(c));
+    char *argv[] = {(char *)"prog", (char *)"-fH", (char *)"X-Custom: val", (char *)"-s", (char *)"http://example.com", NULL};
+    ASSERT_INT_EQ(parse_cmdline(5, argv, &c), 0, "combined -fH with -H consuming next arg");
+    ASSERT_TRUE(c.fail_on_http_error, "-f");
+    ASSERT_TRUE(c.silent, "-s");
+    ASSERT_INT_EQ(c.extra_header_count, 1, "one header");
+    ASSERT_STR_EQ(c.extra_headers[0], "X-Custom: val", "header value");
+    free((void *)c.urls);
+    free((void *)c.extra_headers);
+}
+
 /* ================================================================
  * Main
  * ================================================================ */
@@ -2077,6 +2116,9 @@ int main(void) {
     test_parse_cmdline_resolve_ipv6_bracketed_both();
     test_parse_cmdline_resolve_missing_addr();
     test_parse_cmdline_resolve_unclosed_bracket();
+    test_parse_cmdline_combined_flags_o();
+    test_parse_cmdline_combined_flags_o_attached();
+    test_parse_cmdline_combined_flags_H();
 
     printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
            tests_run - tests_failed, tests_failed, tests_run);
