@@ -354,6 +354,20 @@ int receive_response(
                     if (decomp_init) inflateEnd(&decomp_strm);
                     return -1;
                 }
+                if (out->status_code >= 100 && out->status_code < 200) {
+                    if (decomp_init) { inflateEnd(&decomp_strm); decomp_init = false; }
+                    need_decompress = false;
+                    seen_first_byte = false;
+                    out->ttfb_ms = -1.0;
+                    if (pending_len > 0) {
+                        memmove(recv_buf, pending_body_buf, pending_len);
+                        header_len = pending_len;
+                    } else {
+                        header_len = 0;
+                    }
+                    header_done = false;
+                    continue;
+                }
                 size_t header_copy_len = header_bytes;
                 if (header_copy_len > HEADER_MAX) header_copy_len = HEADER_MAX;
                 memcpy(out->header_text, recv_buf, header_copy_len);
