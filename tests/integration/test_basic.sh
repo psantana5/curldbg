@@ -14,6 +14,10 @@ assert_eq() {
 BODY=$($CDBG "$BASE/" -o - 2>/dev/null)
 assert_eq "/ body" "hello from testd" "$BODY"
 
+# --- pipe auto-detect writes raw body without -o - ---
+BODY=$($CDBG "$BASE/" 2>/dev/null | cat)
+assert_eq "/ pipe body" "hello from testd" "$BODY"
+
 # --- /404 returns status 404 ---
 STATUS=$($CDBG "$BASE/404" -o /dev/null -w "%{http_code}" 2>/dev/null)
 assert_eq "/404 status" "404" "$STATUS"

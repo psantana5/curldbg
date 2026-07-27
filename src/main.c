@@ -15,8 +15,12 @@
 
 int output_filename_from_url(const char *input_url, char *out, size_t out_size);
 
+static bool stdout_is_redirected(void) {
+    return !isatty(fileno(stdout));
+}
+
 static void configure_output_buffering(void) {
-    if (isatty(fileno(stdout))) { (void)setvbuf(stdout, NULL, _IOLBF, 0); return; }
+    if (!stdout_is_redirected()) { (void)setvbuf(stdout, NULL, _IOLBF, 0); return; }
     (void)setvbuf(stdout, NULL, _IOFBF, 64 * 1024);
 }
 
@@ -153,6 +157,9 @@ int main(int argc, char **argv) {
                 }
                 close_body = true;
             }
+        } else if (stdout_is_redirected()) {
+            body_out = stdout;
+            c->silent = true;
         }
 
         session_opts.proxy_host = proxy_host;

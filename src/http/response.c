@@ -138,10 +138,12 @@ char *find_header_end(char *buf, size_t len) {
     return NULL;
 }
 
-size_t write_body_data(const char *buf, size_t len, FILE *body_out, struct response_info *out) {
+size_t write_body_data(const char *buf, size_t len, FILE *body_out, struct response_info *out,
+                       bool capture_preview) {
     if (body_out != NULL && len > 0) {
         if (fwrite(buf, 1, len, body_out) != len) return (size_t)-1;
     }
+    if (!capture_preview) return 0;
     if (out->preview_len < PREVIEW_BYTES) {
         size_t take = len;
         if (take > PREVIEW_BYTES - out->preview_len) take = PREVIEW_BYTES - out->preview_len;
@@ -153,9 +155,10 @@ size_t write_body_data(const char *buf, size_t len, FILE *body_out, struct respo
 
 static size_t write_body_maybe_decomp(const char *buf, size_t len, FILE *body_out,
                                        struct response_info *out, z_stream *strm,
-                                       bool decompress, char *error, size_t error_len) {
+                                       bool decompress, bool capture_preview,
+                                       char *error, size_t error_len) {
     if (!decompress || strm == NULL)
-        return write_body_data(buf, len, body_out, out);
+        return write_body_data(buf, len, body_out, out, capture_preview);
 
     strm->next_in = (unsigned char *)buf;
     strm->avail_in = (unsigned int)len;
@@ -172,7 +175,7 @@ static size_t write_body_maybe_decomp(const char *buf, size_t len, FILE *body_ou
         }
         size_t have = sizeof(obuf) - strm->avail_out;
         if (have > 0) {
-            if (write_body_data((char *)obuf, have, body_out, out) == (size_t)-1) {
+            if (write_body_data((char *)obuf, have, body_out, out, capture_preview) == (size_t)-1) {
                 set_error(error, error_len, "Failed to write response body");
                 return (size_t)-1;
             }
@@ -183,7 +186,8 @@ static size_t write_body_maybe_decomp(const char *buf, size_t len, FILE *body_ou
 
 size_t chunked_write(const char *buf, size_t len, FILE *body_out, struct response_info *out,
                             int *state, unsigned long *chunk_rem, char *line_buf, size_t *line_len,
-                            z_stream *decomp_strm, bool decompress, char *error, size_t error_len) {
+                            z_stream *decomp_strm, bool decompress, bool capture_preview,
+                            char *error, size_t error_len) {
     size_t consumed = 0;
     while (consumed < len) {
         /* chunk_state: 0=read size line, 1=read chunk data, 2=read trailing \r\n, 3=done */
@@ -213,7 +217,8 @@ size_t chunked_write(const char *buf, size_t len, FILE *body_out, struct respons
             size_t take = len - consumed;
             if (take > *chunk_rem) take = (size_t)*chunk_rem;
             if (write_body_maybe_decomp(buf + consumed, take, body_out, out,
-                                         decomp_strm, decompress, error, error_len) == (size_t)-1)
+                                         decomp_strm, decompress, capture_preview,
+                                         error, error_len) == (size_t)-1)
                 return (size_t)-1;
             consumed += take;
             *chunk_rem -= (unsigned long)take;
@@ -249,7 +254,8 @@ int receive_response(
     size_t header_len = 0;
     bool header_done = false;
     bool seen_first_byte = false;
-    bool write_body = body_out != NULL;
+    bool write_body = body_out != NULL && !head_method;
+    bool capture_preview = !head_method;
     struct timespec first_byte_ts;
     bool chunked = false;
     int chunk_state = 0;
@@ -347,7 +353,6 @@ int receive_response(
                     if (decomp_init) inflateEnd(&decomp_strm);
                     return -1;
                 }
-
                 if (head_method) return 0;
 
                 if (out->content_encoding[0] != '\0' &&
@@ -368,6 +373,7 @@ int receive_response(
                     size_t cw = chunked_write(pending_body_buf, pending_len, write_body ? body_out : NULL, out,
                                       &chunk_state, &chunk_remaining, chunk_line_buf, &chunk_line_len,
                                       need_decompress ? &decomp_strm : NULL, need_decompress,
+                                      capture_preview,
                                       error, error_len);
                     if (cw == (size_t)-1) { if (decomp_init) inflateEnd(&decomp_strm); return -1; }
                     if (chunk_state == 3 && cw < pending_len) {
@@ -390,6 +396,7 @@ int receive_response(
                 } else if (pending_len > 0) {
                     if (write_body_maybe_decomp(pending_body_buf, pending_len, write_body ? body_out : NULL, out,
                                                  need_decompress ? &decomp_strm : NULL, need_decompress,
+                                                 capture_preview,
                                                  error, error_len) == (size_t)-1) {
                         if (decomp_init) { inflateEnd(&decomp_strm); } return -1;
                     }
@@ -425,6 +432,7 @@ int receive_response(
             size_t cw = chunked_write(recv_buf, (size_t)n, write_body ? body_out : NULL, out,
                               &chunk_state, &chunk_remaining, chunk_line_buf, &chunk_line_len,
                               need_decompress ? &decomp_strm : NULL, need_decompress,
+                              capture_preview,
                               error, error_len);
             if (cw == (size_t)-1) { if (decomp_init) inflateEnd(&decomp_strm); return -1; }
             if (chunk_state == 3) break;
@@ -433,6 +441,7 @@ int receive_response(
             if (body_remaining >= 0 && (long)take > body_remaining) take = (size_t)body_remaining;
             if (write_body_maybe_decomp(recv_buf, take, write_body ? body_out : NULL, out,
                                          need_decompress ? &decomp_strm : NULL, need_decompress,
+                                         capture_preview,
                                          error, error_len) == (size_t)-1) {
                 if (decomp_init) { inflateEnd(&decomp_strm); } return -1;
             }

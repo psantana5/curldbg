@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -974,7 +975,8 @@ TEST(test_resolve_host_resolve_entry) {
 
 extern int output_filename_from_url(const char *input_url, char *out, size_t out_size);
 extern char *find_header_end(char *buf, size_t len);
-extern size_t write_body_data(const char *buf, size_t len, FILE *body_out, struct response_info *out);
+extern size_t write_body_data(const char *buf, size_t len, FILE *body_out,
+                              struct response_info *out, bool capture_preview);
 extern bool is_loopback_ip(const char *ip);
 extern const char *family_short_name(int family);
 extern bool is_localhost_url(const char *input_url);
@@ -993,7 +995,8 @@ extern int build_body_headers(char *body_headers, size_t body_headers_size,
 extern size_t chunked_write(const char *buf, size_t len, FILE *body_out,
     struct response_info *out, int *state, unsigned long *chunk_rem,
     char *line_buf, size_t *line_len,
-    z_stream *strm, bool decompress, char *error, size_t error_len);
+    z_stream *strm, bool decompress, bool capture_preview,
+    char *error, size_t error_len);
 extern int setup_upload_file(const char *upload_path, FILE **upload_file,
     size_t *upload_size, bool *chunked_upload, char *error, size_t error_len);
 extern bool is_connection_error(const struct connection *conn);
@@ -1180,7 +1183,7 @@ TEST(test_write_body_data_to_file) {
     struct response_info out;
     memset(&out, 0, sizeof(out));
     FILE *tmp = tmpfile();
-    write_body_data("hello", 5, tmp, &out);
+    write_body_data("hello", 5, tmp, &out, true);
     rewind(tmp);
     char got[16];
     size_t n = fread(got, 1, sizeof(got) - 1, tmp);
@@ -1192,7 +1195,7 @@ TEST(test_write_body_data_to_file) {
 TEST(test_write_body_data_preview) {
     struct response_info out;
     memset(&out, 0, sizeof(out));
-    write_body_data("abcdefghij", 10, NULL, &out);
+    write_body_data("abcdefghij", 10, NULL, &out, true);
     ASSERT_INT_EQ(out.preview_len, 10, "preview length");
     ASSERT_STR_EQ(out.preview, "abcdefghij", "preview content");
 }
@@ -1200,8 +1203,73 @@ TEST(test_write_body_data_preview) {
 TEST(test_write_body_data_null_file) {
     struct response_info out;
     memset(&out, 0, sizeof(out));
-    size_t rc = write_body_data("ok", 2, NULL, &out);
+    size_t rc = write_body_data("ok", 2, NULL, &out, true);
     ASSERT_INT_EQ((int)rc, 0, "null file succeeds");
+}
+
+TEST(test_write_body_data_no_preview_still_writes) {
+    struct response_info out;
+    memset(&out, 0, sizeof(out));
+    FILE *tmp = tmpfile();
+    ASSERT_PTR_NOTNULL(tmp, "tmpfile");
+    if (tmp == NULL) return;
+    size_t rc = write_body_data("body", 4, tmp, &out, false);
+    rewind(tmp);
+    char got[16];
+    size_t n = fread(got, 1, sizeof(got) - 1, tmp);
+    got[n] = '\0';
+    ASSERT_INT_EQ((int)rc, 0, "write succeeds without preview");
+    ASSERT_STR_EQ(got, "body", "body still written");
+    ASSERT_INT_EQ(out.preview_len, 0, "preview skipped");
+    fclose(tmp);
+}
+
+static int receive_response_from_string(const char *response, FILE *body_out,
+                                        bool head_method, struct response_info *out,
+                                        char *error, size_t error_len) {
+    int fds[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) return -1;
+    size_t len = strlen(response);
+    ssize_t wr = write(fds[1], response, len);
+    shutdown(fds[1], SHUT_WR);
+
+    struct connection conn;
+    memset(&conn, 0, sizeof(conn));
+    conn.fd = fds[0];
+
+    struct timespec start;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    int rc = (wr == (ssize_t)len)
+        ? receive_response(&conn, &start, out, error, error_len, body_out, false, false, head_method)
+        : -1;
+
+    close(fds[0]);
+    close(fds[1]);
+    return rc;
+}
+
+TEST(test_receive_response_captures_preview_without_body_file) {
+    struct response_info out;
+    char err[128] = "";
+    memset(&out, 0, sizeof(out));
+    int rc = receive_response_from_string(
+        "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello",
+        NULL, false, &out, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "receive ok");
+    ASSERT_STR_EQ(out.preview, "hello", "preview captured");
+    ASSERT_INT_EQ(out.preview_len, 5, "preview length");
+}
+
+TEST(test_receive_response_head_ignores_body) {
+    struct response_info out;
+    char err[128] = "";
+    memset(&out, 0, sizeof(out));
+    int rc = receive_response_from_string(
+        "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello",
+        NULL, true, &out, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "head receive ok");
+    ASSERT_INT_EQ(out.status_code, 200, "status parsed");
+    ASSERT_INT_EQ(out.preview_len, 0, "head has no body preview");
 }
 
 TEST(test_final_status_code_no_hops) {
@@ -1564,7 +1632,7 @@ TEST(test_chunked_write_simple) {
     size_t line_len = 0;
     char err[64] = "";
     chunked_write("5\r\nhello\r\n0\r\n\r\n", 15, NULL, &out,
-        &state, &rem, line_buf, &line_len, NULL, false, err, sizeof(err));
+        &state, &rem, line_buf, &line_len, NULL, false, true, err, sizeof(err));
     ASSERT_INT_EQ(state, 3, "state done");
 }
 
@@ -1577,7 +1645,7 @@ TEST(test_chunked_write_multiple) {
     size_t line_len = 0;
     char err[64] = "";
     chunked_write("3\r\nabc\r\n0\r\n\r\n", 13, NULL, &out,
-        &state, &rem, line_buf, &line_len, NULL, false, err, sizeof(err));
+        &state, &rem, line_buf, &line_len, NULL, false, true, err, sizeof(err));
     ASSERT_INT_EQ(state, 3, "state done");
 }
 
@@ -1590,9 +1658,9 @@ TEST(test_chunked_write_split) {
     size_t line_len = 0;
     char err[64] = "";
     chunked_write("4\r\nab", 5, NULL, &out,
-        &state, &rem, line_buf, &line_len, NULL, false, err, sizeof(err));
+        &state, &rem, line_buf, &line_len, NULL, false, true, err, sizeof(err));
     chunked_write("cd\r\n0\r\n\r\n", 10, NULL, &out,
-        &state, &rem, line_buf, &line_len, NULL, false, err, sizeof(err));
+        &state, &rem, line_buf, &line_len, NULL, false, true, err, sizeof(err));
     ASSERT_INT_EQ(state, 3, "state done");
 }
 
@@ -1810,6 +1878,9 @@ int main(void) {
     test_write_body_data_to_file();
     test_write_body_data_preview();
     test_write_body_data_null_file();
+    test_write_body_data_no_preview_still_writes();
+    test_receive_response_captures_preview_without_body_file();
+    test_receive_response_head_ignores_body();
 
     test_final_status_code_no_hops();
     test_final_status_code_one_hop();
