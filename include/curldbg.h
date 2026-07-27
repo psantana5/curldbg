@@ -68,6 +68,7 @@ struct response_info {
     char set_cookie_buf[4096];
     size_t set_cookie_len;
     char content_encoding[32];
+    char header_text[HEADER_MAX + 1];
 };
 
 struct cookie_entry {
@@ -184,6 +185,7 @@ struct run_result {
     double total_ms;
     char final_url[2048];
     char error[256];
+    bool is_head;
 };
 
 struct cmdline_opts {

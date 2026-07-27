@@ -277,6 +277,7 @@ int receive_response(
     out->set_cookie_len = 0;
     out->set_cookie_buf[0] = '\0';
     out->content_encoding[0] = '\0';
+    out->header_text[0] = '\0';
 
     for (;;) {
         /*
@@ -353,6 +354,10 @@ int receive_response(
                     if (decomp_init) inflateEnd(&decomp_strm);
                     return -1;
                 }
+                size_t header_copy_len = header_bytes;
+                if (header_copy_len > HEADER_MAX) header_copy_len = HEADER_MAX;
+                memcpy(out->header_text, recv_buf, header_copy_len);
+                out->header_text[header_copy_len] = '\0';
                 if (head_method) return 0;
 
                 if (out->content_encoding[0] != '\0' &&
