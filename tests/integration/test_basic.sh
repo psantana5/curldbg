@@ -26,5 +26,18 @@ assert_eq "/404 status" "404" "$STATUS"
 STATUS=$($CDBG "$BASE/500" -o /dev/null -w "%{http_code}" 2>/dev/null)
 assert_eq "/500 status" "500" "$STATUS"
 
+# --- -H custom header does not crash ---
+STATUS=$($CDBG -H "X-Test: hello" "$BASE/" -o /dev/null -w "%{http_code}" 2>/dev/null)
+assert_eq "-H status" "200" "$STATUS"
+
+# --- -H with attached value (-HX-Test:val) works ---
+STATUS=$($CDBG -HX-Test:attached "$BASE/" -o /dev/null -w "%{http_code}" 2>/dev/null)
+assert_eq "-H attached status" "200" "$STATUS"
+
+# --- -I HEAD returns response headers ---
+HEADERS=$($CDBG -I "$BASE/" 2>/dev/null)
+assert_eq "-I contains status line" "1" "$(echo "$HEADERS" | grep -c 'HTTP/1.1')"
+assert_eq "-I contains Content-Length" "1" "$(echo "$HEADERS" | grep -c 'Content-Length')"
+
 echo "basic: $PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ]
