@@ -229,6 +229,9 @@ static int establish_connection(struct connection *conn,
             if (init_tls(conn, url->host, opts->insecure_tls,
                          opts->tls_min_version, opts->tls_max_version,
                          &opts->tls_params, opts->tls_ctx, error, error_len) != 0) return -1;
+            if (http2_negotiated(conn)) {
+                if (http2_init_connection(conn, error, error_len) != 0) return -1;
+            }
         }
     } else {
         fd = connect_tcp(*conn_addrs, hop->connected_ip, sizeof(hop->connected_ip),
@@ -268,6 +271,9 @@ static int establish_connection(struct connection *conn,
         if (init_tls(conn, url->host, opts->insecure_tls,
                      opts->tls_min_version, opts->tls_max_version,
                      &opts->tls_params, opts->tls_ctx, error, error_len) != 0) return -1;
+        if (http2_negotiated(conn)) {
+            if (http2_init_connection(conn, error, error_len) != 0) return -1;
+        }
     }
     return 0;
 }
@@ -508,16 +514,34 @@ static int run_request(const char *input_url, const struct run_options *opts,
 
         int sr;
         bool request_retried = false;
-        sr = send_request(conn, &url, method, data, data_len,
-                upload_file, upload_size, send_headers, send_header_count,
-                opts->basic_auth, opts->user_agent, out->error, sizeof(out->error),
-                use_proxy && !url.use_tls, chunked_upload, opts->compressed,
-                header_flags);
-        if (sr == 0) {
-            bool head_method = opts->is_head_method;
-            if (receive_response(conn, &ttfb_start, &out->resp, out->error, sizeof(out->error),
-                    opts->body_out, opts->follow_redirects, opts->fail_on_http_error, head_method) != 0)
-                sr = -1;
+        if (http2_negotiated(conn)) {
+            const char *effective_auth = opts->basic_auth;
+            if (effective_auth == NULL || effective_auth[0] == '\0') {
+                if (url.user[0] != '\0') {
+                    effective_auth = url.user; /* http2.c handles : in user */
+                }
+            }
+            sr = http2_send_request(conn, &url, method, data, data_len,
+                    send_headers, send_header_count,
+                    opts->user_agent, effective_auth,
+                    out->error, sizeof(out->error));
+            if (sr == 0) {
+                if (http2_receive_response(conn, &out->resp, &ttfb_start,
+                        opts->body_out, out->error, sizeof(out->error)) != 0)
+                    sr = -1;
+            }
+        } else {
+            sr = send_request(conn, &url, method, data, data_len,
+                    upload_file, upload_size, send_headers, send_header_count,
+                    opts->basic_auth, opts->user_agent, out->error, sizeof(out->error),
+                    use_proxy && !url.use_tls, chunked_upload, opts->compressed,
+                    header_flags);
+            if (sr == 0) {
+                bool head_method = opts->is_head_method;
+                if (receive_response(conn, &ttfb_start, &out->resp, out->error, sizeof(out->error),
+                        opts->body_out, opts->follow_redirects, opts->fail_on_http_error, head_method) != 0)
+                    sr = -1;
+            }
         }
         /* On connection-level error with a reused socket, retry once with a fresh TCP/TLS */
         if (sr != 0 && reuse_connection && !request_retried && is_connection_error(conn)) {
@@ -574,6 +598,9 @@ static int run_request(const char *input_url, const struct run_options *opts,
             snprintf(out->hops[out->hop_count].redirect_to_host,
                      sizeof(out->hops[out->hop_count].redirect_to_host),
                      "%s", redirected_url.host);
+            snprintf(out->hops[out->hop_count].redirect_url,
+                     sizeof(out->hops[out->hop_count].redirect_url),
+                     "%s", next_url);
             out->hops[out->hop_count].has_redirect_target = true;
             can_redirect = true;
             /* 301/302/303: downgrade to GET, per RFC 7231 */
