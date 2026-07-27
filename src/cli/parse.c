@@ -10,13 +10,6 @@
 
 #define MAX_DATA_FILE_SIZE (16 * 1024 * 1024)
 
-static void copy_bounded(char *dst, size_t dst_size, const char *src) {
-    size_t len = strlen(src);
-    if (len >= dst_size) len = dst_size - 1;
-    memcpy(dst, src, len);
-    dst[len] = '\0';
-}
-
 static void set_cmdline_error(struct cmdline_opts *c, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -322,35 +315,82 @@ int parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
             if (i + 1 >= argc) { set_cmdline_error(c, "Missing value for --resolve"); return -1; }
             if (c->resolve_count >= MAX_RESOLVE_ENTRIES) { set_cmdline_error(c, "Too many --resolve entries (max %d)", MAX_RESOLVE_ENTRIES); return -1; }
             const char *val = argv[++i];
-            const char *last_colon = strrchr(val, ':');
-            if (last_colon == NULL || last_colon == val) {
+
+            /* Find host:port:address separators.
+             * host may be a hostname or a bracketed IPv6 literal [::1].
+             * port is numeric or a service name.
+             * address may be IPv4, bracketed IPv6 [::1], or bare IPv6 2001:db8::1. */
+            const char *host_start = val;
+            const char *host_end;
+            if (host_start[0] == '[') {
+                host_end = strchr(host_start, ']');
+                if (host_end == NULL) { set_cmdline_error(c, "Unclosed bracket in --resolve host"); return -1; }
+                host_end++;
+                if (*host_end != ':') { set_cmdline_error(c, "Expected ':' after bracketed host in --resolve"); return -1; }
+            } else {
+                host_end = strchr(host_start, ':');
+                if (host_end == NULL || host_end == host_start) {
+                    set_cmdline_error(c, "Invalid --resolve format (expected host:port:address)"); return -1;
+                }
+            }
+
+            const char *port_start = host_end + 1;
+            const char *port_end = strchr(port_start, ':');
+            if (port_end == NULL || port_end == port_start) {
                 set_cmdline_error(c, "Invalid --resolve format (expected host:port:address)"); return -1;
             }
-            const char *addr = last_colon + 1;
-            size_t hostport_len = (size_t)(last_colon - val);
-            char hostport[512];
-            if (hostport_len >= sizeof(hostport)) { set_cmdline_error(c, "--resolve host:port too long"); return -1; }
-            memcpy(hostport, val, hostport_len);
-            hostport[hostport_len] = '\0';
-            const char *port_colon = strrchr(hostport, ':');
-            if (port_colon == NULL) {
-                set_cmdline_error(c, "Invalid --resolve format (expected host:port:address)"); return -1;
+
+            const char *addr = port_end + 1;
+            if (*addr == '\0') {
+                set_cmdline_error(c, "Missing address in --resolve"); return -1;
             }
-            *((char *)port_colon) = '\0';
-            const char *host = hostport;
-            const char *port = port_colon + 1;
+
             struct resolve_entry *re = &c->resolve_entries[c->resolve_count];
             memset(re, 0, sizeof(*re));
-            if (strlen(host) >= sizeof(re->host) || strlen(port) >= sizeof(re->port)) {
-                set_cmdline_error(c, "--resolve host or port too long"); return -1;
+
+            size_t hlen, plen;
+            if (host_start[0] == '[') {
+                hlen = (size_t)(host_end - host_start - 2);
+                if (hlen == 0 || hlen >= sizeof(re->host)) {
+                    set_cmdline_error(c, "--resolve host too long or empty"); return -1;
+                }
+                memcpy(re->host, host_start + 1, hlen);
+            } else {
+                hlen = (size_t)(host_end - host_start);
+                if (hlen >= sizeof(re->host)) {
+                    set_cmdline_error(c, "--resolve host too long"); return -1;
+                }
+                memcpy(re->host, host_start, hlen);
             }
-            copy_bounded(re->host, sizeof(re->host), host);
-            copy_bounded(re->port, sizeof(re->port), port);
-            if (inet_pton(AF_INET, addr, &((struct sockaddr_in *)&re->ss)->sin_addr) == 1) {
+            re->host[hlen] = '\0';
+
+            plen = (size_t)(port_end - port_start);
+            if (plen >= sizeof(re->port)) {
+                set_cmdline_error(c, "--resolve port too long"); return -1;
+            }
+            memcpy(re->port, port_start, plen);
+            re->port[plen] = '\0';
+
+            const char *resolve_addr = addr;
+            char addr_buf[64];
+            if (addr[0] == '[') {
+                const char *close_bracket = strchr(addr, ']');
+                if (close_bracket == NULL || *(close_bracket + 1) != '\0') {
+                    set_cmdline_error(c, "Invalid bracketed address in --resolve (expected [addr])"); return -1;
+                }
+                size_t a_len = (size_t)(close_bracket - addr - 1);
+                if (a_len == 0 || a_len >= sizeof(addr_buf)) {
+                    set_cmdline_error(c, "Invalid --resolve IPv6 address"); return -1;
+                }
+                memcpy(addr_buf, addr + 1, a_len);
+                addr_buf[a_len] = '\0';
+                resolve_addr = addr_buf;
+            }
+            if (inet_pton(AF_INET, resolve_addr, &((struct sockaddr_in *)&re->ss)->sin_addr) == 1) {
                 re->family = AF_INET;
                 re->ss_len = sizeof(struct sockaddr_in);
                 ((struct sockaddr_in *)&re->ss)->sin_family = AF_INET;
-            } else if (inet_pton(AF_INET6, addr, &((struct sockaddr_in6 *)&re->ss)->sin6_addr) == 1) {
+            } else if (inet_pton(AF_INET6, resolve_addr, &((struct sockaddr_in6 *)&re->ss)->sin6_addr) == 1) {
                 re->family = AF_INET6;
                 re->ss_len = sizeof(struct sockaddr_in6);
                 ((struct sockaddr_in6 *)&re->ss)->sin6_family = AF_INET6;
