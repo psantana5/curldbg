@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "curldbg.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -298,7 +299,15 @@ int receive_response(
             n = connection_read(conn, recv_buf, sizeof(recv_buf), error, error_len);
         }
         if (n < 0) return -1;
-        if (n == 0) break;
+        if (n == 0) {
+            if (!seen_first_byte) {
+                conn->last_errno = ECONNRESET;
+                set_error(error, error_len, "Empty response from server");
+                if (decomp_init) inflateEnd(&decomp_strm);
+                return -1;
+            }
+            break;
+        }
 
         if (__builtin_expect(!seen_first_byte, 0)) {
             if (clock_gettime(CLOCK_MONOTONIC, &first_byte_ts) != 0) {
