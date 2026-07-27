@@ -317,6 +317,7 @@ int receive_response(
 
             char *body_start = find_header_end(recv_buf, header_len);
             if (body_start != NULL) {
+parse_response:
                 size_t header_bytes = (size_t)(body_start - recv_buf);
                 size_t pending_len = header_len - header_bytes;
 
@@ -362,6 +363,13 @@ int receive_response(
                     if (pending_len > 0) {
                         memmove(recv_buf, pending_body_buf, pending_len);
                         header_len = pending_len;
+                        recv_buf[header_len] = '\0';
+                        body_start = find_header_end(recv_buf, header_len);
+                        if (body_start != NULL) {
+                            seen_first_byte = true;
+                            out->ttfb_ms = ms_between(ttfb_start, &first_byte_ts);
+                            goto parse_response;
+                        }
                     } else {
                         header_len = 0;
                     }

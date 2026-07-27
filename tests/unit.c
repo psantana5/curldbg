@@ -1272,6 +1272,45 @@ TEST(test_receive_response_head_ignores_body) {
     ASSERT_INT_EQ(out.preview_len, 0, "head has no body preview");
 }
 
+TEST(test_receive_response_100_continue) {
+    struct response_info out;
+    char err[128] = "";
+    memset(&out, 0, sizeof(out));
+    int rc = receive_response_from_string(
+        "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello",
+        NULL, false, &out, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "100 Continue handled");
+    ASSERT_INT_EQ(out.status_code, 200, "final status is 200");
+    ASSERT_STR_EQ(out.preview, "hello", "body from final response");
+    ASSERT_INT_EQ(out.preview_len, 5, "preview length");
+    ASSERT_TRUE(out.ttfb_ms > 0, "ttfb measured");
+}
+
+TEST(test_receive_response_100_continue_no_body) {
+    struct response_info out;
+    char err[128] = "";
+    memset(&out, 0, sizeof(out));
+    int rc = receive_response_from_string(
+        "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 204 No Content\r\n\r\n",
+        NULL, false, &out, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "100 Continue -> 204 handled");
+    ASSERT_INT_EQ(out.status_code, 204, "final status is 204");
+    ASSERT_INT_EQ(out.preview_len, 0, "no body preview");
+}
+
+TEST(test_receive_response_103_early_hints) {
+    struct response_info out;
+    char err[128] = "";
+    memset(&out, 0, sizeof(out));
+    int rc = receive_response_from_string(
+        "HTTP/1.1 103 Early Hints\r\nLink: </style.css>; rel=preload\r\n\r\n"
+        "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc",
+        NULL, false, &out, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "103 Early Hints handled");
+    ASSERT_INT_EQ(out.status_code, 200, "final status is 200");
+    ASSERT_STR_EQ(out.preview, "abc", "body preserved");
+}
+
 TEST(test_final_status_code_no_hops) {
     struct run_result r;
     memset(&r, 0, sizeof(r));
@@ -1746,6 +1785,89 @@ TEST(test_parse_cmdline_defaults) {
     free((void *)c.urls);
 }
 
+TEST(test_parse_cmdline_resolve_ipv4) {
+    struct cmdline_opts c;
+    memset(&c, 0, sizeof(c));
+    char *argv[] = {(char *)"prog", (char *)"--resolve", (char *)"example.com:80:1.2.3.4", (char *)"http://example.com", NULL};
+    ASSERT_INT_EQ(parse_cmdline(4, argv, &c), 0, "parse ok");
+    ASSERT_INT_EQ(c.resolve_count, 1, "one resolve entry");
+    ASSERT_STR_EQ(c.resolve_entries[0].host, "example.com", "host");
+    ASSERT_STR_EQ(c.resolve_entries[0].port, "80", "port");
+    ASSERT_INT_EQ(c.resolve_entries[0].family, AF_INET, "AF_INET");
+    struct sockaddr_in *sin = (struct sockaddr_in *)&c.resolve_entries[0].ss;
+    struct in_addr expected;
+    inet_pton(AF_INET, "1.2.3.4", &expected);
+    ASSERT_INT_EQ(memcmp(&sin->sin_addr, &expected, sizeof(expected)), 0, "IPv4 addr");
+    free((void *)c.urls);
+}
+
+TEST(test_parse_cmdline_resolve_ipv6_bare) {
+    struct cmdline_opts c;
+    memset(&c, 0, sizeof(c));
+    char *argv[] = {(char *)"prog", (char *)"--resolve", (char *)"example.com:80:2001:db8::1", (char *)"http://example.com", NULL};
+    ASSERT_INT_EQ(parse_cmdline(4, argv, &c), 0, "parse ok");
+    ASSERT_INT_EQ(c.resolve_count, 1, "one resolve entry");
+    ASSERT_STR_EQ(c.resolve_entries[0].host, "example.com", "host");
+    ASSERT_STR_EQ(c.resolve_entries[0].port, "80", "port");
+    ASSERT_INT_EQ(c.resolve_entries[0].family, AF_INET6, "AF_INET6");
+    struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)&c.resolve_entries[0].ss;
+    struct in6_addr expected;
+    inet_pton(AF_INET6, "2001:db8::1", &expected);
+    ASSERT_INT_EQ(memcmp(&sin6->sin6_addr, &expected, sizeof(expected)), 0, "IPv6 addr");
+    free((void *)c.urls);
+}
+
+TEST(test_parse_cmdline_resolve_ipv6_bracketed) {
+    struct cmdline_opts c;
+    memset(&c, 0, sizeof(c));
+    char *argv[] = {(char *)"prog", (char *)"--resolve", (char *)"example.com:80:[2001:db8::1]", (char *)"http://example.com", NULL};
+    ASSERT_INT_EQ(parse_cmdline(4, argv, &c), 0, "parse ok");
+    ASSERT_INT_EQ(c.resolve_count, 1, "one resolve entry");
+    ASSERT_INT_EQ(c.resolve_entries[0].family, AF_INET6, "AF_INET6");
+    free((void *)c.urls);
+}
+
+TEST(test_parse_cmdline_resolve_ipv6_host) {
+    struct cmdline_opts c;
+    memset(&c, 0, sizeof(c));
+    char *argv[] = {(char *)"prog", (char *)"--resolve", (char *)"[::1]:80:10.0.0.1", (char *)"http://example.com", NULL};
+    ASSERT_INT_EQ(parse_cmdline(4, argv, &c), 0, "parse ok");
+    ASSERT_INT_EQ(c.resolve_count, 1, "one resolve entry");
+    ASSERT_STR_EQ(c.resolve_entries[0].host, "::1", "IPv6 host");
+    ASSERT_INT_EQ(c.resolve_entries[0].family, AF_INET, "AF_INET address");
+    free((void *)c.urls);
+}
+
+TEST(test_parse_cmdline_resolve_ipv6_bracketed_both) {
+    struct cmdline_opts c;
+    memset(&c, 0, sizeof(c));
+    char *argv[] = {(char *)"prog", (char *)"--resolve", (char *)"[::1]:443:[::1]", (char *)"http://example.com", NULL};
+    ASSERT_INT_EQ(parse_cmdline(4, argv, &c), 0, "parse ok");
+    ASSERT_INT_EQ(c.resolve_count, 1, "one resolve entry");
+    ASSERT_STR_EQ(c.resolve_entries[0].host, "::1", "IPv6 host");
+    ASSERT_STR_EQ(c.resolve_entries[0].port, "443", "port");
+    ASSERT_INT_EQ(c.resolve_entries[0].family, AF_INET6, "AF_INET6");
+    free((void *)c.urls);
+}
+
+TEST(test_parse_cmdline_resolve_missing_addr) {
+    struct cmdline_opts c;
+    memset(&c, 0, sizeof(c));
+    char *argv[] = {(char *)"prog", (char *)"--resolve", (char *)"example.com:80", (char *)"http://example.com", NULL};
+    ASSERT_INT_EQ(parse_cmdline(4, argv, &c), -1, "missing addr returns -1");
+    ASSERT_TRUE(strlen(c.error) > 0, "error set");
+    free((void *)c.urls);
+}
+
+TEST(test_parse_cmdline_resolve_unclosed_bracket) {
+    struct cmdline_opts c;
+    memset(&c, 0, sizeof(c));
+    char *argv[] = {(char *)"prog", (char *)"--resolve", (char *)"[::1:80:10.0.0.1", (char *)"http://example.com", NULL};
+    ASSERT_INT_EQ(parse_cmdline(4, argv, &c), -1, "unclosed bracket returns -1");
+    ASSERT_TRUE(strlen(c.error) > 0, "error set");
+    free((void *)c.urls);
+}
+
 /* ================================================================
  * Main
  * ================================================================ */
@@ -1881,6 +2003,9 @@ int main(void) {
     test_write_body_data_no_preview_still_writes();
     test_receive_response_captures_preview_without_body_file();
     test_receive_response_head_ignores_body();
+    test_receive_response_100_continue();
+    test_receive_response_100_continue_no_body();
+    test_receive_response_103_early_hints();
 
     test_final_status_code_no_hops();
     test_final_status_code_one_hop();
@@ -1945,6 +2070,13 @@ int main(void) {
     test_parse_cmdline_value_flags();
     test_parse_cmdline_urls();
     test_parse_cmdline_defaults();
+    test_parse_cmdline_resolve_ipv4();
+    test_parse_cmdline_resolve_ipv6_bare();
+    test_parse_cmdline_resolve_ipv6_bracketed();
+    test_parse_cmdline_resolve_ipv6_host();
+    test_parse_cmdline_resolve_ipv6_bracketed_both();
+    test_parse_cmdline_resolve_missing_addr();
+    test_parse_cmdline_resolve_unclosed_bracket();
 
     printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
            tests_run - tests_failed, tests_failed, tests_run);
