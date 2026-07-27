@@ -148,18 +148,25 @@ int main(int argc, char **argv) {
         }
 
         if (c->output_path != NULL) {
-            if (strcmp(c->output_path, "-") == 0) { body_out = stdout; c->silent = true; }
-            else {
-                body_out = fopen(c->output_path, "wb");
-                if (body_out == NULL) {
-                    fprintf(stderr, "Unable to open output file '%s': %s\n", c->output_path, strerror(errno));
-                    exit_code = EXIT_FAILURE; goto cleanup;
+            bool is_head = (strcasecmp(c->request_method, "HEAD") == 0);
+            if (strcmp(c->output_path, "-") == 0) {
+                if (!is_head) { body_out = stdout; c->silent = true; }
+            } else {
+                if (!is_head) {
+                    body_out = fopen(c->output_path, "wb");
+                    if (body_out == NULL) {
+                        fprintf(stderr, "Unable to open output file '%s': %s\n", c->output_path, strerror(errno));
+                        exit_code = EXIT_FAILURE; goto cleanup;
+                    }
+                    close_body = true;
                 }
-                close_body = true;
             }
         } else if (stdout_is_redirected()) {
-            body_out = stdout;
-            c->silent = true;
+            bool is_head = (strcasecmp(c->request_method, "HEAD") == 0);
+            if (!is_head)
+                body_out = stdout;
+            if (!is_head)
+                c->silent = true;
         }
 
         session_opts.proxy_host = proxy_host;
@@ -182,6 +189,18 @@ int main(int argc, char **argv) {
                 write_out_expand(c->write_out_format, &result);
             }
 
+            if (result.is_head && result.resp.header_text[0] != '\0') {
+                const char *h = result.resp.header_text;
+                while (*h != '\0') {
+                    const char *nl = strstr(h, "\r\n");
+                    if (nl == NULL) { printf("%s\n", h); break; }
+                    size_t line_len = (size_t)(nl - h);
+                    printf("%.*s\n", (int)line_len, h);
+                    h = nl + 2;
+                    if (*h == '\0' || (h[0] == '\r' && h[1] == '\n')) break;
+                }
+                printf("\n");
+            }
             if (!c->silent) {
                 print_single_output(&result);
             }

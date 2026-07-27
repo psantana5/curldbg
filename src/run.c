@@ -327,6 +327,7 @@ static int run_request(const char *input_url, const struct run_options *opts,
     memset(out, 0, sizeof(*out));
     out->ttfb_ms = -1.0;
     out->error[0] = '\0';
+    out->is_head = opts->is_head_method;
 
     if (strlen(input_url) >= sizeof(current_url)) {
         snprintf(out->error, sizeof(out->error), "URL too long"); return -1;
