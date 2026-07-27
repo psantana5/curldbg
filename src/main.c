@@ -13,8 +13,6 @@
 #include <netinet/tcp.h>
 #include <poll.h>
 
-int output_filename_from_url(const char *input_url, char *out, size_t out_size);
-
 static bool stdout_is_redirected(void) {
     return !isatty(fileno(stdout));
 }

@@ -39,7 +39,7 @@ void write_out_expand(const char *fmt, const struct run_result *result) {
                     if (result->hop_count > 0) {
                         const struct hop_info *h = &result->hops[result->hop_count - 1];
                         if (h->has_redirect_target)
-                            printf("%s", h->redirect_to_host);
+                            printf("%s", h->redirect_url);
                     }
                 } else {
                     /* unknown variable: curl prints nothing */
