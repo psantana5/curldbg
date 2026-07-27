@@ -93,6 +93,7 @@ struct hop_info {
     int status_code;
     char host[256];
     char redirect_to_host[256];
+    char redirect_url[2048];
     bool has_redirect_target;
     double dns_ms;
     double tcp_ms;
@@ -122,6 +123,7 @@ struct connection {
     SSL *ssl;
     int last_errno;
     bool ctx_owned;
+    bool http2;
 };
 
 struct connection_state {
@@ -296,6 +298,7 @@ int format_url(const struct url_info *url, char *out_url, size_t out_size);
 int format_absolute_uri(const struct url_info *url, char *out, size_t out_size);
 int format_host_header(const struct url_info *url, char *out, size_t out_size);
 int build_redirect_url(const char *location, const struct url_info *base, char *out_url, size_t out_size);
+int output_filename_from_url(const char *input_url, char *out, size_t out_size);
 
 /* --- dns.c --- */
 struct dns_cache;
@@ -363,5 +366,17 @@ void cookie_jar_load(struct cookie_jar *jar, const char *filepath);
 /* --- proxy.c --- */
 int proxy_connect(struct connection *conn, const struct url_info *target,
                   int connect_timeout_ms, char *error, size_t error_len);
+
+/* --- http2.c --- */
+bool http2_negotiated(const struct connection *conn);
+int http2_init_connection(struct connection *conn, char *error, size_t error_len);
+int http2_send_request(struct connection *conn, const struct url_info *url,
+                       const char *method, const char *data, size_t data_len,
+                       const char **extra_headers, size_t extra_header_count,
+                       const char *user_agent, const char *basic_auth,
+                       char *error, size_t error_len);
+int http2_receive_response(struct connection *conn, struct response_info *out,
+                           const struct timespec *ttfb_start,
+                           FILE *body_out, char *error, size_t error_len);
 
 #endif
