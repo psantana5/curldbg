@@ -163,10 +163,10 @@ int main(int argc, char **argv) {
             }
         } else if (stdout_is_redirected()) {
             bool is_head = (strcasecmp(c->request_method, "HEAD") == 0);
-            if (!is_head)
+            if (!is_head) {
                 body_out = stdout;
-            if (!is_head)
                 c->silent = true;
+            }
         }
 
         session_opts.proxy_host = proxy_host;
