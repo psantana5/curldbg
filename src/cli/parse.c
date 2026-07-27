@@ -550,8 +550,9 @@ int parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
 
         if (argv[i][0] == '-' && argv[i][1] != '\0' && argv[i][1] != '-' && argv[i][2] != '\0') {
             bool handled = true;
-            for (size_t j = 1; argv[i][j] != '\0'; j++) {
-                switch (argv[i][j]) {
+            const char *flag_str = argv[i];
+            for (size_t j = 1; flag_str[j] != '\0'; j++) {
+                switch (flag_str[j]) {
                     case 'f': c->fail_on_http_error = true; break;
                     case 's': c->silent = true; break;
                     case 'S': c->show_error = true; break;
@@ -562,8 +563,8 @@ int parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
                     case 'I': snprintf(c->request_method, sizeof(c->request_method), "HEAD"); c->method_explicit = true; break;
                     case 'h': print_help(argv[0]); return 1;
                     case 'H':
-                        if (argv[i][j + 1] != '\0') {
-                            const char *hv = argv[i] + j + 1;
+                        if (flag_str[j + 1] != '\0') {
+                            const char *hv = flag_str + j + 1;
                             if (strchr(hv, '\r') != NULL || strchr(hv, '\n') != NULL) {
                                 set_cmdline_error(c, "Invalid header value (newline detected)"); return -1;
                             }
@@ -571,18 +572,34 @@ int parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
                             if (nx == NULL) { set_cmdline_error(c, "Out of memory"); return -1; }
                             c->extra_headers = nx;
                             c->extra_headers[c->extra_header_count++] = hv;
-                            while (argv[i][j + 1] != '\0') j++;
+                            while (flag_str[j + 1] != '\0') j++;
+                        } else if (i + 1 < argc) {
+                            i++;
+                            const char *hv = argv[i];
+                            if (strchr(hv, '\r') != NULL || strchr(hv, '\n') != NULL) {
+                                set_cmdline_error(c, "Invalid header value (newline detected)"); return -1;
+                            }
+                            const char **nx = realloc(c->extra_headers, (c->extra_header_count + 1) * sizeof(*c->extra_headers));
+                            if (nx == NULL) { set_cmdline_error(c, "Out of memory"); return -1; }
+                            c->extra_headers = nx;
+                            c->extra_headers[c->extra_header_count++] = hv;
                         } else {
                             handled = false;
                         }
                         break;
                     case 'o':
-                        if (argv[i][j + 1] != '\0') {
-                            c->output_path = argv[i] + j + 1;
+                        if (flag_str[j + 1] != '\0') {
+                            c->output_path = flag_str + j + 1;
                             if (contains_crlf(c->output_path)) {
                                 set_cmdline_error(c, "Invalid value for -o (newline detected)"); return -1;
                             }
-                            while (argv[i][j + 1] != '\0') j++;
+                            while (flag_str[j + 1] != '\0') j++;
+                        } else if (i + 1 < argc) {
+                            i++;
+                            c->output_path = argv[i];
+                            if (contains_crlf(c->output_path)) {
+                                set_cmdline_error(c, "Invalid value for -o (newline detected)"); return -1;
+                            }
                         } else {
                             handled = false;
                         }
