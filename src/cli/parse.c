@@ -521,6 +521,21 @@ int parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
                     case 'O': c->output_remote_name = true; break;
                     case 'I': snprintf(c->request_method, sizeof(c->request_method), "HEAD"); c->method_explicit = true; break;
                     case 'h': print_help(argv[0]); return 1;
+                    case 'H':
+                        if (argv[i][j + 1] != '\0') {
+                            const char *hv = argv[i] + j + 1;
+                            if (strchr(hv, '\r') != NULL || strchr(hv, '\n') != NULL) {
+                                set_cmdline_error(c, "Invalid header value (newline detected)"); return -1;
+                            }
+                            const char **nx = realloc(c->extra_headers, (c->extra_header_count + 1) * sizeof(*c->extra_headers));
+                            if (nx == NULL) { set_cmdline_error(c, "Out of memory"); return -1; }
+                            c->extra_headers = nx;
+                            c->extra_headers[c->extra_header_count++] = hv;
+                            while (argv[i][j + 1] != '\0') j++;
+                        } else {
+                            handled = false;
+                        }
+                        break;
                     case 'o':
                         if (argv[i][j + 1] != '\0') {
                             c->output_path = argv[i] + j + 1;
