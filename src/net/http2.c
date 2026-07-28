@@ -66,18 +66,6 @@ enum h2_error_code {
     H2_REFUSED_STREAM = 0x7,
 };
 
-struct h2_connection {
-    uint32_t last_stream_id;
-    int32_t conn_window;
-    uint32_t max_frame_size;
-    uint32_t max_concurrent_streams;
-    uint32_t initial_window_size;
-    uint32_t header_table_size;
-    bool settings_received;
-    bool goaway_received;
-    enum h2_stream_state stream_state;
-};
-
 struct h2_hpack_entry {
     char *name;
     char *value;
@@ -93,8 +81,28 @@ struct h2_hpack_table {
     size_t size;
 };
 
-static struct h2_connection h2_conn_state;
-static struct h2_hpack_table h2_dyn_table;
+/* Huffman decode node */
+#define HUFF_NODE_TERMINAL 0x80000000
+
+struct huff_node {
+    uint32_t child[2];
+};
+
+struct h2_connection {
+    uint32_t last_stream_id;
+    int32_t conn_window;
+    uint32_t max_frame_size;
+    uint32_t max_concurrent_streams;
+    uint32_t initial_window_size;
+    uint32_t header_table_size;
+    bool settings_received;
+    bool goaway_received;
+    enum h2_stream_state stream_state;
+    bool continuation_pending;
+    struct h2_hpack_table dyn_table;
+    struct huff_node *huff_tree;
+    int huff_tree_alloc;
+};
 
 static uint32_t read24(const unsigned char *p) {
     return ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | p[2];
@@ -167,8 +175,6 @@ static int send_window_update(struct connection *conn, uint32_t stream_id,
                           (char *)payload, error, error_len);
 }
 
-
-
 static int send_rst_stream(struct connection *conn, uint32_t stream_id,
                             uint32_t error_code, char *error, size_t error_len) {
     unsigned char payload[4];
@@ -189,16 +195,6 @@ bool http2_negotiated(const struct connection *conn) {
     return conn != NULL && conn->http2;
 }
 
-static void hpack_table_init(void) {
-    if (h2_dyn_table.entries == NULL) {
-        h2_dyn_table.max_size = H2_MAX_DYNAMIC_TABLE_SIZE;
-        h2_dyn_table.capacity = 16;
-        h2_dyn_table.entries = calloc(h2_dyn_table.capacity, sizeof(struct h2_hpack_entry));
-        h2_dyn_table.count = 0;
-        h2_dyn_table.size = 0;
-    }
-}
-
 static void hpack_entry_free(struct h2_hpack_entry *e) {
     free(e->name);
     free(e->value);
@@ -208,39 +204,39 @@ static void hpack_entry_free(struct h2_hpack_entry *e) {
     e->value_len = 0;
 }
 
-static void hpack_table_evict(void) {
-    while (h2_dyn_table.size > h2_dyn_table.max_size && h2_dyn_table.count > 0) {
-        struct h2_hpack_entry *last = &h2_dyn_table.entries[h2_dyn_table.count - 1];
-        h2_dyn_table.size -= last->name_len + last->value_len + 32;
+static void hpack_table_evict(struct h2_hpack_table *dyn) {
+    while (dyn->size > dyn->max_size && dyn->count > 0) {
+        struct h2_hpack_entry *last = &dyn->entries[dyn->count - 1];
+        dyn->size -= last->name_len + last->value_len + 32;
         hpack_entry_free(last);
-        h2_dyn_table.count--;
+        dyn->count--;
     }
 }
 
-static int hpack_table_add(const char *name, size_t name_len,
+static int hpack_table_add(struct h2_hpack_table *dyn, const char *name, size_t name_len,
                             const char *value, size_t value_len) {
     if (name_len > SIZE_MAX - value_len - 32) return -1;
     size_t entry_size = name_len + value_len + 32;
-    if (entry_size > h2_dyn_table.max_size) return 0;
+    if (entry_size > dyn->max_size) return 0;
 
-    while (h2_dyn_table.size + entry_size > h2_dyn_table.max_size)
-        hpack_table_evict();
+    while (dyn->size + entry_size > dyn->max_size)
+        hpack_table_evict(dyn);
 
-    if (h2_dyn_table.count >= h2_dyn_table.capacity) {
-        size_t new_cap = h2_dyn_table.capacity * 2;
-        struct h2_hpack_entry *new_entries = realloc(h2_dyn_table.entries,
-                                           new_cap * sizeof(struct h2_hpack_entry));
+    if (dyn->count >= dyn->capacity) {
+        size_t new_cap = dyn->capacity * 2;
+        struct h2_hpack_entry *new_entries = realloc(dyn->entries,
+                                            new_cap * sizeof(struct h2_hpack_entry));
         if (new_entries == NULL) return -1;
-        h2_dyn_table.entries = new_entries;
-        h2_dyn_table.capacity = new_cap;
+        dyn->entries = new_entries;
+        dyn->capacity = new_cap;
     }
 
-    if (h2_dyn_table.count > 0) {
-        memmove(&h2_dyn_table.entries[1], &h2_dyn_table.entries[0],
-                h2_dyn_table.count * sizeof(struct h2_hpack_entry));
+    if (dyn->count > 0) {
+        memmove(&dyn->entries[1], &dyn->entries[0],
+                dyn->count * sizeof(struct h2_hpack_entry));
     }
 
-    struct h2_hpack_entry *e = &h2_dyn_table.entries[0];
+    struct h2_hpack_entry *e = &dyn->entries[0];
     e->name = malloc(name_len + 1);
     e->value = malloc(value_len + 1);
     if (e->name == NULL || e->value == NULL) {
@@ -253,14 +249,14 @@ static int hpack_table_add(const char *name, size_t name_len,
     e->value[value_len] = '\0';
     e->name_len = name_len;
     e->value_len = value_len;
-    h2_dyn_table.count++;
-    h2_dyn_table.size += entry_size;
+    dyn->count++;
+    dyn->size += entry_size;
     return 0;
 }
 
-static void hpack_table_set_max_size(uint32_t new_size) {
-    h2_dyn_table.max_size = new_size;
-    hpack_table_evict();
+static void hpack_table_set_max_size(struct h2_hpack_table *dyn, uint32_t new_size) {
+    dyn->max_size = new_size;
+    hpack_table_evict(dyn);
 }
 
 /* RFC 7541 static table */
@@ -471,21 +467,11 @@ static size_t __attribute__((unused)) huffman_encode(const unsigned char *input,
     return out_pos;
 }
 
-/* Huffman decode node */
-#define HUFF_NODE_TERMINAL 0x80000000
-
-struct huff_node {
-    uint32_t child[2];
-};
-
-static struct huff_node *huff_tree = NULL;
-static int huff_tree_alloc = 0;
-
-static int huff_tree_init(void) {
-    if (huff_tree != NULL) return 0;
-    huff_tree_alloc = 512;
-    huff_tree = calloc((size_t)huff_tree_alloc, sizeof(struct huff_node));
-    if (huff_tree == NULL) return -1;
+static int huff_tree_init(struct huff_node **tree, int *alloc) {
+    if (*tree != NULL) return 0;
+    *alloc = 512;
+    *tree = calloc((size_t)*alloc, sizeof(struct huff_node));
+    if (*tree == NULL) return -1;
 
     int node_count = 1;
     for (int sym = 0; sym < 256; sym++) {
@@ -495,22 +481,22 @@ static int huff_tree_init(void) {
 
         for (int b = nbits - 1; b >= 0; b--) {
             int bit = (code >> b) & 1;
-            if (huff_tree[node].child[bit] == 0) {
-                if (node_count >= huff_tree_alloc) {
-                    huff_tree_alloc *= 2;
-                    struct huff_node *tmp = realloc(huff_tree,
-                                          (size_t)huff_tree_alloc * sizeof(struct huff_node));
+            if ((*tree)[node].child[bit] == 0) {
+                if (node_count >= *alloc) {
+                    *alloc *= 2;
+                    struct huff_node *tmp = realloc(*tree,
+                                          (size_t)*alloc * sizeof(struct huff_node));
                     if (tmp == NULL) return -1;
-                    huff_tree = tmp;
-                    memset(&huff_tree[node_count], 0,
-                           (size_t)(huff_tree_alloc - node_count) * sizeof(struct huff_node));
+                    *tree = tmp;
+                    memset(&(*tree)[node_count], 0,
+                           (size_t)(*alloc - node_count) * sizeof(struct huff_node));
                 }
-                huff_tree[node].child[bit] = (uint32_t)node_count | HUFF_NODE_TERMINAL;
+                (*tree)[node].child[bit] = (uint32_t)node_count | HUFF_NODE_TERMINAL;
                 node_count++;
             }
-            node = (int)(huff_tree[node].child[bit] & ~HUFF_NODE_TERMINAL);
+            node = (int)((*tree)[node].child[bit] & ~HUFF_NODE_TERMINAL);
             if (b == 0) {
-                huff_tree[node].child[bit] = (uint32_t)node | HUFF_NODE_TERMINAL;
+                (*tree)[node].child[bit] = (uint32_t)node | HUFF_NODE_TERMINAL;
             }
         }
     }
@@ -518,9 +504,10 @@ static int huff_tree_init(void) {
 }
 
 /* Returns number of decoded bytes or 0 on failure */
-static size_t huffman_decode(const unsigned char *input, size_t input_len,
+static size_t huffman_decode(struct huff_node *tree,
+                              const unsigned char *input, size_t input_len,
                               unsigned char *output, size_t output_size) {
-    if (huff_tree_init() != 0) return 0;
+    if (tree == NULL) return 0;
 
     int node = 0;
     size_t out_pos = 0;
@@ -528,7 +515,7 @@ static size_t huffman_decode(const unsigned char *input, size_t input_len,
     for (size_t i = 0; i < input_len; i++) {
         for (int b = 7; b >= 0; b--) {
             int bit = (input[i] >> b) & 1;
-            uint32_t child = huff_tree[node].child[bit];
+            uint32_t child = tree[node].child[bit];
             if (child == 0) return 0;
             node = (int)(child & ~HUFF_NODE_TERMINAL);
             if (child & HUFF_NODE_TERMINAL) {
@@ -561,7 +548,8 @@ static size_t hpack_encode_string(unsigned char *out, size_t out_size,
     return off;
 }
 
-static int hpack_decode_string(const unsigned char *buf, size_t buf_len,
+static int hpack_decode_string(struct h2_connection *h2,
+                                const unsigned char *buf, size_t buf_len,
                                 size_t *offset, char *out, size_t out_size,
                                 size_t *out_len) {
     if (*offset >= buf_len) return -1;
@@ -575,7 +563,7 @@ static int hpack_decode_string(const unsigned char *buf, size_t buf_len,
     size_t slen = (size_t)len64;
 
     if (huffman) {
-        size_t decoded = huffman_decode(buf + *offset, slen,
+        size_t decoded = huffman_decode(h2->huff_tree, buf + *offset, slen,
                                          (unsigned char *)out, out_size);
         if (decoded == 0 || decoded >= out_size) return -1;
         out[decoded] = '\0';
@@ -639,7 +627,8 @@ static int hpack_encode_literal_without_indexing(unsigned char *out, size_t out_
     return (int)off;
 }
 
-static int get_table_entry(int index, const char **name, size_t *name_len,
+static int get_table_entry(struct h2_hpack_table *dyn, int index,
+                            const char **name, size_t *name_len,
                             const char **value, size_t *value_len) {
     if (index >= 1 && index < 62) {
         const struct h2_static_entry *e = get_static_entry(index);
@@ -651,8 +640,8 @@ static int get_table_entry(int index, const char **name, size_t *name_len,
         return 0;
     }
     int dyn_idx = index - 62;
-    if (dyn_idx >= 0 && (size_t)dyn_idx < h2_dyn_table.count) {
-        struct h2_hpack_entry *e = &h2_dyn_table.entries[dyn_idx];
+    if (dyn_idx >= 0 && (size_t)dyn_idx < dyn->count) {
+        struct h2_hpack_entry *e = &dyn->entries[dyn_idx];
         *name = e->name;
         *name_len = e->name_len;
         *value = e->value;
@@ -663,15 +652,32 @@ static int get_table_entry(int index, const char **name, size_t *name_len,
 }
 
 int http2_init_connection(struct connection *conn, char *error, size_t error_len) {
-    memset(&h2_conn_state, 0, sizeof(h2_conn_state));
-    h2_conn_state.conn_window = H2_DEFAULT_WINDOW;
-    h2_conn_state.max_frame_size = H2_DEFAULT_MAX_FRAME_SIZE;
-    h2_conn_state.initial_window_size = H2_DEFAULT_WINDOW;
-    h2_conn_state.header_table_size = H2_MAX_DYNAMIC_TABLE_SIZE;
-    h2_conn_state.last_stream_id = (uint32_t)-1; /* first +=2 gives 1 */
-    h2_conn_state.stream_state = H2_SS_IDLE;
+    struct h2_connection *h2 = calloc(1, sizeof(struct h2_connection));
+    if (h2 == NULL) {
+        set_error(error, error_len, "Out of memory");
+        return -1;
+    }
+    conn->h2 = h2;
 
-    hpack_table_init();
+    h2->conn_window = H2_DEFAULT_WINDOW;
+    h2->max_frame_size = H2_DEFAULT_MAX_FRAME_SIZE;
+    h2->initial_window_size = H2_DEFAULT_WINDOW;
+    h2->header_table_size = H2_MAX_DYNAMIC_TABLE_SIZE;
+    h2->last_stream_id = (uint32_t)-1;
+    h2->stream_state = H2_SS_IDLE;
+
+    h2->dyn_table.max_size = H2_MAX_DYNAMIC_TABLE_SIZE;
+    h2->dyn_table.capacity = 16;
+    h2->dyn_table.entries = calloc(h2->dyn_table.capacity, sizeof(struct h2_hpack_entry));
+    if (h2->dyn_table.entries == NULL) {
+        set_error(error, error_len, "Out of memory");
+        return -1;
+    }
+
+    if (huff_tree_init(&h2->huff_tree, &h2->huff_tree_alloc) != 0) {
+        set_error(error, error_len, "Out of memory");
+        return -1;
+    }
 
     if (conn_write(conn, H2_CLIENT_PREFACE, strlen(H2_CLIENT_PREFACE),
                    error, error_len) != 0)
@@ -694,7 +700,7 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
         uint8_t type = header[3];
         uint8_t flags = header[4];
 
-        if (length > h2_conn_state.max_frame_size) {
+        if (length > h2->max_frame_size) {
             set_error(error, error_len, "HTTP/2 frame too large in init");
             return -1;
         }
@@ -722,8 +728,8 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
                                (p[off + 4] << 8) | p[off + 5];
                 switch (id) {
                     case H2_SETTINGS_HEADER_TABLE_SIZE:
-                        h2_conn_state.header_table_size = val;
-                        hpack_table_set_max_size(val);
+                        h2->header_table_size = val;
+                        hpack_table_set_max_size(&h2->dyn_table, val);
                         break;
                     case H2_SETTINGS_INITIAL_WINDOW_SIZE:
                         if (val > 2147483647u) {
@@ -731,7 +737,7 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
                             set_error(error, error_len, "Invalid initial window size");
                             return -1;
                         }
-                        h2_conn_state.initial_window_size = val;
+                        h2->initial_window_size = val;
                         break;
                     case H2_SETTINGS_MAX_FRAME_SIZE_ID:
                         if (val < 16384 || val > 16777215) {
@@ -739,7 +745,7 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
                             set_error(error, error_len, "Invalid max frame size");
                             return -1;
                         }
-                        h2_conn_state.max_frame_size = val;
+                        h2->max_frame_size = val;
                         break;
                 }
             }
@@ -747,7 +753,7 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
                 free(payload);
                 return -1;
             }
-            h2_conn_state.settings_received = true;
+            h2->settings_received = true;
         } else if (type == H2_SETTINGS && (flags & H2_FLAG_SETTINGS_ACK)) {
             acked_our_settings = true;
         } else if (type == H2_WINDOW_UPDATE && length >= 4) {
@@ -760,7 +766,7 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
                 set_error(error, error_len, "WINDOW_UPDATE increment too large");
                 return -1;
             }
-            h2_conn_state.conn_window += (int32_t)inc;
+            h2->conn_window += (int32_t)inc;
         } else if (type == H2_PING && !(flags & 0x1)) {
             send_ping_ack(conn, payload, error, error_len);
         }
@@ -774,10 +780,10 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
     }
 
     /* Increase connection flow control window to avoid stalling on large responses */
-    if (h2_conn_state.conn_window < 1048576) {
-        uint32_t inc = 1048576 - (uint32_t)h2_conn_state.conn_window;
+    if (h2->conn_window < 1048576) {
+        uint32_t inc = 1048576 - (uint32_t)h2->conn_window;
         send_window_update(conn, 0, inc, error, error_len);
-        h2_conn_state.conn_window += (int32_t)inc;
+        h2->conn_window += (int32_t)inc;
     }
 
     return 0;
@@ -788,12 +794,13 @@ int http2_send_request(struct connection *conn, const struct url_info *url,
                        const char **extra_headers, size_t extra_header_count,
                        const char *user_agent, const char *basic_auth,
                        char *error, size_t error_len) {
+    struct h2_connection *h2 = conn->h2;
     (void)error;
     (void)error_len;
     if (user_agent == NULL) user_agent = "curldbg/1.0";
 
-    h2_conn_state.last_stream_id += 2;
-    uint32_t stream_id = h2_conn_state.last_stream_id;
+    h2->last_stream_id += 2;
+    uint32_t stream_id = h2->last_stream_id;
 
     const char *scheme = url->use_tls ? "https" : "http";
     char host_header[320];
@@ -873,8 +880,6 @@ int http2_send_request(struct connection *conn, const struct url_info *url,
                                                    name, name_len, val, val_len);
         if (n < 0) { set_error(error, error_len, "HPACK encode failed"); return -1; }
         block_len += (size_t)n;
-
-        /* Add to dynamic table explicitly since we used without-indexing */
     }
 
     if (conn->verbose) {
@@ -885,7 +890,7 @@ int http2_send_request(struct connection *conn, const struct url_info *url,
     bool end_stream = (data == NULL || data_len == 0);
     uint8_t flags = H2_FLAG_END_HEADERS | (end_stream ? H2_FLAG_END_STREAM : 0);
 
-    size_t max_payload = h2_conn_state.max_frame_size;
+    size_t max_payload = h2->max_frame_size;
     if (block_len <= max_payload) {
         if (send_frame_raw(conn, block_len, H2_HEADERS, flags, stream_id,
                            (char *)block, error, error_len) != 0)
@@ -907,13 +912,29 @@ int http2_send_request(struct connection *conn, const struct url_info *url,
         }
     }
 
-    h2_conn_state.stream_state = end_stream ? H2_SS_HALF_CLOSED : H2_SS_OPEN;
+    h2->stream_state = end_stream ? H2_SS_HALF_CLOSED : H2_SS_OPEN;
 
+    /* Send request body with flow control and segmentation */
     if (data != NULL && data_len > 0) {
-        if (send_frame_raw(conn, data_len, H2_DATA, H2_FLAG_END_STREAM,
-                           stream_id, data, error, error_len) != 0)
-            return -1;
-        h2_conn_state.stream_state = H2_SS_HALF_CLOSED;
+        size_t remaining = data_len;
+        const char *ptr = data;
+        while (remaining > 0) {
+            size_t chunk = remaining;
+            if (chunk > h2->max_frame_size)
+                chunk = h2->max_frame_size;
+            if ((int32_t)chunk > h2->conn_window) {
+                set_error(error, error_len, "HTTP/2 send window exhausted");
+                return -1;
+            }
+            uint8_t data_flags = (remaining == chunk) ? H2_FLAG_END_STREAM : 0;
+            if (send_frame_raw(conn, chunk, H2_DATA, data_flags,
+                               stream_id, ptr, error, error_len) != 0)
+                return -1;
+            h2->conn_window -= (int32_t)chunk;
+            remaining -= chunk;
+            ptr += chunk;
+        }
+        h2->stream_state = H2_SS_HALF_CLOSED;
     }
 
     return 0;
@@ -947,6 +968,7 @@ static void parse_h2_header(const char *name, const char *value,
 int http2_receive_response(struct connection *conn, struct response_info *out,
                            const struct timespec *ttfb_start,
                            FILE *body_out, char *error, size_t error_len) {
+    struct h2_connection *h2 = conn->h2;
     out->status_code = 0;
     out->content_length = -1;
     out->chunked = false;
@@ -957,7 +979,7 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
     out->preview_len = 0;
     out->ttfb_ms = -1.0;
 
-    uint32_t stream_id = h2_conn_state.last_stream_id;
+    uint32_t stream_id = h2->last_stream_id;
     bool stream_done = false;
     struct timespec first_byte_ts;
     bool seen_first_byte = false;
@@ -975,7 +997,7 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
                         ((uint32_t)header[7] << 8) |
                         (uint32_t)header[8]);
 
-        if (length > h2_conn_state.max_frame_size) {
+        if (length > h2->max_frame_size) {
             set_error(error, error_len, "HTTP/2 frame exceeds max frame size");
             return -1;
         }
@@ -994,9 +1016,15 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
             }
         }
 
+        /* Validate CONTINUATION sequencing */
+        if (type == H2_CONTINUATION && !h2->continuation_pending) {
+            free(payload);
+            set_error(error, error_len, "Orphaned CONTINUATION frame");
+            return -1;
+        }
+
         if (type == H2_SETTINGS) {
             if (!(flags & H2_FLAG_SETTINGS_ACK)) {
-                /* Process server settings update */
                 unsigned char *p = (unsigned char *)payload;
                 for (size_t off = 0; off + 6 <= length; off += 6) {
                     uint16_t id = (uint16_t)(p[off] << 8) | p[off + 1];
@@ -1008,17 +1036,17 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
                             set_error(error, error_len, "Invalid initial window size");
                             return -1;
                         }
-                        h2_conn_state.initial_window_size = val;
+                        h2->initial_window_size = val;
                     } else if (id == H2_SETTINGS_MAX_FRAME_SIZE_ID) {
                         if (val < 16384 || val > 16777215) {
                             free(payload);
                             set_error(error, error_len, "Invalid max frame size");
                             return -1;
                         }
-                        h2_conn_state.max_frame_size = val;
+                        h2->max_frame_size = val;
                     } else if (id == H2_SETTINGS_HEADER_TABLE_SIZE) {
-                        h2_conn_state.header_table_size = val;
-                        hpack_table_set_max_size(val);
+                        h2->header_table_size = val;
+                        hpack_table_set_max_size(&h2->dyn_table, val);
                     }
                 }
                 send_settings_ack(conn, error, error_len);
@@ -1038,7 +1066,7 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
                     return -1;
                 }
                 if (fid == 0)
-                    h2_conn_state.conn_window += (int32_t)inc;
+                    h2->conn_window += (int32_t)inc;
             }
             free(payload);
             continue;
@@ -1052,7 +1080,7 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
         }
 
         if (type == H2_GOAWAY) {
-            h2_conn_state.goaway_received = true;
+            h2->goaway_received = true;
             free(payload);
             set_error(error, error_len, "HTTP/2 server sent GOAWAY");
             return -1;
@@ -1060,7 +1088,7 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
 
         if (type == H2_RST_STREAM) {
             if (fid == stream_id) {
-                h2_conn_state.stream_state = H2_SS_CLOSED;
+                h2->stream_state = H2_SS_CLOSED;
                 free(payload);
                 set_error(error, error_len, "HTTP/2 stream was reset by server");
                 return -1;
@@ -1085,14 +1113,25 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
                 free(payload);
                 continue;
             }
-            if (type == H2_HEADERS &&
-                h2_conn_state.stream_state != H2_SS_OPEN &&
-                h2_conn_state.stream_state != H2_SS_HALF_CLOSED) {
-                send_rst_stream(conn, fid, H2_STREAM_CLOSED, error, error_len);
-                free(payload);
-                set_error(error, error_len, "HEADERS in invalid stream state");
-                return -1;
+            if (type == H2_HEADERS) {
+                if (h2->continuation_pending) {
+                    free(payload);
+                    set_error(error, error_len, "HEADERS received before prior CONTINUATION completed");
+                    return -1;
+                }
+                if (h2->stream_state != H2_SS_OPEN &&
+                    h2->stream_state != H2_SS_HALF_CLOSED) {
+                    send_rst_stream(conn, fid, H2_STREAM_CLOSED, error, error_len);
+                    free(payload);
+                    set_error(error, error_len, "HEADERS in invalid stream state");
+                    return -1;
+                }
             }
+
+            if (!(flags & H2_FLAG_END_HEADERS))
+                h2->continuation_pending = true;
+            else
+                h2->continuation_pending = false;
 
             size_t hpack_off = 0;
             if (type == H2_HEADERS && (flags & H2_FLAG_PADDED)) {
@@ -1127,19 +1166,17 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
                 unsigned char b = (unsigned char)payload[hpack_off + hpack_pos];
 
                 if ((b & 0x80) != 0) {
-                    /* Indexed header */
                     uint64_t idx;
                     if (hpack_decode_int((const unsigned char *)payload + hpack_off,
                                          hpack_len, &hpack_pos, 7, &idx) != 0)
                         break;
                     const char *name, *value;
                     size_t name_len, value_len;
-                    if (get_table_entry((int)idx, &name, &name_len,
+                    if (get_table_entry(&h2->dyn_table, (int)idx, &name, &name_len,
                                         &value, &value_len) != 0)
                         break;
                     parse_h2_header(name, value, out);
                 } else if ((b & 0x40) != 0) {
-                    /* Literal with incremental indexing */
                     uint64_t name_idx;
                     if (hpack_decode_int((const unsigned char *)payload + hpack_off,
                                          hpack_len, &hpack_pos, 6, &name_idx) != 0)
@@ -1149,14 +1186,15 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
                     size_t name_len = 0, value_len = 0;
 
                     if (name_idx == 0) {
-                        if (hpack_decode_string((const unsigned char *)payload + hpack_off,
+                        if (hpack_decode_string(h2,
+                                                 (const unsigned char *)payload + hpack_off,
                                                  hpack_len, &hpack_pos,
                                                  name, sizeof(name), &name_len) != 0)
                             break;
                     } else {
                         const char *sn, *sv;
                         size_t sn_len, sv_len;
-                        if (get_table_entry((int)name_idx, &sn, &sn_len,
+                        if (get_table_entry(&h2->dyn_table, (int)name_idx, &sn, &sn_len,
                                             &sv, &sv_len) != 0)
                             break;
                         name_len = sn_len;
@@ -1165,22 +1203,21 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
                         name[name_len] = '\0';
                     }
 
-                    if (hpack_decode_string((const unsigned char *)payload + hpack_off,
+                    if (hpack_decode_string(h2,
+                                             (const unsigned char *)payload + hpack_off,
                                              hpack_len, &hpack_pos,
                                              value, sizeof(value), &value_len) != 0)
                         break;
 
-                    hpack_table_add(name, name_len, value, value_len);
+                    hpack_table_add(&h2->dyn_table, name, name_len, value, value_len);
                     parse_h2_header(name, value, out);
                 } else if ((b & 0x20) != 0) {
-                    /* Dynamic table size update */
                     uint64_t new_size;
                     if (hpack_decode_int((const unsigned char *)payload + hpack_off,
                                          hpack_len, &hpack_pos, 5, &new_size) != 0)
                         break;
-                    hpack_table_set_max_size((uint32_t)new_size);
+                    hpack_table_set_max_size(&h2->dyn_table, (uint32_t)new_size);
                 } else {
-                    /* Literal without indexing / never indexed */
                     uint64_t name_idx;
                     if (hpack_decode_int((const unsigned char *)payload + hpack_off,
                                          hpack_len, &hpack_pos, 4, &name_idx) != 0)
@@ -1190,14 +1227,15 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
                     size_t name_len = 0, value_len = 0;
 
                     if (name_idx == 0) {
-                        if (hpack_decode_string((const unsigned char *)payload + hpack_off,
+                        if (hpack_decode_string(h2,
+                                                 (const unsigned char *)payload + hpack_off,
                                                  hpack_len, &hpack_pos,
                                                  name, sizeof(name), &name_len) != 0)
                             break;
                     } else {
                         const char *sn, *sv;
                         size_t sn_len, sv_len;
-                        if (get_table_entry((int)name_idx, &sn, &sn_len,
+                        if (get_table_entry(&h2->dyn_table, (int)name_idx, &sn, &sn_len,
                                             &sv, &sv_len) != 0)
                             break;
                         name_len = sn_len;
@@ -1206,7 +1244,8 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
                         name[name_len] = '\0';
                     }
 
-                    if (hpack_decode_string((const unsigned char *)payload + hpack_off,
+                    if (hpack_decode_string(h2,
+                                             (const unsigned char *)payload + hpack_off,
                                              hpack_len, &hpack_pos,
                                              value, sizeof(value), &value_len) != 0)
                         break;
@@ -1217,7 +1256,7 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
 
             if (flags & H2_FLAG_END_STREAM) {
                 stream_done = true;
-                h2_conn_state.stream_state = H2_SS_CLOSED;
+                h2->stream_state = H2_SS_CLOSED;
             }
 
             free(payload);
@@ -1229,8 +1268,8 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
                 free(payload);
                 continue;
             }
-            if (h2_conn_state.stream_state != H2_SS_OPEN &&
-                h2_conn_state.stream_state != H2_SS_HALF_CLOSED) {
+            if (h2->stream_state != H2_SS_OPEN &&
+                h2->stream_state != H2_SS_HALF_CLOSED) {
                 send_rst_stream(conn, fid, H2_STREAM_CLOSED, error, error_len);
                 free(payload);
                 set_error(error, error_len, "DATA in invalid stream state");
@@ -1281,7 +1320,7 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
 
             if (flags & H2_FLAG_END_STREAM) {
                 stream_done = true;
-                h2_conn_state.stream_state = H2_SS_CLOSED;
+                h2->stream_state = H2_SS_CLOSED;
             }
 
             free(payload);
@@ -1297,17 +1336,13 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
     return 0;
 }
 
-void http2_cleanup(void) {
-    for (size_t i = 0; i < h2_dyn_table.count; i++)
-        hpack_entry_free(&h2_dyn_table.entries[i]);
-    free(h2_dyn_table.entries);
-    h2_dyn_table.entries = NULL;
-    h2_dyn_table.count = 0;
-    h2_dyn_table.capacity = 0;
-    h2_dyn_table.size = 0;
-    h2_dyn_table.max_size = 0;
-    free(huff_tree);
-    huff_tree = NULL;
-    huff_tree_alloc = 0;
-    memset(&h2_conn_state, 0, sizeof(h2_conn_state));
+void http2_cleanup(struct connection *conn) {
+    struct h2_connection *h2 = conn->h2;
+    if (h2 == NULL) return;
+    for (size_t i = 0; i < h2->dyn_table.count; i++)
+        hpack_entry_free(&h2->dyn_table.entries[i]);
+    free(h2->dyn_table.entries);
+    free(h2->huff_tree);
+    free(h2);
+    conn->h2 = NULL;
 }

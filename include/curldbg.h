@@ -115,6 +115,8 @@ struct connect_race_info {
     double loser_connect_ms;
 };
 
+struct h2_connection;
+
 struct connection {
     int fd;
     bool use_tls;
@@ -124,6 +126,7 @@ struct connection {
     int last_errno;
     bool ctx_owned;
     bool http2;
+    struct h2_connection *h2;
 };
 
 struct connection_state {
@@ -378,6 +381,6 @@ int http2_send_request(struct connection *conn, const struct url_info *url,
 int http2_receive_response(struct connection *conn, struct response_info *out,
                            const struct timespec *ttfb_start,
                            FILE *body_out, char *error, size_t error_len);
-void http2_cleanup(void);
+void http2_cleanup(struct connection *conn);
 
 #endif
