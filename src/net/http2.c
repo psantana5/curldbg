@@ -754,6 +754,11 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
                           (uint32_t)((unsigned char)payload[1] << 16) |
                           (uint32_t)((unsigned char)payload[2] << 8) |
                           (unsigned char)payload[3];
+            if (inc >= (1u << 31)) {
+                free(payload);
+                set_error(error, error_len, "WINDOW_UPDATE increment too large");
+                return -1;
+            }
             h2_conn_state.conn_window += (int32_t)inc;
         } else if (type == H2_PING && !(flags & 0x1)) {
             send_ping_ack(conn, payload, error, error_len);
@@ -1023,6 +1028,11 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
                 unsigned char *p = (unsigned char *)payload;
                 uint32_t inc = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
                                ((uint32_t)p[2] << 8) | p[3];
+                if (inc >= (1u << 31)) {
+                    free(payload);
+                    set_error(error, error_len, "WINDOW_UPDATE increment too large");
+                    return -1;
+                }
                 if (fid == 0)
                     h2_conn_state.conn_window += (int32_t)inc;
             }
