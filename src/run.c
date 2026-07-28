@@ -515,20 +515,24 @@ static int run_request(const char *input_url, const struct run_options *opts,
         int sr;
         bool request_retried = false;
         if (http2_negotiated(conn)) {
+            snprintf(out->resp.http_version, sizeof(out->resp.http_version), "HTTP/2");
             const char *effective_auth = opts->basic_auth;
             if (effective_auth == NULL || effective_auth[0] == '\0') {
                 if (url.user[0] != '\0') {
                     effective_auth = url.user; /* http2.c handles : in user */
                 }
             }
-            sr = http2_send_request(conn, &url, method, data, data_len,
+            uint32_t h2_stream_id = http2_send_request(conn, &url, method, data, data_len,
                     send_headers, send_header_count,
                     opts->user_agent, effective_auth,
                     out->error, sizeof(out->error));
-            if (sr == 0) {
-                if (http2_receive_response(conn, &out->resp, &ttfb_start,
-                        opts->body_out, out->error, sizeof(out->error)) != 0)
-                    sr = -1;
+            if (h2_stream_id == 0) {
+                sr = -1;
+            } else if (http2_receive_response(conn, h2_stream_id, &out->resp, &ttfb_start,
+                    opts->body_out, out->error, sizeof(out->error)) != 0) {
+                sr = -1;
+            } else {
+                sr = 0;
             }
         } else {
             sr = send_request(conn, &url, method, data, data_len,
@@ -537,6 +541,7 @@ static int run_request(const char *input_url, const struct run_options *opts,
                     use_proxy && !url.use_tls, chunked_upload, opts->compressed,
                     header_flags);
             if (sr == 0) {
+                snprintf(out->resp.http_version, sizeof(out->resp.http_version), "HTTP/1.1");
                 bool head_method = opts->is_head_method;
                 if (receive_response(conn, &ttfb_start, &out->resp, out->error, sizeof(out->error),
                         opts->body_out, opts->follow_redirects, opts->fail_on_http_error, head_method) != 0)
