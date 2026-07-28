@@ -219,6 +219,7 @@ static void hpack_table_evict(void) {
 
 static int hpack_table_add(const char *name, size_t name_len,
                             const char *value, size_t value_len) {
+    if (name_len > SIZE_MAX - value_len - 32) return -1;
     size_t entry_size = name_len + value_len + 32;
     if (entry_size > h2_dyn_table.max_size) return 0;
 
@@ -398,7 +399,9 @@ static int hpack_decode_int(const unsigned char *buf, size_t buf_len,
         if (*offset >= buf_len) return -1;
         b = buf[*offset];
         *offset += 1;
-        value += (uint64_t)(b & 0x7F) << shift;
+        uint64_t add = (uint64_t)(b & 0x7F) << shift;
+        if (value > UINT64_MAX - add) return -1;
+        value += add;
         if ((b & 0x80) == 0) break;
         shift += 7;
         if (shift > 63) return -1;
@@ -568,12 +571,15 @@ static int hpack_decode_string(const unsigned char *buf, size_t buf_len,
     if (hpack_decode_int(buf, buf_len, offset, 7, &len64) != 0)
         return -1;
     if (len64 > buf_len - *offset) return -1;
+    if (len64 > out_size) return -1;
     size_t slen = (size_t)len64;
 
     if (huffman) {
-        if (huffman_decode(buf + *offset, slen, (unsigned char *)out, out_size) == 0)
-            return -1;
-        *out_len = strlen(out);
+        size_t decoded = huffman_decode(buf + *offset, slen,
+                                         (unsigned char *)out, out_size);
+        if (decoded == 0 || decoded >= out_size) return -1;
+        out[decoded] = '\0';
+        *out_len = decoded;
     } else {
         if (slen >= out_size) return -1;
         memcpy(out, buf + *offset, slen);
