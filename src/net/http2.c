@@ -1296,3 +1296,18 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
     if (!seen_first_byte) out->ttfb_ms = -1.0;
     return 0;
 }
+
+void http2_cleanup(void) {
+    for (size_t i = 0; i < h2_dyn_table.count; i++)
+        hpack_entry_free(&h2_dyn_table.entries[i]);
+    free(h2_dyn_table.entries);
+    h2_dyn_table.entries = NULL;
+    h2_dyn_table.count = 0;
+    h2_dyn_table.capacity = 0;
+    h2_dyn_table.size = 0;
+    h2_dyn_table.max_size = 0;
+    free(huff_tree);
+    huff_tree = NULL;
+    huff_tree_alloc = 0;
+    memset(&h2_conn_state, 0, sizeof(h2_conn_state));
+}

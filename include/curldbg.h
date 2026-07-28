@@ -378,5 +378,6 @@ int http2_send_request(struct connection *conn, const struct url_info *url,
 int http2_receive_response(struct connection *conn, struct response_info *out,
                            const struct timespec *ttfb_start,
                            FILE *body_out, char *error, size_t error_len);
+void http2_cleanup(void);
 
 #endif
