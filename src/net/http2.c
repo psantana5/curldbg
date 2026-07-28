@@ -2,6 +2,7 @@
 #include "curldbg.h"
 
 #include <errno.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -91,12 +92,15 @@ struct huff_node {
 struct h2_connection {
     uint32_t last_stream_id;
     int32_t conn_window;
+    int32_t stream_window;
     uint32_t max_frame_size;
     uint32_t max_concurrent_streams;
     uint32_t initial_window_size;
     uint32_t header_table_size;
+    uint32_t goaway_last_stream_id;
     bool settings_received;
     bool goaway_received;
+    bool goaway_graceful;
     enum h2_stream_state stream_state;
     bool continuation_pending;
     struct h2_hpack_table dyn_table;
@@ -119,6 +123,15 @@ static int conn_write(struct connection *conn, const char *buf, size_t len,
     if (connection_write_all(conn, buf, len, error, error_len) != 0)
         return -1;
     return 0;
+}
+
+static int conn_readable(struct connection *conn, int timeout_ms) {
+    struct pollfd pfd = { .fd = conn->fd, .events = POLLIN };
+    int ret;
+    do {
+        ret = poll(&pfd, 1, timeout_ms);
+    } while (ret < 0 && errno == EINTR);
+    return ret;
 }
 
 static int conn_read(struct connection *conn, char *buf, size_t len,
@@ -660,6 +673,7 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
     conn->h2 = h2;
 
     h2->conn_window = H2_DEFAULT_WINDOW;
+    h2->stream_window = H2_DEFAULT_WINDOW;
     h2->max_frame_size = H2_DEFAULT_MAX_FRAME_SIZE;
     h2->initial_window_size = H2_DEFAULT_WINDOW;
     h2->header_table_size = H2_MAX_DYNAMIC_TABLE_SIZE;
@@ -693,6 +707,15 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
 
     while ((!got_settings || !acked_our_settings) && max_reads-- > 0) {
         unsigned char header[H2_FRAME_HEADER_SIZE];
+        int pollret = conn_readable(conn, 5000);
+        if (pollret == 0) {
+            set_error(error, error_len, "HTTP/2 connection preface timed out");
+            return -1;
+        }
+        if (pollret < 0) {
+            set_error(error, error_len, "HTTP/2 connection preface poll failed");
+            return -1;
+        }
         if (conn_read(conn, (char *)header, sizeof(header), error, error_len) != 0)
             return -1;
 
@@ -738,6 +761,7 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
                             return -1;
                         }
                         h2->initial_window_size = val;
+                        h2->stream_window = (int32_t)val;
                         break;
                     case H2_SETTINGS_MAX_FRAME_SIZE_ID:
                         if (val < 16384 || val > 16777215) {
@@ -914,23 +938,78 @@ int http2_send_request(struct connection *conn, const struct url_info *url,
 
     h2->stream_state = end_stream ? H2_SS_HALF_CLOSED : H2_SS_OPEN;
 
-    /* Send request body with flow control and segmentation */
+    /* Send request body with flow control, segmentation, and WINDOW_UPDATE draining */
     if (data != NULL && data_len > 0) {
+        h2->stream_window = h2->initial_window_size;
         size_t remaining = data_len;
         const char *ptr = data;
         while (remaining > 0) {
             size_t chunk = remaining;
             if (chunk > h2->max_frame_size)
                 chunk = h2->max_frame_size;
-            if ((int32_t)chunk > h2->conn_window) {
-                set_error(error, error_len, "HTTP/2 send window exhausted");
-                return -1;
+            if ((int32_t)chunk > h2->stream_window)
+                chunk = (size_t)h2->stream_window;
+            if ((int32_t)chunk > h2->conn_window)
+                chunk = (size_t)h2->conn_window;
+            if (chunk == 0) {
+                /* Window exhausted – drain WINDOW_UPDATE frames from server */
+                unsigned char whdr[H2_FRAME_HEADER_SIZE];
+                int pollret = conn_readable(conn, 10000);
+                if (pollret <= 0) {
+                    set_error(error, error_len, pollret == 0
+                              ? "HTTP/2 send timed out waiting for WINDOW_UPDATE"
+                              : "HTTP/2 poll failed while draining window");
+                    return -1;
+                }
+                if (conn_read(conn, (char *)whdr, sizeof(whdr), error, error_len) != 0)
+                    return -1;
+                size_t wlen = read24(whdr);
+                uint8_t wtype = whdr[3];
+                uint32_t wfid = (((uint32_t)(whdr[5] & 0x7F) << 24) |
+                                 ((uint32_t)whdr[6] << 16) |
+                                 ((uint32_t)whdr[7] << 8) |
+                                 (uint32_t)whdr[8]);
+                if (wtype == H2_WINDOW_UPDATE && wlen >= 4) {
+                    char wpayload[4];
+                    if (conn_read(conn, wpayload, 4, error, error_len) != 0)
+                        return -1;
+                    uint32_t inc = (uint32_t)((unsigned char)wpayload[0] << 24) |
+                                   (uint32_t)((unsigned char)wpayload[1] << 16) |
+                                   (uint32_t)((unsigned char)wpayload[2] << 8) |
+                                   (unsigned char)wpayload[3];
+                    if (inc < (1u << 31)) {
+                        if (wfid == 0)
+                            h2->conn_window += (int32_t)inc;
+                        else if (wfid == stream_id)
+                            h2->stream_window += (int32_t)inc;
+                    }
+                } else {
+                    /* Skip unexpected frames during drain */
+                    if (wlen > 0) {
+                        char *skip = malloc(wlen);
+                        if (skip) {
+                            conn_read(conn, skip, wlen, error, error_len);
+                            free(skip);
+                        }
+                    }
+                    if (wtype == H2_GOAWAY) {
+                        h2->goaway_received = true;
+                        set_error(error, error_len, "HTTP/2 server sent GOAWAY while sending body");
+                        return -1;
+                    }
+                    if (wtype == H2_RST_STREAM && wfid == stream_id) {
+                        set_error(error, error_len, "HTTP/2 stream reset while sending body");
+                        return -1;
+                    }
+                }
+                continue;
             }
             uint8_t data_flags = (remaining == chunk) ? H2_FLAG_END_STREAM : 0;
             if (send_frame_raw(conn, chunk, H2_DATA, data_flags,
                                stream_id, ptr, error, error_len) != 0)
                 return -1;
             h2->conn_window -= (int32_t)chunk;
+            h2->stream_window -= (int32_t)chunk;
             remaining -= chunk;
             ptr += chunk;
         }
@@ -1036,7 +1115,9 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
                             set_error(error, error_len, "Invalid initial window size");
                             return -1;
                         }
+                        int32_t delta = (int32_t)val - (int32_t)h2->initial_window_size;
                         h2->initial_window_size = val;
+                        h2->stream_window += delta;
                     } else if (id == H2_SETTINGS_MAX_FRAME_SIZE_ID) {
                         if (val < 16384 || val > 16777215) {
                             free(payload);
@@ -1067,6 +1148,8 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
                 }
                 if (fid == 0)
                     h2->conn_window += (int32_t)inc;
+                else if (fid == stream_id)
+                    h2->stream_window += (int32_t)inc;
             }
             free(payload);
             continue;
@@ -1081,8 +1164,20 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
 
         if (type == H2_GOAWAY) {
             h2->goaway_received = true;
+            if (length >= 8) {
+                unsigned char *gp = (unsigned char *)payload;
+                h2->goaway_last_stream_id = ((uint32_t)(gp[0] & 0x7F) << 24) |
+                                             ((uint32_t)gp[1] << 16) |
+                                             ((uint32_t)gp[2] << 8) |
+                                             (uint32_t)gp[3];
+            }
+            if (stream_id <= h2->goaway_last_stream_id) {
+                h2->goaway_graceful = true;
+                free(payload);
+                continue;
+            }
             free(payload);
-            set_error(error, error_len, "HTTP/2 server sent GOAWAY");
+            set_error(error, error_len, "HTTP/2 server sent GOAWAY with last-stream-id < our stream");
             return -1;
         }
 
