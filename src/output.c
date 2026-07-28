@@ -35,6 +35,9 @@ void write_out_expand(const char *fmt, const struct run_result *result) {
                     printf("%s", result->final_url);
                 } else if (strcmp(varname, "num_redirects") == 0) {
                     printf("%d", result->hop_count > 0 ? result->hop_count - 1 : 0);
+                } else if (strcmp(varname, "http_version") == 0) {
+                    printf("%s", result->resp.http_version[0] != '\0'
+                           ? result->resp.http_version : "HTTP/1.1");
                 } else if (strcmp(varname, "redirect_url") == 0) {
                     if (result->hop_count > 0) {
                         const struct hop_info *h = &result->hops[result->hop_count - 1];

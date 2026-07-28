@@ -69,6 +69,7 @@ struct response_info {
     size_t set_cookie_len;
     char content_encoding[32];
     char header_text[HEADER_MAX + 1];
+    char http_version[16];
 };
 
 struct cookie_entry {
@@ -373,12 +374,13 @@ int proxy_connect(struct connection *conn, const struct url_info *target,
 /* --- http2.c --- */
 bool http2_negotiated(const struct connection *conn);
 int http2_init_connection(struct connection *conn, char *error, size_t error_len);
-int http2_send_request(struct connection *conn, const struct url_info *url,
-                       const char *method, const char *data, size_t data_len,
-                       const char **extra_headers, size_t extra_header_count,
-                       const char *user_agent, const char *basic_auth,
-                       char *error, size_t error_len);
-int http2_receive_response(struct connection *conn, struct response_info *out,
+uint32_t http2_send_request(struct connection *conn, const struct url_info *url,
+                            const char *method, const char *data, size_t data_len,
+                            const char **extra_headers, size_t extra_header_count,
+                            const char *user_agent, const char *basic_auth,
+                            char *error, size_t error_len);
+int http2_receive_response(struct connection *conn, uint32_t stream_id,
+                           struct response_info *out,
                            const struct timespec *ttfb_start,
                            FILE *body_out, char *error, size_t error_len);
 void http2_cleanup(struct connection *conn);
