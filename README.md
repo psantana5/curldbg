@@ -4,9 +4,9 @@
 [![Coverage](https://img.shields.io/badge/coverage-report-blue)](https://github.com/psantana5/curldbg/actions/workflows/ci.yml)
 
 curldbg is a lightweight HTTP/HTTPS client that doubles as both a **debugging tool**
-and a **curl-inspired CLI** for scripting. It speaks raw HTTP/1.1 over TLS, reports
-per-request timing metrics, and handles real-world HTTP features like redirects,
-chunked transfer encoding, gzip decompression, and cookie jars.
+and a **curl-inspired CLI** for scripting. It speaks HTTP/1.1 and HTTP/2 over TLS,
+reports per-request timing metrics, and handles real-world HTTP features like
+redirects, chunked transfer encoding, gzip decompression, and cookie jars.
 
 It was born from a practical need — during the Ubuntu mirrors outage on April 16
 (`security.ubuntu.com`, `archive.ubuntu.com`), having quick low-level visibility
@@ -14,11 +14,13 @@ into DNS, TCP connect, and TTFB timing was essential for diagnosing what was
 actually failing and where.
 
 > **Note:** curldbg is not a complete curl replacement. It supports a subset of
-curl's most common flags and only HTTP/1.1 at the moment. Review the flag list
-below before using it in existing scripts.
+curl's most common flags. Review the flag list below before using it in existing
+scripts.
 
 ## Key capabilities
 
+- **HTTP/2** — full multiplexing with per-stream flow control, HPACK header
+  compression, ALPN negotiation, and graceful GOAWAY shutdown
 - **Request profiling** — per-hop DNS, TCP, TTFB, and total timing, with connected
   IP and address family for each hop
 - **curl-inspired CLI** — supports common curl flags (`-d`, `-L`, `-f`, `-sS`,
@@ -41,9 +43,9 @@ below before using it in existing scripts.
 - **Compare modes** — `--compare` (IPv4 vs IPv6) and `--compare-urls` (two URLs)
   run requests concurrently and show side-by-side metrics + deltas
 - **Multi-URL** — pass multiple URLs as positional arguments for batch requests
-- **`--write-out`** — supports `%{http_code}`, `%{time_total}`, `%{time_namelookup}`,
-  `%{time_connect}`, `%{time_starttransfer}`, `%{url_effective}`,
-  `%{num_redirects}`, `%{redirect_url}`
+- **`--write-out`** — supports `%{http_code}`, `%{http_version}`, `%{time_total}`,
+  `%{time_namelookup}`, `%{time_connect}`, `%{time_starttransfer}`,
+  `%{url_effective}`, `%{num_redirects}`, `%{redirect_url}`
 
 ## Use cases
 
@@ -85,6 +87,7 @@ src/
 │   ├── connect.c            — TCP connection, Happy Eyeballs (RFC 8305), Unix sockets, socket I/O
 │   ├── dns.c                — DNS resolution with thread-based timeout, per-session DNS cache with TTL, resolve helpers
 │   ├── tls.c                — TLS handshake via OpenSSL, session-scoped SSL_CTX, SNI, cert verification
+│   ├── http2.c              — HTTP/2: stream multiplexing, frame dispatch, HPACK, flow control
 │   └── proxy.c              — HTTP CONNECT proxy handshake
 ├── http/
 │   ├── request.c            — HTTP/1.1 request building and sending
