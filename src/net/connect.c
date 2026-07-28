@@ -512,7 +512,7 @@ int connect_unix_socket(const char *path, char *error, size_t error_len) {
 
 void close_connection(struct connection *conn) {
     if (conn->http2)
-        http2_cleanup();
+        http2_cleanup(conn);
     if (conn->ssl != NULL) {
         SSL_shutdown(conn->ssl);
         SSL_free(conn->ssl);
