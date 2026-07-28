@@ -669,6 +669,7 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
     h2_conn_state.initial_window_size = H2_DEFAULT_WINDOW;
     h2_conn_state.header_table_size = H2_MAX_DYNAMIC_TABLE_SIZE;
     h2_conn_state.last_stream_id = (uint32_t)-1; /* first +=2 gives 1 */
+    h2_conn_state.stream_state = H2_SS_IDLE;
 
     hpack_table_init();
 
@@ -906,10 +907,13 @@ int http2_send_request(struct connection *conn, const struct url_info *url,
         }
     }
 
+    h2_conn_state.stream_state = end_stream ? H2_SS_HALF_CLOSED : H2_SS_OPEN;
+
     if (data != NULL && data_len > 0) {
         if (send_frame_raw(conn, data_len, H2_DATA, H2_FLAG_END_STREAM,
                            stream_id, data, error, error_len) != 0)
             return -1;
+        h2_conn_state.stream_state = H2_SS_HALF_CLOSED;
     }
 
     return 0;
@@ -1048,6 +1052,7 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
         }
 
         if (type == H2_GOAWAY) {
+            h2_conn_state.goaway_received = true;
             free(payload);
             set_error(error, error_len, "HTTP/2 server sent GOAWAY");
             return -1;
@@ -1055,6 +1060,7 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
 
         if (type == H2_RST_STREAM) {
             if (fid == stream_id) {
+                h2_conn_state.stream_state = H2_SS_CLOSED;
                 free(payload);
                 set_error(error, error_len, "HTTP/2 stream was reset by server");
                 return -1;
@@ -1078,6 +1084,14 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
             if (fid != stream_id) {
                 free(payload);
                 continue;
+            }
+            if (type == H2_HEADERS &&
+                h2_conn_state.stream_state != H2_SS_OPEN &&
+                h2_conn_state.stream_state != H2_SS_HALF_CLOSED) {
+                send_rst_stream(conn, fid, H2_STREAM_CLOSED, error, error_len);
+                free(payload);
+                set_error(error, error_len, "HEADERS in invalid stream state");
+                return -1;
             }
 
             size_t hpack_off = 0;
@@ -1201,8 +1215,10 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
                 }
             }
 
-            if (flags & H2_FLAG_END_STREAM)
+            if (flags & H2_FLAG_END_STREAM) {
                 stream_done = true;
+                h2_conn_state.stream_state = H2_SS_CLOSED;
+            }
 
             free(payload);
             continue;
@@ -1212,6 +1228,13 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
             if (fid != stream_id) {
                 free(payload);
                 continue;
+            }
+            if (h2_conn_state.stream_state != H2_SS_OPEN &&
+                h2_conn_state.stream_state != H2_SS_HALF_CLOSED) {
+                send_rst_stream(conn, fid, H2_STREAM_CLOSED, error, error_len);
+                free(payload);
+                set_error(error, error_len, "DATA in invalid stream state");
+                return -1;
             }
 
             size_t data_off = 0;
@@ -1256,8 +1279,10 @@ int http2_receive_response(struct connection *conn, struct response_info *out,
                                    error, error_len);
             }
 
-            if (flags & H2_FLAG_END_STREAM)
+            if (flags & H2_FLAG_END_STREAM) {
                 stream_done = true;
+                h2_conn_state.stream_state = H2_SS_CLOSED;
+            }
 
             free(payload);
             continue;
