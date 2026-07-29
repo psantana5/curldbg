@@ -1411,14 +1411,18 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
         }
 
         if (type == H2_GOAWAY) {
-            h2->goaway_received = true;
-            if (length >= 8) {
-                unsigned char *gp = (unsigned char *)payload;
-                h2->goaway_last_stream_id = ((uint32_t)(gp[0] & 0x7F) << 24) |
-                                             ((uint32_t)gp[1] << 16) |
-                                             ((uint32_t)gp[2] << 8) |
-                                             (uint32_t)gp[3];
+            if (length < 8) {
+                free(payload);
+                set_error(error, error_len,
+                    "HTTP/2 GOAWAY frame must have at least 8 octets");
+                return -1;
             }
+            h2->goaway_received = true;
+            unsigned char *gp = (unsigned char *)payload;
+            h2->goaway_last_stream_id = ((uint32_t)(gp[0] & 0x7F) << 24) |
+                                         ((uint32_t)gp[1] << 16) |
+                                         ((uint32_t)gp[2] << 8) |
+                                         (uint32_t)gp[3];
             if (stream_id <= h2->goaway_last_stream_id) {
                 h2->goaway_graceful = true;
                 free(payload);
