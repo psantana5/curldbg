@@ -1542,6 +1542,9 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
 
         if (type == H2_HEADERS || type == H2_CONTINUATION) {
             if (dst == NULL) {
+                if (type == H2_HEADERS && (fid & 1) == 0) {
+                    send_rst_stream(conn, fid, H2_REFUSED_STREAM, error, error_len);
+                }
                 free(payload);
                 continue;
             }
@@ -1551,10 +1554,13 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                     free(payload);
                     continue;
                 }
-                if (dst->state != H2_SS_OPEN && dst->state != H2_SS_HALF_CLOSED) {
+                if (dst->state == H2_SS_CLOSED) {
                     send_rst_stream(conn, fid, H2_STREAM_CLOSED, error, error_len);
                     free(payload);
                     continue;
+                }
+                if (dst->state == H2_SS_IDLE) {
+                    dst->state = (flags & H2_FLAG_END_STREAM) ? H2_SS_HALF_CLOSED : H2_SS_OPEN;
                 }
             } else if (!dst->continuation_pending) {
                 send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
