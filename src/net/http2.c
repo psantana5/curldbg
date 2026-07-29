@@ -18,11 +18,14 @@
 #define H2_FRAME_HEADER_SIZE 9
 #define H2_CLIENT_PREFACE "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 #define H2_DEFAULT_MAX_FRAME_SIZE 16384
-#define H2_DEFAULT_WINDOW 1048576
+#define H2_TARGET_WINDOW 1048576
 #define H2_SETTINGS_MAX_FRAME_SIZE 5
 #define H2_MAX_DYNAMIC_TABLE_SIZE 4096
 #define H2_MAX_STREAMS 256
-#define H2_WINDOW_UPDATE_THRESHOLD (H2_DEFAULT_WINDOW / 2)
+#define H2_WINDOW_UPDATE_THRESHOLD (H2_TARGET_WINDOW / 2)
+
+/* RFC 7540 Section 6.9.1: initial flow-control window is 65535 */
+#define H2_RFC_INITIAL_WINDOW 65535
 #define H2_MAX_HEADER_NAME_LEN 4096
 #define H2_MAX_HEADER_VALUE_LEN 65536
 
@@ -243,10 +246,10 @@ static int send_client_settings(struct connection *conn, char *error, size_t err
     payload[8] = 0; payload[9] = 0; payload[10] = 0; payload[11] = 0;
     payload[12] = (unsigned char)(H2_SETTINGS_INITIAL_WINDOW_SIZE >> 8);
     payload[13] = (unsigned char)H2_SETTINGS_INITIAL_WINDOW_SIZE;
-    payload[14] = (unsigned char)(H2_DEFAULT_WINDOW >> 24);
-    payload[15] = (unsigned char)(H2_DEFAULT_WINDOW >> 16);
-    payload[16] = (unsigned char)(H2_DEFAULT_WINDOW >> 8);
-    payload[17] = (unsigned char)H2_DEFAULT_WINDOW;
+    payload[14] = (unsigned char)(H2_TARGET_WINDOW >> 24);
+    payload[15] = (unsigned char)(H2_TARGET_WINDOW >> 16);
+    payload[16] = (unsigned char)(H2_TARGET_WINDOW >> 8);
+    payload[17] = (unsigned char)H2_TARGET_WINDOW;
     return send_frame_raw(conn, 18, H2_SETTINGS, 0, 0,
                           (char *)payload, error, error_len);
 }
@@ -827,9 +830,9 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
     }
     conn->h2 = h2;
 
-    h2->conn_window = H2_DEFAULT_WINDOW;
+    h2->conn_window = H2_RFC_INITIAL_WINDOW;
     h2->settings.max_frame_size = H2_DEFAULT_MAX_FRAME_SIZE;
-    h2->settings.initial_window_size = H2_DEFAULT_WINDOW;
+    h2->settings.initial_window_size = H2_RFC_INITIAL_WINDOW;
     h2->settings.header_table_size = H2_MAX_DYNAMIC_TABLE_SIZE;
     h2->last_stream_id = (uint32_t)-1;
     h2->settings.max_concurrent_streams = 100;
@@ -974,6 +977,14 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
         set_error(error, error_len, "HTTP/2 never received server SETTINGS");
         return -1;
     }
+
+    /* Raise our receiving connection window from the RFC default (65535)
+       to our target (1048576) so the server can send data without waiting
+       for an immediate WINDOW_UPDATE. Stream windows are raised by the
+       INITIAL_WINDOW_SIZE value we advertise in SETTINGS. */
+    if (send_window_update(conn, 0, H2_TARGET_WINDOW - H2_RFC_INITIAL_WINDOW,
+                           error, error_len) != 0)
+        return -1;
 
     return 0;
 }
