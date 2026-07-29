@@ -112,6 +112,7 @@ struct h2_stream {
     bool done;
     bool continuation_pending;
     bool trailers_pending;
+    bool saw_regular_header;
     struct response_info *out;
     FILE *body_out;
     struct timespec first_byte_ts;
@@ -1564,6 +1565,7 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
             if (type == H2_HEADERS) {
                 dst->header_list_size = 0;
                 dst->trailers_pending = false;
+                dst->saw_regular_header = false;
             }
 
             if (!(flags & H2_FLAG_END_HEADERS))
@@ -1613,9 +1615,13 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                                         &value, &value_len) != 0)
                         goto hpack_error;
                     if (dst->out) {
-                        if (dst->trailers_pending && name[0] == ':') {
-                            send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
-                            goto stream_reset;
+                        if (name[0] == ':') {
+                            if (dst->trailers_pending || dst->saw_regular_header) {
+                                send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
+                                goto stream_reset;
+                            }
+                        } else {
+                            dst->saw_regular_header = true;
                         }
                         parse_h2_header(name, value, dst->out);
                     }
@@ -1661,9 +1667,13 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
 
                     hpack_table_add(&h2->dyn_table, name, name_len, value, value_len);
                     if (dst->out) {
-                        if (dst->trailers_pending && name[0] == ':') {
-                            send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
-                            goto stream_reset;
+                        if (name[0] == ':') {
+                            if (dst->trailers_pending || dst->saw_regular_header) {
+                                send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
+                                goto stream_reset;
+                            }
+                        } else {
+                            dst->saw_regular_header = true;
                         }
                         parse_h2_header(name, value, dst->out);
                     }
@@ -1714,9 +1724,13 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                         goto hpack_error;
 
                     if (dst->out) {
-                        if (dst->trailers_pending && name[0] == ':') {
-                            send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
-                            goto stream_reset;
+                        if (name[0] == ':') {
+                            if (dst->trailers_pending || dst->saw_regular_header) {
+                                send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
+                                goto stream_reset;
+                            }
+                        } else {
+                            dst->saw_regular_header = true;
                         }
                         parse_h2_header(name, value, dst->out);
                     }
