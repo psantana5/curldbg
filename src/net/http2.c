@@ -909,6 +909,15 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
             unsigned char *p = (unsigned char *)payload;
             for (size_t off = 0; off + 6 <= length; off += 6) {
                 uint16_t id = (uint16_t)(p[off] << 8) | p[off + 1];
+                for (size_t j = 0; j < off; j += 6) {
+                    uint16_t prev = (uint16_t)(p[j] << 8) | p[j + 1];
+                    if (prev == id) {
+                        free(payload);
+                        set_error(error, error_len,
+                            "Duplicate setting identifier in SETTINGS frame");
+                        return -1;
+                    }
+                }
                 uint32_t val = (uint32_t)(p[off + 2] << 24) | (p[off + 3] << 16) |
                                (p[off + 4] << 8) | p[off + 5];
                 switch (id) {
@@ -1359,6 +1368,15 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
             unsigned char *p = (unsigned char *)payload;
             for (size_t off = 0; off + 6 <= length; off += 6) {
                 uint16_t id = (uint16_t)(p[off] << 8) | p[off + 1];
+                for (size_t j = 0; j < off; j += 6) {
+                    uint16_t prev = (uint16_t)(p[j] << 8) | p[j + 1];
+                    if (prev == id) {
+                        free(payload);
+                        set_error(error, error_len,
+                            "Duplicate setting identifier in SETTINGS frame");
+                        return -1;
+                    }
+                }
                 uint32_t val = (uint32_t)(p[off + 2] << 24) | (p[off + 3] << 16) |
                                (p[off + 4] << 8) | p[off + 5];
                 if (id == H2_SETTINGS_INITIAL_WINDOW_SIZE) {
