@@ -999,9 +999,16 @@ uint32_t http2_send_request(struct connection *conn, const struct url_info *url,
     (void)error_len;
     if (user_agent == NULL) user_agent = "curldbg/1.0";
 
-    if (h2->goaway_received && !h2->goaway_graceful) {
-        set_error(error, error_len, "Cannot send request after GOAWAY");
-        return 0;
+    if (h2->goaway_received) {
+        if (!h2->goaway_graceful) {
+            set_error(error, error_len, "Cannot send request after GOAWAY");
+            return 0;
+        }
+        if (h2->last_stream_id + 2 > h2->goaway_last_stream_id) {
+            set_error(error, error_len,
+                "Cannot send request: stream ID would exceed GOAWAY last_stream_id");
+            return 0;
+        }
     }
 
     if (h2->active_stream_count >= h2->settings.max_concurrent_streams) {
