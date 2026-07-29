@@ -326,7 +326,7 @@ int receive_response(
 
             char *body_start = find_header_end(recv_buf, header_len);
             if (body_start != NULL) {
-parse_response:
+parse_response: {}
                 size_t header_bytes = (size_t)(body_start - recv_buf);
                 size_t pending_len = header_len - header_bytes;
 
