@@ -1074,17 +1074,23 @@ uint32_t http2_send_request(struct connection *conn, const struct url_info *url,
         const char *colon = strchr(extra_headers[i], ':');
         if (colon == NULL) continue;
         size_t name_len = (size_t)(colon - extra_headers[i]);
-        const char *name = extra_headers[i];
         const char *val = colon + 1;
         while (*val == ' ' || *val == '\t') val++;
         size_t val_len = strlen(val);
 
+        char lc_name[256];
+        size_t lc_len = name_len;
+        if (lc_len >= sizeof(lc_name)) lc_len = sizeof(lc_name) - 1;
+        for (size_t j = 0; j < lc_len; j++)
+            lc_name[j] = (char)(extra_headers[i][j] | 32);
+        lc_name[lc_len] = '\0';
+
         int name_idx = 0;
-        lookup_static_name(name, name_len, &name_idx);
+        lookup_static_name(lc_name, lc_len, &name_idx);
 
         n = hpack_encode_literal_without_indexing(block + block_len, sizeof(block) - block_len,
                                                    (uint64_t)name_idx,
-                                                   name, name_len, val, val_len);
+                                                   lc_name, lc_len, val, val_len);
         if (n < 0) { set_error(error, error_len, "HPACK encode failed"); free_stream(h2, s); return 0; }
         block_len += (size_t)n;
     }
