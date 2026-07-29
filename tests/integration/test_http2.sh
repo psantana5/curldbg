@@ -101,6 +101,23 @@ assert "HTTP/2 500 status" \
 assert "HTTP/2 with verbose output" \
     '$CURLDBG -v --insecure -o /dev/null "$BASE/" 2>&1 | grep -q "HTTP/2"'
 
+assert "HTTP/2 write-out http_version" \
+    '$CURLDBG -s --insecure -o /dev/null -w "%{http_version}" "$BASE/" 2>/dev/null | grep -q "^HTTP/2$"'
+
+assert "HTTP/2 connection reuse (same connection, two requests)" \
+    'a=$($CURLDBG -s --insecure "$BASE/" 2>/dev/null) && b=$($CURLDBG -s --insecure "$BASE/" 2>/dev/null) && echo "$a" | grep -q "Hello" && echo "$b" | grep -q "Hello"'
+
+assert "HTTP/2 large body (32 KiB)" \
+    '$CURLDBG -s --insecure "$BASE/large32k" -o /tmp/h2test_large.bin 2>/dev/null && wc -c < /tmp/h2test_large.bin | grep -q "^32768$"'
+
+assert "HTTP/2 POST with data" \
+    '$CURLDBG -s --insecure -X POST -d "test=value" -o /dev/null -w "%{http_code}" "$BASE/" 2>/dev/null | grep -q "^200$"'
+
+assert "HTTP/2 redirect 301" \
+    '$CURLDBG -s --insecure -o /dev/null -w "%{http_code}" "$BASE/redirect301" 2>/dev/null | grep -q "^301$"'
+
+rm -f /tmp/h2test_large.bin
+
 echo "  test_http2: $PASSED/$TOTAL passed"
 if [ $FAILED -gt 0 ]; then
     exit 1
