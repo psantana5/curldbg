@@ -1484,6 +1484,10 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                     free(payload);
                     continue;
                 }
+            } else if (!dst->continuation_pending) {
+                send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
+                free(payload);
+                continue;
             }
 
             if (type == H2_HEADERS)
