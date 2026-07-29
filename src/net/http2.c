@@ -967,6 +967,12 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
             }
             h2->conn_window += (int32_t)inc;
         } else if (type == H2_PING && !(flags & 0x1)) {
+            if (length != 8) {
+                free(payload);
+                set_error(error, error_len,
+                    "HTTP/2 PING frame payload must be 8 octets");
+                return -1;
+            }
             send_ping_ack(conn, payload, error, error_len);
         }
 
@@ -1378,6 +1384,12 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
         }
 
         if (type == H2_PING) {
+            if (length != 8) {
+                free(payload);
+                set_error(error, error_len,
+                    "HTTP/2 PING frame payload must be 8 octets");
+                return -1;
+            }
             if (!(flags & 0x1))
                 send_ping_ack(conn, payload, error, error_len);
             free(payload);
