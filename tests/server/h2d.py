@@ -32,6 +32,14 @@ STATIC_RESPONSES = {
         ":status": "500",
         "content-type": "text/plain",
     },
+    b"/redirect301": {
+        ":status": "301",
+        "location": "/",
+    },
+    b"/redirect302": {
+        ":status": "302",
+        "location": "/",
+    },
 }
 
 
@@ -54,9 +62,11 @@ class H2Handler:
                 if isinstance(event, h2.events.RequestReceived):
                     self.handle_request(event)
                 elif isinstance(event, h2.events.DataReceived):
-                    self.conn.acknowledge_received_data(
-                        event.remote_stream_id, event.flow_controlled_length
-                    )
+                    sid = getattr(event, 'stream_id', getattr(event, 'remote_stream_id', None))
+                    if sid is not None:
+                        self.conn.acknowledge_received_data(
+                            sid, event.flow_controlled_length
+                        )
                 elif isinstance(event, h2.events.WindowUpdated):
                     pass
                 elif isinstance(event, h2.events.SettingsAcknowledged):
@@ -90,12 +100,32 @@ class H2Handler:
             elif path == b"/status500":
                 body = b"Internal Server Error\n"
                 resp_headers.append(("content-length", str(len(body))))
+            elif path == b"/redirect301" or path == b"/redirect302":
+                body = b""
+                resp_headers.append(("content-length", "0"))
             elif path == b"/":
                 body = b"Hello from HTTP/2 test server\n"
                 resp_headers.append(("content-length", str(len(body))))
 
-        self.conn.send_headers(stream_id, resp_headers)
-        self.conn.send_data(stream_id, body, end_stream=True)
+        if path == b"/large32k":
+            body = b"x" * 32768
+            resp_headers = [
+                (":status", "200"),
+                ("content-type", "application/octet-stream"),
+                ("content-length", str(len(body))),
+            ]
+
+        if len(body) == 0:
+            self.conn.send_headers(stream_id, resp_headers, end_stream=True)
+        else:
+            self.conn.send_headers(stream_id, resp_headers)
+            max_chunk = self.conn.remote_settings.max_frame_size
+            offset = 0
+            while offset < len(body):
+                chunk = body[offset:offset + max_chunk]
+                end = (offset + len(chunk) >= len(body))
+                self.conn.send_data(stream_id, chunk, end_stream=end)
+                offset += len(chunk)
 
 
 def main():
@@ -134,13 +164,24 @@ def main():
             except socket.timeout:
                 continue
             tls_sock = ctx.wrap_socket(raw, server_side=True)
-            handler = H2Handler(tls_sock, addr)
-            handler.run()
-            tls_sock.close()
+            t = threading.Thread(target=lambda: _handle(tls_sock, addr))
+            t.daemon = True
+            t.start()
     except KeyboardInterrupt:
         pass
     finally:
         sock.close()
+
+
+def _handle(tls_sock, addr):
+    try:
+        handler = H2Handler(tls_sock, addr)
+        handler.run()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+    finally:
+        tls_sock.close()
 
 
 if __name__ == "__main__":
