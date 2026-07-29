@@ -954,6 +954,12 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
             }
             h2->settings_received = true;
         } else if (type == H2_SETTINGS && (flags & H2_FLAG_SETTINGS_ACK)) {
+            if (length != 0) {
+                free(payload);
+                set_error(error, error_len,
+                    "HTTP/2 SETTINGS ACK frame must have empty payload");
+                return -1;
+            }
             acked_our_settings = true;
         } else if (type == H2_WINDOW_UPDATE && length >= 4) {
             uint32_t inc = (uint32_t)((unsigned char)payload[0] << 24) |
@@ -1317,49 +1323,57 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
         }
 
         if (type == H2_SETTINGS) {
-            if (!(flags & H2_FLAG_SETTINGS_ACK)) {
-                unsigned char *p = (unsigned char *)payload;
-                for (size_t off = 0; off + 6 <= length; off += 6) {
-                    uint16_t id = (uint16_t)(p[off] << 8) | p[off + 1];
-                    uint32_t val = (uint32_t)(p[off + 2] << 24) | (p[off + 3] << 16) |
-                                   (p[off + 4] << 8) | p[off + 5];
-                    if (id == H2_SETTINGS_INITIAL_WINDOW_SIZE) {
-                        if (val > 2147483647u) {
-                            free(payload);
-                            set_error(error, error_len, "Invalid initial window size");
-                            return -1;
-                        }
-                        int32_t delta = (int32_t)val - (int32_t)h2->settings.initial_window_size;
-                        h2->settings.initial_window_size = val;
-                        for (size_t i = 0; i < H2_MAX_STREAMS; i++) {
-                            if (h2->streams[i].active)
-                                h2->streams[i].window += delta;
-                        }
-                    } else if (id == H2_SETTINGS_MAX_FRAME_SIZE_ID) {
-                        if (val < 16384 || val > 16777215) {
-                            free(payload);
-                            set_error(error, error_len, "Invalid max frame size");
-                            return -1;
-                        }
-                        h2->settings.max_frame_size = val;
-                    } else if (id == H2_SETTINGS_HEADER_TABLE_SIZE) {
-                        h2->settings.header_table_size = val;
-                        hpack_table_set_max_size(&h2->dyn_table, val);
-                    } else if (id == H2_SETTINGS_ENABLE_PUSH) {
-                        if (val > 1) {
-                            free(payload);
-                            set_error(error, error_len, "Invalid SETTINGS_ENABLE_PUSH value");
-                            return -1;
-                        }
-                        h2->settings.enable_push = (val == 1);
-                    } else if (id == H2_SETTINGS_MAX_CONCURRENT_STREAMS) {
-                        h2->settings.max_concurrent_streams = val;
-                    } else if (id == H2_SETTINGS_MAX_HEADER_LIST_SIZE) {
-                        h2->settings.max_header_list_size = val;
-                    }
+            if (flags & H2_FLAG_SETTINGS_ACK) {
+                if (length != 0) {
+                    free(payload);
+                    set_error(error, error_len,
+                        "HTTP/2 SETTINGS ACK frame must have empty payload");
+                    return -1;
                 }
-                send_settings_ack(conn, error, error_len);
+                free(payload);
+                continue;
             }
+            unsigned char *p = (unsigned char *)payload;
+            for (size_t off = 0; off + 6 <= length; off += 6) {
+                uint16_t id = (uint16_t)(p[off] << 8) | p[off + 1];
+                uint32_t val = (uint32_t)(p[off + 2] << 24) | (p[off + 3] << 16) |
+                               (p[off + 4] << 8) | p[off + 5];
+                if (id == H2_SETTINGS_INITIAL_WINDOW_SIZE) {
+                    if (val > 2147483647u) {
+                        free(payload);
+                        set_error(error, error_len, "Invalid initial window size");
+                        return -1;
+                    }
+                    int32_t delta = (int32_t)val - (int32_t)h2->settings.initial_window_size;
+                    h2->settings.initial_window_size = val;
+                    for (size_t i = 0; i < H2_MAX_STREAMS; i++) {
+                        if (h2->streams[i].active)
+                            h2->streams[i].window += delta;
+                    }
+                } else if (id == H2_SETTINGS_MAX_FRAME_SIZE_ID) {
+                    if (val < 16384 || val > 16777215) {
+                        free(payload);
+                        set_error(error, error_len, "Invalid max frame size");
+                        return -1;
+                    }
+                    h2->settings.max_frame_size = val;
+                } else if (id == H2_SETTINGS_HEADER_TABLE_SIZE) {
+                    h2->settings.header_table_size = val;
+                    hpack_table_set_max_size(&h2->dyn_table, val);
+                } else if (id == H2_SETTINGS_ENABLE_PUSH) {
+                    if (val > 1) {
+                        free(payload);
+                        set_error(error, error_len, "Invalid SETTINGS_ENABLE_PUSH value");
+                        return -1;
+                    }
+                    h2->settings.enable_push = (val == 1);
+                } else if (id == H2_SETTINGS_MAX_CONCURRENT_STREAMS) {
+                    h2->settings.max_concurrent_streams = val;
+                } else if (id == H2_SETTINGS_MAX_HEADER_LIST_SIZE) {
+                    h2->settings.max_header_list_size = val;
+                }
+            }
+            send_settings_ack(conn, error, error_len);
             free(payload);
             continue;
         }
@@ -1461,15 +1475,14 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
             }
             if (type == H2_HEADERS) {
                 if (dst->continuation_pending) {
+                    send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
                     free(payload);
-                    set_error(error, error_len, "HEADERS received before prior CONTINUATION completed");
-                    return -1;
+                    continue;
                 }
                 if (dst->state != H2_SS_OPEN && dst->state != H2_SS_HALF_CLOSED) {
                     send_rst_stream(conn, fid, H2_STREAM_CLOSED, error, error_len);
                     free(payload);
-                    set_error(error, error_len, "HEADERS in invalid stream state");
-                    return -1;
+                    continue;
                 }
             }
 
@@ -1527,10 +1540,7 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                     if (h2->settings.max_header_list_size > 0 &&
                         dst->header_list_size > h2->settings.max_header_list_size) {
                         send_rst_stream(conn, fid, H2_ENHANCE_YOUR_CALM, error, error_len);
-                        free(payload);
-                        set_error(error, error_len,
-                            "HTTP/2 header list size exceeds max_header_list_size");
-                        return -1;
+                        goto stream_reset;
                     }
                 } else if ((b & 0x40) != 0) {
                     uint64_t name_idx;
@@ -1572,10 +1582,7 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                     if (h2->settings.max_header_list_size > 0 &&
                         dst->header_list_size > h2->settings.max_header_list_size) {
                         send_rst_stream(conn, fid, H2_ENHANCE_YOUR_CALM, error, error_len);
-                        free(payload);
-                        set_error(error, error_len,
-                            "HTTP/2 header list size exceeds max_header_list_size");
-                        return -1;
+                        goto stream_reset;
                     }
                 } else if ((b & 0x20) != 0) {
                     uint64_t new_size;
@@ -1622,10 +1629,7 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                     if (h2->settings.max_header_list_size > 0 &&
                         dst->header_list_size > h2->settings.max_header_list_size) {
                         send_rst_stream(conn, fid, H2_ENHANCE_YOUR_CALM, error, error_len);
-                        free(payload);
-                        set_error(error, error_len,
-                            "HTTP/2 header list size exceeds max_header_list_size");
-                        return -1;
+                        goto stream_reset;
                     }
                 }
             }
@@ -1640,21 +1644,7 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
             free(payload);
             continue;
 
-        hpack_error:
-            free(payload);
-            send_goaway(conn, h2->last_stream_id, H2_COMPRESSION_ERROR,
-                        error, error_len);
-            set_error(error, error_len,
-                "HTTP/2 HPACK decompression error");
-            return -1;
-
-            if (flags & H2_FLAG_END_STREAM) {
-                dst->done = true;
-                dst->state = H2_SS_CLOSED;
-                free_stream(h2, dst);
-                flush_window_updates(conn, h2, error, error_len);
-            }
-
+        stream_reset:
             free(payload);
             continue;
         }
@@ -1667,8 +1657,7 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
             if (dst->state != H2_SS_OPEN && dst->state != H2_SS_HALF_CLOSED) {
                 send_rst_stream(conn, fid, H2_STREAM_CLOSED, error, error_len);
                 free(payload);
-                set_error(error, error_len, "DATA in invalid stream state");
-                return -1;
+                continue;
             }
 
             size_t data_off = 0;
@@ -1684,8 +1673,7 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
             if (data_len_actual == 0 && !(flags & H2_FLAG_END_STREAM)) {
                 send_rst_stream(conn, fid, H2_ENHANCE_YOUR_CALM, error, error_len);
                 free(payload);
-                set_error(error, error_len, "HTTP/2 empty DATA frame without END_STREAM");
-                return -1;
+                continue;
             }
 
             if (dst == s && !s->seen_first_byte && data_len_actual > 0) {
@@ -1741,6 +1729,15 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
         }
 
         free(payload);
+        continue;
+
+    hpack_error:
+        free(payload);
+        send_goaway(conn, h2->last_stream_id, H2_COMPRESSION_ERROR,
+                    error, error_len);
+        set_error(error, error_len,
+            "HTTP/2 HPACK decompression error");
+        return -1;
     }
 
     if (s->out) s->out->preview[s->out->preview_len] = '\0';
