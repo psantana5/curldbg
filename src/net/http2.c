@@ -1622,6 +1622,12 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                             }
                         } else {
                             dst->saw_regular_header = true;
+                            for (const char *p = name; *p != '\0'; p++) {
+                                if (*p >= 'A' && *p <= 'Z') {
+                                    send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
+                                    goto stream_reset;
+                                }
+                            }
                         }
                         parse_h2_header(name, value, dst->out);
                     }
@@ -1674,6 +1680,12 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                             }
                         } else {
                             dst->saw_regular_header = true;
+                            for (const char *p = name; *p != '\0'; p++) {
+                                if (*p >= 'A' && *p <= 'Z') {
+                                    send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
+                                    goto stream_reset;
+                                }
+                            }
                         }
                         parse_h2_header(name, value, dst->out);
                     }
@@ -1731,6 +1743,12 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                             }
                         } else {
                             dst->saw_regular_header = true;
+                            for (const char *p = name; *p != '\0'; p++) {
+                                if (*p >= 'A' && *p <= 'Z') {
+                                    send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
+                                    goto stream_reset;
+                                }
+                            }
                         }
                         parse_h2_header(name, value, dst->out);
                     }
