@@ -690,7 +690,6 @@ static size_t huffman_decode(struct huff_node *tree,
             }
             if (child & HUFF_NODE_TERMINAL) {
                 unsigned char sym = (unsigned char)(child & ~HUFF_NODE_TERMINAL);
-                if (sym == HUFF_EOS) return 0;
                 if (out_pos < output_size) {
                     output[out_pos++] = sym;
                 } else {
