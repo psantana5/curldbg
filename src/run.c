@@ -522,6 +522,40 @@ static int run_request(const char *input_url, const struct run_options *opts,
                     effective_auth = url.user; /* http2.c handles : in user */
                 }
             }
+
+            /* auto-generate content-type and content-length for request body */
+            bool has_content_type_h2 = (header_flags & HF_CONTENT_TYPE) != 0;
+            bool has_content_length_h2 = (header_flags & HF_CONTENT_LENGTH) != 0;
+            char h2_ct_buf[128] = "", h2_cl_buf[64] = "";
+            size_t h2_body_inject = 0;
+            if ((data != NULL && data_len > 0) || upload_file != NULL) {
+                size_t body_len = (upload_file != NULL) ? upload_size : data_len;
+                if (!has_content_type_h2) {
+                    const char *ct = (upload_file != NULL) ? "application/octet-stream" : "application/x-www-form-urlencoded";
+                    int nct = snprintf(h2_ct_buf, sizeof(h2_ct_buf), "content-type: %s", ct);
+                    if (nct > 0 && (size_t)nct < sizeof(h2_ct_buf))
+                        h2_body_inject++;
+                }
+                if (!has_content_length_h2) {
+                    int ncl = snprintf(h2_cl_buf, sizeof(h2_cl_buf), "content-length: %zu", body_len);
+                    if (ncl > 0 && (size_t)ncl < sizeof(h2_cl_buf))
+                        h2_body_inject++;
+                }
+            }
+            if (h2_body_inject > 0) {
+                size_t total = send_header_count + h2_body_inject;
+                size_t max_stack = sizeof(stack_headers) / sizeof(stack_headers[0]);
+                if (send_headers == opts->extra_headers) {
+                    for (size_t i = 0; i < send_header_count && i < max_stack; i++)
+                        stack_headers[i] = send_headers[i];
+                    send_headers = stack_headers;
+                }
+                size_t idx = send_header_count;
+                if (h2_ct_buf[0] != '\0') stack_headers[idx++] = h2_ct_buf;
+                if (h2_cl_buf[0] != '\0') stack_headers[idx++] = h2_cl_buf;
+                send_header_count = total;
+            }
+
             uint32_t h2_stream_id = http2_send_request(conn, &url, method, data, data_len,
                     send_headers, send_header_count,
                     opts->user_agent, effective_auth,
