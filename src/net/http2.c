@@ -1239,21 +1239,42 @@ uint32_t http2_send_request(struct connection *conn, const struct url_info *url,
                         }
                     }
                 } else {
+                    if (wtype == H2_GOAWAY) {
+                        h2->goaway_received = true;
+                        if (wlen >= 8) {
+                            char wpayload[8];
+                            if (conn_read(conn, wpayload, 8, error, error_len) != 0)
+                                { free_stream(h2, s); return 0; }
+                            uint32_t last_id = ((uint32_t)((unsigned char)wpayload[0] & 0x7F) << 24) |
+                                                ((uint32_t)(unsigned char)wpayload[1] << 16) |
+                                                ((uint32_t)(unsigned char)wpayload[2] << 8) |
+                                                (unsigned char)wpayload[3];
+                            h2->goaway_last_stream_id = last_id;
+                            size_t remain = wlen - 8;
+                            if (remain > 0) {
+                                char *skip = malloc(remain);
+                                if (skip) { conn_read(conn, skip, remain, error, error_len); free(skip); }
+                            }
+                            if (stream_id <= last_id)
+                                continue;
+                        }
+                        set_error(error, error_len, "HTTP/2 server sent GOAWAY while sending body");
+                        free_stream(h2, s); return 0;
+                    }
+                    if (wtype == H2_RST_STREAM && wfid == stream_id) {
+                        if (wlen > 0) {
+                            char *skip = malloc(wlen);
+                            if (skip) { conn_read(conn, skip, wlen, error, error_len); free(skip); }
+                        }
+                        set_error(error, error_len, "HTTP/2 stream reset while sending body");
+                        free_stream(h2, s); return 0;
+                    }
                     if (wlen > 0) {
                         char *skip = malloc(wlen);
                         if (skip) {
                             conn_read(conn, skip, wlen, error, error_len);
                             free(skip);
                         }
-                    }
-                    if (wtype == H2_GOAWAY) {
-                        h2->goaway_received = true;
-                        set_error(error, error_len, "HTTP/2 server sent GOAWAY while sending body");
-                        free_stream(h2, s); return 0;
-                    }
-                    if (wtype == H2_RST_STREAM && wfid == stream_id) {
-                        set_error(error, error_len, "HTTP/2 stream reset while sending body");
-                        free_stream(h2, s); return 0;
                     }
                 }
                 continue;
