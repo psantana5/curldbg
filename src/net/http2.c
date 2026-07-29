@@ -1115,6 +1115,17 @@ uint32_t http2_send_request(struct connection *conn, const struct url_info *url,
             lc_name[j] = (char)(extra_headers[i][j] | 32);
         lc_name[lc_len] = '\0';
 
+        if (strcmp(lc_name, "connection") == 0 ||
+            strcmp(lc_name, "keep-alive") == 0 ||
+            strcmp(lc_name, "proxy-connection") == 0 ||
+            strcmp(lc_name, "transfer-encoding") == 0 ||
+            strcmp(lc_name, "upgrade") == 0)
+            continue;
+        if (strcmp(lc_name, "te") == 0) {
+            if (strcmp(val, "trailers") != 0)
+                continue;
+        }
+
         int name_idx = 0;
         lookup_static_name(lc_name, lc_len, &name_idx);
 
