@@ -62,7 +62,8 @@ enum h2_flags {
 enum h2_stream_state {
     H2_SS_IDLE,
     H2_SS_OPEN,
-    H2_SS_HALF_CLOSED,
+    H2_SS_HALF_CLOSED_LOCAL,
+    H2_SS_HALF_CLOSED_REMOTE,
     H2_SS_CLOSED,
 };
 
@@ -1187,7 +1188,7 @@ uint32_t http2_send_request(struct connection *conn, const struct url_info *url,
         }
     }
 
-    s->state = end_stream ? H2_SS_HALF_CLOSED : H2_SS_OPEN;
+    s->state = end_stream ? H2_SS_HALF_CLOSED_LOCAL : H2_SS_OPEN;
 
     if (data != NULL && data_len > 0) {
         size_t remaining = data_len;
@@ -1336,7 +1337,7 @@ uint32_t http2_send_request(struct connection *conn, const struct url_info *url,
             remaining -= chunk;
             ptr += chunk;
         }
-        s->state = H2_SS_HALF_CLOSED;
+        s->state = H2_SS_HALF_CLOSED_LOCAL;
     }
 
     return stream_id;
@@ -1628,8 +1629,13 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                     free(payload);
                     continue;
                 }
+                if (dst->state == H2_SS_HALF_CLOSED_REMOTE) {
+                    send_rst_stream(conn, fid, H2_STREAM_CLOSED, error, error_len);
+                    free(payload);
+                    continue;
+                }
                 if (dst->state == H2_SS_IDLE) {
-                    dst->state = (flags & H2_FLAG_END_STREAM) ? H2_SS_HALF_CLOSED : H2_SS_OPEN;
+                    dst->state = (flags & H2_FLAG_END_STREAM) ? H2_SS_HALF_CLOSED_REMOTE : H2_SS_OPEN;
                 }
             } else if (!dst->continuation_pending) {
                 send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
@@ -1856,7 +1862,7 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                 free(payload);
                 continue;
             }
-            if (dst->state != H2_SS_OPEN && dst->state != H2_SS_HALF_CLOSED) {
+            if (dst->state != H2_SS_OPEN && dst->state != H2_SS_HALF_CLOSED_LOCAL) {
                 send_rst_stream(conn, fid, H2_STREAM_CLOSED, error, error_len);
                 free(payload);
                 continue;
