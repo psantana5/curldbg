@@ -1386,6 +1386,15 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                         return -1;
                     }
                     int32_t delta = (int32_t)val - (int32_t)h2->settings.initial_window_size;
+                    for (size_t i = 0; i < H2_MAX_STREAMS; i++) {
+                        if (h2->streams[i].active &&
+                            (int32_t)(0x7FFFFFFF - h2->streams[i].window) < delta) {
+                            free(payload);
+                            set_error(error, error_len,
+                                "SETTINGS_INITIAL_WINDOW_SIZE delta would overflow stream window");
+                            return -1;
+                        }
+                    }
                     h2->settings.initial_window_size = val;
                     for (size_t i = 0; i < H2_MAX_STREAMS; i++) {
                         if (h2->streams[i].active)
