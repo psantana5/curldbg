@@ -1269,6 +1269,54 @@ uint32_t http2_send_request(struct connection *conn, const struct url_info *url,
                         set_error(error, error_len, "HTTP/2 stream reset while sending body");
                         free_stream(h2, s); return 0;
                     }
+                    if (wtype == H2_SETTINGS) {
+                        if (wlen > 0) {
+                            char *wp = malloc(wlen);
+                            if (wp) {
+                                conn_read(conn, wp, wlen, error, error_len);
+                                for (size_t off = 0; off + 6 <= wlen; off += 6) {
+                                    uint16_t sid = (uint16_t)((unsigned char)wp[off] << 8) | (unsigned char)wp[off + 1];
+                                    uint32_t sv = (uint32_t)((unsigned char)wp[off + 2] << 24) |
+                                                  ((uint32_t)(unsigned char)wp[off + 3] << 16) |
+                                                  ((uint32_t)(unsigned char)wp[off + 4] << 8) |
+                                                  (unsigned char)wp[off + 5];
+                                    if (sid == H2_SETTINGS_INITIAL_WINDOW_SIZE && sv <= 2147483647u) {
+                                        int32_t delta = (int32_t)sv - (int32_t)h2->settings.initial_window_size;
+                                        h2->settings.initial_window_size = sv;
+                                        for (size_t i = 0; i < H2_MAX_STREAMS; i++)
+                                            if (h2->streams[i].active) h2->streams[i].window += delta;
+                                    } else if (sid == H2_SETTINGS_MAX_FRAME_SIZE_ID && sv >= 16384 && sv <= 16777215) {
+                                        h2->settings.max_frame_size = sv;
+                                    } else if (sid == H2_SETTINGS_HEADER_TABLE_SIZE) {
+                                        h2->settings.header_table_size = sv;
+                                        hpack_table_set_max_size(&h2->dyn_table, sv);
+                                    } else if (sid == H2_SETTINGS_ENABLE_PUSH && sv <= 1) {
+                                        h2->settings.enable_push = (sv == 1);
+                                    } else if (sid == H2_SETTINGS_MAX_CONCURRENT_STREAMS) {
+                                        h2->settings.max_concurrent_streams = sv;
+                                    } else if (sid == H2_SETTINGS_MAX_HEADER_LIST_SIZE) {
+                                        h2->settings.max_header_list_size = sv;
+                                    }
+                                }
+                                free(wp);
+                            }
+                        }
+                        send_settings_ack(conn, error, error_len);
+                        continue;
+                    }
+                    if (wtype == H2_PING && (whdr[4] & 0x1) == 0) {
+                        if (wlen >= 8) {
+                            char pp[8];
+                            conn_read(conn, pp, 8, error, error_len);
+                            send_ping_ack(conn, pp, error, error_len);
+                            wlen -= 8;
+                        }
+                        if (wlen > 0) {
+                            char *skip = malloc(wlen);
+                            if (skip) { conn_read(conn, skip, wlen, error, error_len); free(skip); }
+                        }
+                        continue;
+                    }
                     if (wlen > 0) {
                         char *skip = malloc(wlen);
                         if (skip) {
