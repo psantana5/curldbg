@@ -1555,8 +1555,10 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                 continue;
             }
 
-            if (type == H2_HEADERS)
+            if (type == H2_HEADERS) {
                 dst->header_list_size = 0;
+                dst->trailers_pending = false;
+            }
 
             if (!(flags & H2_FLAG_END_HEADERS))
                 dst->continuation_pending = true;
@@ -1604,7 +1606,13 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                     if (get_table_entry(&h2->dyn_table, (int)idx, &name, &name_len,
                                         &value, &value_len) != 0)
                         goto hpack_error;
-                    if (dst->out) parse_h2_header(name, value, dst->out);
+                    if (dst->out) {
+                        if (dst->trailers_pending && name[0] == ':') {
+                            send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
+                            goto stream_reset;
+                        }
+                        parse_h2_header(name, value, dst->out);
+                    }
                     dst->header_list_size += (uint32_t)(name_len + value_len + 32);
                     if (h2->settings.max_header_list_size > 0 &&
                         dst->header_list_size > h2->settings.max_header_list_size) {
@@ -1646,7 +1654,13 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                         goto hpack_error;
 
                     hpack_table_add(&h2->dyn_table, name, name_len, value, value_len);
-                    if (dst->out) parse_h2_header(name, value, dst->out);
+                    if (dst->out) {
+                        if (dst->trailers_pending && name[0] == ':') {
+                            send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
+                            goto stream_reset;
+                        }
+                        parse_h2_header(name, value, dst->out);
+                    }
                     dst->header_list_size += (uint32_t)(name_len + value_len + 32);
                     if (h2->settings.max_header_list_size > 0 &&
                         dst->header_list_size > h2->settings.max_header_list_size) {
@@ -1693,7 +1707,13 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                                              value, sizeof(value), &value_len) != 0)
                         goto hpack_error;
 
-                    if (dst->out) parse_h2_header(name, value, dst->out);
+                    if (dst->out) {
+                        if (dst->trailers_pending && name[0] == ':') {
+                            send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
+                            goto stream_reset;
+                        }
+                        parse_h2_header(name, value, dst->out);
+                    }
                     dst->header_list_size += (uint32_t)(name_len + value_len + 32);
                     if (h2->settings.max_header_list_size > 0 &&
                         dst->header_list_size > h2->settings.max_header_list_size) {
@@ -1775,6 +1795,7 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                 h2->conn_window_consumed += data_len_actual;
                 dst->recv_window_consumed += data_len_actual;
                 flush_window_updates(conn, h2, error, error_len);
+                dst->trailers_pending = true;
             }
 
             if (flags & H2_FLAG_END_STREAM) {
