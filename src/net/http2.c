@@ -1062,6 +1062,8 @@ uint32_t http2_send_request(struct connection *conn, const struct url_info *url,
         return 0;
     }
 
+    bool is_connect = (strcmp(method, "CONNECT") == 0);
+
     unsigned char block[65536];
     size_t block_len = 0;
     int n;
@@ -1071,20 +1073,24 @@ uint32_t http2_send_request(struct connection *conn, const struct url_info *url,
     if (n < 0) { set_error(error, error_len, "HPACK encode failed"); free_stream(h2, s); return 0; }
     block_len = (size_t)n;
 
-    n = hpack_encode_literal_with_indexing(block + block_len, sizeof(block) - block_len, 0,
-                                            ":scheme", 7, scheme, strlen(scheme));
-    if (n < 0) { set_error(error, error_len, "HPACK encode failed"); free_stream(h2, s); return 0; }
-    block_len += (size_t)n;
+    if (!is_connect) {
+        n = hpack_encode_literal_with_indexing(block + block_len, sizeof(block) - block_len, 0,
+                                                ":scheme", 7, scheme, strlen(scheme));
+        if (n < 0) { set_error(error, error_len, "HPACK encode failed"); free_stream(h2, s); return 0; }
+        block_len += (size_t)n;
+    }
 
     n = hpack_encode_literal_with_indexing(block + block_len, sizeof(block) - block_len, 0,
                                             ":authority", 10, host_header, strlen(host_header));
     if (n < 0) { set_error(error, error_len, "HPACK encode failed"); free_stream(h2, s); return 0; }
     block_len += (size_t)n;
 
-    n = hpack_encode_literal_without_indexing(block + block_len, sizeof(block) - block_len, 0,
-                                               ":path", 5, url->path, strlen(url->path));
-    if (n < 0) { set_error(error, error_len, "HPACK encode failed"); free_stream(h2, s); return 0; }
-    block_len += (size_t)n;
+    if (!is_connect) {
+        n = hpack_encode_literal_without_indexing(block + block_len, sizeof(block) - block_len, 0,
+                                                   ":path", 5, url->path, strlen(url->path));
+        if (n < 0) { set_error(error, error_len, "HPACK encode failed"); free_stream(h2, s); return 0; }
+        block_len += (size_t)n;
+    }
 
     n = hpack_encode_literal_without_indexing(block + block_len, sizeof(block) - block_len, 0,
                                                "user-agent", 10, user_agent, strlen(user_agent));
