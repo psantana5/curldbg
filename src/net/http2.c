@@ -23,6 +23,8 @@
 #define H2_MAX_DYNAMIC_TABLE_SIZE 4096
 #define H2_MAX_STREAMS 256
 #define H2_WINDOW_UPDATE_THRESHOLD (H2_DEFAULT_WINDOW / 2)
+#define H2_MAX_HEADER_NAME_LEN 4096
+#define H2_MAX_HEADER_VALUE_LEN 65536
 
 enum h2_frame_type {
     H2_DATA = 0x0,
@@ -1495,7 +1497,8 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                                          hpack_len, &hpack_pos, 6, &name_idx) != 0)
                         break;
 
-                    char name[256], value[4096];
+                    char name[H2_MAX_HEADER_NAME_LEN];
+                    char value[H2_MAX_HEADER_VALUE_LEN];
                     size_t name_len = 0, value_len = 0;
 
                     if (name_idx == 0) {
@@ -1545,7 +1548,8 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                                          hpack_len, &hpack_pos, 4, &name_idx) != 0)
                         break;
 
-                    char name[256], value[4096];
+                    char name[H2_MAX_HEADER_NAME_LEN];
+                    char value[H2_MAX_HEADER_VALUE_LEN];
                     size_t name_len = 0, value_len = 0;
 
                     if (name_idx == 0) {
