@@ -813,7 +813,7 @@ static int get_table_entry(struct h2_hpack_table *dyn, int index,
     }
     int dyn_idx = index - 62;
     if (dyn_idx >= 0 && (size_t)dyn_idx < dyn->count) {
-        struct h2_hpack_entry *e = &dyn->entries[dyn_idx];
+        const struct h2_hpack_entry *e = &dyn->entries[dyn_idx];
         *name = e->name;
         *name_len = e->name_len;
         *value = e->value;
@@ -907,7 +907,7 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
 
         if (type == H2_SETTINGS && !(flags & H2_FLAG_SETTINGS_ACK)) {
             got_settings = true;
-            unsigned char *p = (unsigned char *)payload;
+            const unsigned char *p = (const unsigned char *)payload;
             for (size_t off = 0; off + 6 <= length; off += 6) {
                 uint16_t id = (uint16_t)(p[off] << 8) | p[off + 1];
                 for (size_t j = 0; j < off; j += 6) {
@@ -1441,7 +1441,7 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                 free(payload);
                 continue;
             }
-            unsigned char *p = (unsigned char *)payload;
+            const unsigned char *p = (const unsigned char *)payload;
             for (size_t off = 0; off + 6 <= length; off += 6) {
                 uint16_t id = (uint16_t)(p[off] << 8) | p[off + 1];
                 for (size_t j = 0; j < off; j += 6) {
@@ -1506,7 +1506,7 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
 
         if (type == H2_WINDOW_UPDATE) {
             if (length >= 4) {
-                unsigned char *p = (unsigned char *)payload;
+                const unsigned char *p = (const unsigned char *)payload;
                 uint32_t inc = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
                                ((uint32_t)p[2] << 8) | p[3];
                 if (inc >= (1u << 31)) {
@@ -1681,7 +1681,6 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
 
             size_t hpack_pos = 0;
             while (hpack_pos < hpack_len) {
-                if (hpack_pos >= hpack_len) break;
                 unsigned char b = (unsigned char)payload[hpack_off + hpack_pos];
 
                 if ((b & 0x80) != 0) {
