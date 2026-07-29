@@ -34,7 +34,8 @@ assert_http200_or_skip() {
     local desc="$1"
     local url="$2"
 
-    code=$("$CURLDBG" -s -o /dev/null -w "%{http_code}" "$url" 2>/dev/null)
+    local code
+    code=$("$CURLDBG" -s -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || true)
 
     case "$code" in
         200)
@@ -49,6 +50,42 @@ assert_http200_or_skip() {
             echo "  FAIL: $desc (HTTP $code)"
             ;;
     esac
+}
+
+assert_json200_or_skip() {
+    TOTAL=$((TOTAL + 1))
+
+    local desc="$1"
+    local url="$2"
+
+    local tmp
+    tmp=$(mktemp)
+    trap 'rm -f "$tmp"' RETURN
+
+    local code
+    code=$("$CURLDBG" -s -o "$tmp" -w "%{http_code}" "$url" 2>/dev/null || true)
+
+    case "$code" in
+        200)
+            if python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$tmp" >/dev/null 2>&1; then
+                PASSED=$((PASSED + 1))
+            else
+                FAILED=$((FAILED + 1))
+                echo "  FAIL: $desc (invalid JSON)"
+            fi
+            ;;
+        500|501|502|503|504)
+            SKIPPED=$((SKIPPED + 1))
+            echo "  SKIP: $desc (remote server returned HTTP $code)"
+            ;;
+        *)
+            FAILED=$((FAILED + 1))
+            echo "  FAIL: $desc (HTTP $code)"
+            ;;
+    esac
+
+    rm -f "$tmp"
+    trap - RETURN
 }
 
 echo "  test_http2_public: testing against public HTTP/2 servers"
@@ -69,8 +106,9 @@ assert_http200_or_skip \
     "httpbin.org/get returns 200" \
     "https://httpbin.org/get"
 
-assert "httpbin.org/headers returns JSON" \
-    '$CURLDBG -s "https://httpbin.org/headers" 2>/dev/null | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null'
+assert_json200_or_skip \
+    "httpbin.org/headers returns JSON" \
+    "https://httpbin.org/headers"
 
 assert "httpbin.org redirect via HTTP/2" \
     '$CURLDBG -s -L -o /dev/null -w "%{http_version}" "https://httpbin.org/redirect/1" 2>/dev/null | grep -q "^HTTP/2$"'
