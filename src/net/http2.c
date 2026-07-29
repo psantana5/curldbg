@@ -971,6 +971,11 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
                 set_error(error, error_len, "WINDOW_UPDATE increment too large");
                 return -1;
             }
+            if ((int32_t)(0x7FFFFFFF - h2->conn_window) < (int32_t)inc) {
+                free(payload);
+                set_error(error, error_len, "WINDOW_UPDATE would overflow flow control window");
+                return -1;
+            }
             h2->conn_window += (int32_t)inc;
         } else if (type == H2_PING && !(flags & 0x1)) {
             if (length != 8) {
@@ -1205,10 +1210,17 @@ uint32_t http2_send_request(struct connection *conn, const struct url_info *url,
                                    (uint32_t)((unsigned char)wpayload[2] << 8) |
                                    (unsigned char)wpayload[3];
                     if (inc < (1u << 31)) {
-                        if (wfid == 0)
+                        if (wfid == 0) {
+                            if ((int32_t)(0x7FFFFFFF - h2->conn_window) < (int32_t)inc) {
+                                free_stream(h2, s); return 0;
+                            }
                             h2->conn_window += (int32_t)inc;
-                        else if (wfid == stream_id)
+                        } else if (wfid == stream_id) {
+                            if ((int32_t)(0x7FFFFFFF - s->window) < (int32_t)inc) {
+                                free_stream(h2, s); return 0;
+                            }
                             s->window += (int32_t)inc;
+                        }
                     }
                 } else {
                     if (wlen > 0) {
@@ -1399,10 +1411,21 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                     set_error(error, error_len, "WINDOW_UPDATE increment too large");
                     return -1;
                 }
-                if (fid == 0)
+                if (fid == 0) {
+                    if ((int32_t)(0x7FFFFFFF - h2->conn_window) < (int32_t)inc) {
+                        free(payload);
+                        set_error(error, error_len, "WINDOW_UPDATE would overflow flow control window");
+                        return -1;
+                    }
                     h2->conn_window += (int32_t)inc;
-                else if (dst != NULL)
+                } else if (dst != NULL) {
+                    if ((int32_t)(0x7FFFFFFF - dst->window) < (int32_t)inc) {
+                        free(payload);
+                        set_error(error, error_len, "WINDOW_UPDATE would overflow flow control window");
+                        return -1;
+                    }
                     dst->window += (int32_t)inc;
+                }
             }
             free(payload);
             continue;
