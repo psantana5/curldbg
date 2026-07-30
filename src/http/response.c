@@ -186,7 +186,7 @@ static size_t write_body_maybe_decomp(const char *buf, size_t len, FILE *body_ou
 }
 
 size_t chunked_write(const char *buf, size_t len, FILE *body_out, struct response_info *out,
-                            int *state, unsigned long *chunk_rem, char *line_buf, size_t *line_len,
+                            int *state, uint64_t *chunk_rem, char *line_buf, size_t *line_len,
                             z_stream *decomp_strm, bool decompress, bool capture_preview,
                             char *error, size_t error_len) {
     size_t consumed = 0;
@@ -204,7 +204,7 @@ size_t chunked_write(const char *buf, size_t len, FILE *body_out, struct respons
                 char *semi = strchr(line_buf, ';');
                 if (semi) *semi = '\0';
                 char *endp = NULL;
-                unsigned long val = strtoul(line_buf, &endp, 16);
+                uint64_t val = strtoull(line_buf, &endp, 16);
                 *line_len = 0;
                 if (endp == NULL || endp == line_buf || *endp != '\0') {
                     set_error(error, error_len, "Invalid chunk size");
@@ -222,7 +222,7 @@ size_t chunked_write(const char *buf, size_t len, FILE *body_out, struct respons
                                          error, error_len) == (size_t)-1)
                 return (size_t)-1;
             consumed += take;
-            *chunk_rem -= (unsigned long)take;
+            *chunk_rem -= take;
             if (*chunk_rem == 0) *state = 2;
         } else if (*state == 2) {
             if (buf[consumed] == '\r') consumed++;
@@ -260,7 +260,7 @@ int receive_response(
     struct timespec first_byte_ts;
     bool chunked = false;
     int chunk_state = 0;
-    unsigned long chunk_remaining = 0;
+    uint64_t chunk_remaining = 0;
     char chunk_line_buf[32];
     size_t chunk_line_len = 0;
     bool trailer_mode = false;

@@ -9,11 +9,7 @@
 #include <strings.h>
 #include <time.h>
 
-#ifdef __linux__
 #include <endian.h>
-#else
-#include <machine/endian.h>
-#endif
 
 #define H2_FRAME_HEADER_SIZE 9
 #define H2_CLIENT_PREFACE "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
@@ -982,6 +978,38 @@ static void parse_h2_header(const char *name, const char *value,
     }
 }
 
+static int apply_h2_header(const struct h2_connection *h2, struct h2_stream *dst,
+    struct connection *conn, uint32_t fid,
+    const char *name, const char *value,
+    size_t name_len, size_t value_len,
+    char *error, size_t error_len)
+{
+    if (dst->out) {
+        if (name[0] == ':') {
+            if (dst->trailers_pending || dst->saw_regular_header) {
+                send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
+                return 1;
+            }
+        } else {
+            dst->saw_regular_header = true;
+            for (const char *p = name; *p != '\0'; p++) {
+                if (*p >= 'A' && *p <= 'Z') {
+                    send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
+                    return 1;
+                }
+            }
+        }
+        parse_h2_header(name, value, dst->out);
+    }
+    dst->header_list_size += (uint32_t)(name_len + value_len + 32);
+    if (h2->settings.max_header_list_size > 0 &&
+        dst->header_list_size > h2->settings.max_header_list_size) {
+        send_rst_stream(conn, fid, H2_ENHANCE_YOUR_CALM, error, error_len);
+        return 1;
+    }
+    return 0;
+}
+
 /*
  * Parse a single HPACK header block fragment.
  * Returns: 0 = OK, -1 = HPACK compression error (send GOAWAY), 1 = stream reset.
@@ -992,6 +1020,7 @@ static int parse_h2_header_block(struct h2_connection *h2,
     char *error, size_t error_len)
 {
     size_t hp = 0;
+    int rc;
     while (hp < block_len) {
         unsigned char b = block[hp];
 
@@ -1004,29 +1033,8 @@ static int parse_h2_header_block(struct h2_connection *h2,
             if (get_table_entry(&h2->dyn_table, (int)idx, &name, &name_len,
                                 &value, &value_len) != 0)
                 return -1;
-            if (dst->out) {
-                if (name[0] == ':') {
-                    if (dst->trailers_pending || dst->saw_regular_header) {
-                        send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
-                        return 1;
-                    }
-                } else {
-                    dst->saw_regular_header = true;
-                    for (const char *p = name; *p != '\0'; p++) {
-                        if (*p >= 'A' && *p <= 'Z') {
-                            send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
-                            return 1;
-                        }
-                    }
-                }
-                parse_h2_header(name, value, dst->out);
-            }
-            dst->header_list_size += (uint32_t)(name_len + value_len + 32);
-            if (h2->settings.max_header_list_size > 0 &&
-                dst->header_list_size > h2->settings.max_header_list_size) {
-                send_rst_stream(conn, fid, H2_ENHANCE_YOUR_CALM, error, error_len);
-                return 1;
-            }
+            rc = apply_h2_header(h2, dst, conn, fid, name, value, name_len, value_len, error, error_len);
+            if (rc != 0) return rc;
         } else if ((b & 0x40) != 0) {
             uint64_t name_idx;
             if (hpack_decode_int(block, block_len, &hp, 6, &name_idx) != 0)
@@ -1057,29 +1065,8 @@ static int parse_h2_header_block(struct h2_connection *h2,
                 return -1;
 
             hpack_table_add(&h2->dyn_table, name, name_len, value, value_len);
-            if (dst->out) {
-                if (name[0] == ':') {
-                    if (dst->trailers_pending || dst->saw_regular_header) {
-                        send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
-                        return 1;
-                    }
-                } else {
-                    dst->saw_regular_header = true;
-                    for (const char *p = name; *p != '\0'; p++) {
-                        if (*p >= 'A' && *p <= 'Z') {
-                            send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
-                            return 1;
-                        }
-                    }
-                }
-                parse_h2_header(name, value, dst->out);
-            }
-            dst->header_list_size += (uint32_t)(name_len + value_len + 32);
-            if (h2->settings.max_header_list_size > 0 &&
-                dst->header_list_size > h2->settings.max_header_list_size) {
-                send_rst_stream(conn, fid, H2_ENHANCE_YOUR_CALM, error, error_len);
-                return 1;
-            }
+            rc = apply_h2_header(h2, dst, conn, fid, name, value, name_len, value_len, error, error_len);
+            if (rc != 0) return rc;
         } else if ((b & 0x20) != 0) {
             uint64_t new_size;
             if (hpack_decode_int(block, block_len, &hp, 5, &new_size) != 0)
@@ -1114,29 +1101,8 @@ static int parse_h2_header_block(struct h2_connection *h2,
                                     value, sizeof(value), &value_len) != 0)
                 return -1;
 
-            if (dst->out) {
-                if (name[0] == ':') {
-                    if (dst->trailers_pending || dst->saw_regular_header) {
-                        send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
-                        return 1;
-                    }
-                } else {
-                    dst->saw_regular_header = true;
-                    for (const char *p = name; *p != '\0'; p++) {
-                        if (*p >= 'A' && *p <= 'Z') {
-                            send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
-                            return 1;
-                        }
-                    }
-                }
-                parse_h2_header(name, value, dst->out);
-            }
-            dst->header_list_size += (uint32_t)(name_len + value_len + 32);
-            if (h2->settings.max_header_list_size > 0 &&
-                dst->header_list_size > h2->settings.max_header_list_size) {
-                send_rst_stream(conn, fid, H2_ENHANCE_YOUR_CALM, error, error_len);
-                return 1;
-            }
+            rc = apply_h2_header(h2, dst, conn, fid, name, value, name_len, value_len, error, error_len);
+            if (rc != 0) return rc;
         }
     }
     return 0;

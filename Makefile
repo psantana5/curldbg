@@ -27,7 +27,7 @@ HEADERS := include/flags.h include/version.h include/url.h include/http.h \
            include/util.h include/curldbg.h
 
 # --- Regular build ---
-CFLAGS := $(OPT) -Wall -Wextra -Wshadow -Werror -Wconversion -Wsign-conversion -Wpedantic -fstack-protector-strong -D_FORTIFY_SOURCE=2 -pthread -Iinclude -DHAVE_LIBPSL $(LIBPSL_CFLAGS)
+CFLAGS := $(OPT) -Wall -Wextra -Wshadow -Werror -Wconversion -Wsign-conversion -Wpedantic -fstack-protector-strong -fcf-protection=full -fstack-clash-protection -D_FORTIFY_SOURCE=2 -pthread -Iinclude -DHAVE_LIBPSL $(LIBPSL_CFLAGS)
 LDLIBS := -pthread -lssl -lcrypto -lz $(LIBPSL_LIBS)
 OBJS := $(SRCS:src/%.c=$(OBJDIR)/%.o)
 UNIT_OBJS := $(filter-out $(OBJDIR)/main.o,$(OBJS))
@@ -179,7 +179,7 @@ install: $(TARGET) $(MANPAGE)
 	install -m 644 $(MANPAGE) $(DESTDIR)$(MANDIR)/curldbg.1
 
 FUZZ_CC := clang
-FUZZ_CFLAGS := -g -O1 -fsanitize=fuzzer,address -Iinclude
+FUZZ_CFLAGS := -g -O1 -fsanitize=fuzzer,address,undefined -Iinclude
 FUZZ_LIBS := -lz -lssl -lcrypto
 
 fuzz: $(TARGET)-fuzz

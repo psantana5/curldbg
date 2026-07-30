@@ -80,6 +80,14 @@ static int validate_no_crlf(const char *value, const char *flag_name, struct cmd
     return 0;
 }
 
+static int handle_int_flag(struct cmdline_opts *c, const char *flag_name,
+                           const char *value, const char *desc, int *target) {
+    int v = parse_nn(c, flag_name, value, desc);
+    if (v < 0) return -1;
+    *target = v;
+    return 0;
+}
+
 static int add_extra_header(struct cmdline_opts *c, const char *value) {
     const char **next = realloc(c->extra_headers, (c->extra_header_count + 1) * sizeof(*c->extra_headers));
     if (next == NULL) { set_cmdline_error(c, "Out of memory"); return -1; }
@@ -127,7 +135,7 @@ static int handle_data_arg(struct cmdline_opts *c, const char *arg) {
         if (spec[0] == '-' && spec[1] == '\0') { fp = stdin; }
         else { fp = fopen(spec, "rb"); if (fp == NULL) { set_cmdline_error(c, "Unable to open data file '%s': %s", spec, strerror(errno)); return -1; } close_fp = true; }
         size_t total = 0;
-        char *data = read_data_file(fp, &total);
+        const char *data = read_data_file(fp, &total);
         if (close_fp) fclose(fp);
         if (data == NULL) {
             set_cmdline_error(c, "Failed to read data from '%s' (too large or out of memory)", spec);
@@ -442,10 +450,7 @@ static int handle_flag(enum flag_id id, const char *value, struct cmdline_opts *
 
         case FLAG_MAX_REDIRS:
             if (value == NULL) { set_cmdline_error(c, "Missing value for --max-redirs"); return -1; }
-            { int v = parse_nn(c, "--max-redirs", value, "Invalid max redirects");
-              if (v < 0) return -1;
-              c->max_redirects = v; }
-            return 0;
+            return handle_int_flag(c, "--max-redirs", value, "Invalid max redirects", &c->max_redirects);
 
         case FLAG_FAIL:
             c->fail_on_http_error = true;
@@ -463,31 +468,19 @@ static int handle_flag(enum flag_id id, const char *value, struct cmdline_opts *
 
         case FLAG_CONNECT_TIMEOUT:
             if (value == NULL) { set_cmdline_error(c, "Missing value for --connect-timeout"); return -1; }
-            { int v = parse_nn(c, "--connect-timeout", value, "Invalid connect timeout");
-              if (v < 0) return -1;
-              c->connect_timeout_ms = v; }
-            return 0;
+            return handle_int_flag(c, "--connect-timeout", value, "Invalid connect timeout", &c->connect_timeout_ms);
 
         case FLAG_READ_TIMEOUT:
             if (value == NULL) { set_cmdline_error(c, "Missing value for --read-timeout"); return -1; }
-            { int v = parse_nn(c, "--read-timeout", value, "Invalid read timeout");
-              if (v < 0) return -1;
-              c->read_timeout_ms = v; }
-            return 0;
+            return handle_int_flag(c, "--read-timeout", value, "Invalid read timeout", &c->read_timeout_ms);
 
         case FLAG_MAX_TIME:
             if (value == NULL) { set_cmdline_error(c, "Missing value for --max-time"); return -1; }
-            { int v = parse_nn(c, "--max-time", value, "Invalid max time");
-              if (v < 0) return -1;
-              c->max_time_ms = v; }
-            return 0;
+            return handle_int_flag(c, "--max-time", value, "Invalid max time", &c->max_time_ms);
 
         case FLAG_RETRY:
             if (value == NULL) { set_cmdline_error(c, "Missing value for --retry"); return -1; }
-            { int v = parse_nn(c, "--retry", value, "Invalid retry count");
-              if (v < 0) return -1;
-              c->retry_count = v; }
-            return 0;
+            return handle_int_flag(c, "--retry", value, "Invalid retry count", &c->retry_count);
 
         case FLAG_RETRY_DELAY:
             if (value == NULL) { set_cmdline_error(c, "Missing value for --retry-delay"); return -1; }
