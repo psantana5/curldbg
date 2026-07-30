@@ -20,7 +20,7 @@ scripts.
 ## Key capabilities
 
 - **HTTP/2** — full multiplexing with per-stream flow control, HPACK header
-  compression, ALPN negotiation, and graceful GOAWAY shutdown
+  compression (Huffman encode + decode), ALPN negotiation, and graceful GOAWAY shutdown
 - **Request profiling** — per-hop DNS, TCP, TTFB, and total timing, with connected
   IP and address family for each hop
 - **curl-inspired CLI** — supports common curl flags (`-d`, `-L`, `-f`, `-sS`,

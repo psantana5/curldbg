@@ -598,7 +598,7 @@ static const uint8_t huff_nbits[256] = {
 #define HUFF_EOS_CODE 0x3fffffff
 #define HUFF_EOS_BITS 30
 
-static size_t __attribute__((unused)) huffman_encode(const unsigned char *input, size_t input_len,
+static size_t huffman_encode(const unsigned char *input, size_t input_len,
                               unsigned char *output, size_t output_size) {
     uint64_t bits = 0;
     int bits_left = 40;
@@ -628,9 +628,6 @@ static size_t __attribute__((unused)) huffman_encode(const unsigned char *input,
         }
     }
 
-    (void)HUFF_EOS;
-    (void)HUFF_EOS_CODE;
-    (void)HUFF_EOS_BITS;
     return out_pos;
 }
 
@@ -710,13 +707,31 @@ static size_t hpack_encode_string(unsigned char *out, size_t out_size,
                                    const char *str, size_t str_len) {
     size_t off = 0;
     if (out_size < 1) return 0;
-    out[off] = 0x00;
-    size_t n = hpack_encode_int(out, out_size, (uint64_t)str_len, 7);
+
+    unsigned char huff_buf[4096];
+    size_t huff_len = 0;
+    bool use_huffman = false;
+
+    if (str_len > 0 && str_len < sizeof(huff_buf)) {
+        huff_len = huffman_encode((const unsigned char *)str, str_len,
+                                   huff_buf, sizeof(huff_buf));
+        if (huff_len > 0 && huff_len < str_len)
+            use_huffman = true;
+    }
+
+    size_t enc_len = use_huffman ? huff_len : str_len;
+    out[off] = use_huffman ? (unsigned char)0x80 : (unsigned char)0x00;
+
+    size_t n = hpack_encode_int(out, out_size, (uint64_t)enc_len, 7);
     if (n == 0) return 0;
     off = n;
-    if (off + str_len > out_size) return 0;
-    memcpy(out + off, str, str_len);
-    off += str_len;
+
+    if (off + enc_len > out_size) return 0;
+    if (use_huffman)
+        memcpy(out + off, huff_buf, enc_len);
+    else
+        memcpy(out + off, str, enc_len);
+    off += enc_len;
     return off;
 }
 
