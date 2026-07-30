@@ -21,6 +21,11 @@ ifeq ($(LIBPSL_LIBS),)
     $(error libpsl is required. Install libpsl-dev or similar and ensure pkg-config can find it.)
 endif
 
+# --- Headers ---
+HEADERS := include/flags.h include/version.h include/url.h include/http.h \
+           include/net.h include/cookie.h include/cli.h include/run.h \
+           include/util.h include/curldbg.h
+
 # --- Regular build ---
 CFLAGS := $(OPT) -Wall -Wextra -Wshadow -fstack-protector-strong -D_FORTIFY_SOURCE=2 -pthread -Iinclude -DHAVE_LIBPSL $(LIBPSL_CFLAGS)
 LDLIBS := -pthread -lssl -lcrypto -lz $(LIBPSL_LIBS)
@@ -62,11 +67,11 @@ all: $(TARGET)
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
 
-$(OBJDIR)/%.o: src/%.c include/curldbg.h include/flags.h
+$(OBJDIR)/%.o: src/%.c $(HEADERS)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(SAN_OBJDIR)/%.o: src/%.c include/curldbg.h include/flags.h
+$(SAN_OBJDIR)/%.o: src/%.c $(HEADERS)
 	@mkdir -p $(dir $@)
 	$(CC) $(SAN_CFLAGS) -c -o $@ $<
 
@@ -80,7 +85,7 @@ $(SAN_OBJDIR)/testd: $(TESTD_SRCS)
 $(SAN_OBJDIR)/unit_test: $(SAN_UNIT_OBJS) tests/unit.c
 	$(CC) $(SAN_CFLAGS) -o $@ tests/unit.c $(SAN_UNIT_OBJS) $(LDLIBS)
 
-$(TSAN_OBJDIR)/%.o: src/%.c include/curldbg.h include/flags.h
+$(TSAN_OBJDIR)/%.o: src/%.c $(HEADERS)
 	@mkdir -p $(dir $@)
 	$(CC) $(TSAN_CFLAGS) -c -o $@ $<
 

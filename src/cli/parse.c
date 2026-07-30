@@ -7,6 +7,7 @@
 #include <string.h>
 #include <signal.h>
 #include <arpa/inet.h>
+#include <openssl/tls1.h>
 
 #define MAX_DATA_FILE_SIZE (16 * 1024 * 1024)
 
