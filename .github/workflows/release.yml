@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libssl-dev zlib1g-dev libpsl-dev
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=$(grep -oP '#define CURLDBG_VERSION "\K[^"]+' include/curldbg.h)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Validate tag matches version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          SRC_VERSION="${{ steps.version.outputs.version }}"
+          if [ "$TAG_VERSION" != "$SRC_VERSION" ]; then
+            echo "error: tag version ($TAG_VERSION) does not match source version ($SRC_VERSION)"
+            exit 1
+          fi
+
+      - name: Build and test
+        run: make test-novg
+
+      - name: Build static binary
+        run: make static
+
+      - name: Prepare release artifacts
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          ARCHIVE="curldbg-${VERSION}-linux-x86_64.tar.gz"
+          mkdir -p release/curldbg-${VERSION}
+          cp curldbg-static release/curldbg-${VERSION}/curldbg
+          cp man/curldbg.1 release/curldbg-${VERSION}/
+          cp LICENSE release/curldbg-${VERSION}/
+          cp README.md release/curldbg-${VERSION}/
+          gzip -9 -n release/curldbg-${VERSION}/curldbg.1
+          cd release
+          tar czf "${ARCHIVE}" curldbg-${VERSION}/
+          cd ..
+          sha256sum "release/${ARCHIVE}" > "release/${ARCHIVE}.sha256"
+
+      - name: Generate release notes
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          SHA=$(cut -d' ' -f1 < "release/curldbg-${VERSION}-linux-x86_64.tar.gz.sha256")
+          cat > release-notes.md <<EOF
+          ## curldbg ${VERSION}
+
+          ### Downloads
+          | File | Description |
+          |------|-------------|
+          | \`curldbg-${VERSION}-linux-x86_64.tar.gz\` | Static binary + man page + LICENSE |
+          | \`curldbg-static\` | Standalone statically-linked binary |
+
+          ### SHA256
+          \`\`\`
+          ${SHA}  curldbg-${VERSION}-linux-x86_64.tar.gz
+          \`\`\`
+
+          ### Install from tarball
+          \`\`\`
+          tar -xzf curldbg-${VERSION}-linux-x86_64.tar.gz
+          sudo install curldbg-${VERSION}/curldbg /usr/local/bin/
+          sudo install -d /usr/local/share/man/man1
+          gzip -d -c curldbg-${VERSION}/curldbg.1.gz | sudo tee /usr/local/share/man/man1/curldbg.1 > /dev/null
+          \`\`\`
+          EOF
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: curldbg ${{ steps.version.outputs.version }}
+          body_path: release-notes.md
+          files: |
+            release/curldbg-*.tar.gz
+            release/curldbg-*.sha256
+            curldbg-static
