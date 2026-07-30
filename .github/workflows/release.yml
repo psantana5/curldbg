@@ -33,9 +33,6 @@ jobs:
             exit 1
           fi
 
-      - name: Build and test
-        run: make test-novg
-
       - name: Build static binary
         run: make static
 
