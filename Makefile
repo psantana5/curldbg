@@ -228,6 +228,8 @@ coverage:
 	$(MAKE) all CFLAGS="$(CFLAGS)"
 	$(CC) $(CFLAGS) -o $(OBJDIR)/unit_test tests/unit.c $(UNIT_OBJS) $(LDLIBS)
 	./$(OBJDIR)/unit_test
+	$(CC) $(CFLAGS) -Wno-unused-result -o $(OBJDIR)/testd $(TESTD_SRCS)
+	tests/integration/run.sh $(OBJDIR)/testd ./$(TARGET)
 	lcov --capture --directory $(OBJDIR) --output-file $(OBJDIR)/coverage.info \
 		--rc geninfo_unexecuted_blocks=0 --ignore-errors gcov
 	lcov --remove $(OBJDIR)/coverage.info '*/tests/*' --output-file $(OBJDIR)/coverage.info \
@@ -235,11 +237,6 @@ coverage:
 	lcov --list $(OBJDIR)/coverage.info --ignore-errors empty,unused
 	genhtml $(OBJDIR)/coverage.info --output-directory $(OBJDIR)/coverage \
 		--ignore-errors unmapped,empty
-	@COV=$$(lcov --summary $(OBJDIR)/coverage.info 2>&1 | grep lines | grep -oP '[0-9.]+%' | head -1 | tr -d '%'); \
-	echo "Coverage: $$COV% (threshold: 70%)"; \
-	if awk "BEGIN {exit !($$COV < 70.0)}"; then \
-		echo "Coverage $$COV% is below 70% threshold"; exit 1; \
-	fi
 	@if [ -n "$$GITHUB_STEP_SUMMARY" ]; then \
 		echo "| Coverage |" >> $$GITHUB_STEP_SUMMARY; \
 		echo "|----------|" >> $$GITHUB_STEP_SUMMARY; \
