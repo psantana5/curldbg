@@ -1,0 +1,26 @@
+name: Fuzz
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang libssl-dev zlib1g-dev libpsl-dev
+      - name: Build fuzzers
+        run: make fuzz-all
+      - name: Fuzz URL parser (60s)
+        run: ./curldbg-fuzz-url -max_total_time=60
+      - name: Fuzz Huffman decode (60s)
+        run: ./curldbg-fuzz-huffman -max_total_time=60
+      - name: Fuzz HPACK decode (60s)
+        run: ./curldbg-fuzz-hpack -max_total_time=60
+      - name: Fuzz response headers (60s)
+        run: ./curldbg-fuzz -max_total_time=60

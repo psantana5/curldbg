@@ -548,13 +548,13 @@ static int handle_flag(enum flag_id id, const char *value, struct cmdline_opts *
 
         case FLAG_HELP:
             print_help("curldbg");
-            *exit_code = 0;
+            *exit_code = 1;
             return 1;
 
         case FLAG_VERSION:
             printf("curldbg %s\n", CURLDBG_VERSION);
             printf("Author: Pau Santana\n");
-            *exit_code = 0;
+            *exit_code = 1;
             return 1;
 
         case FLAG_PROGRESS_BAR:

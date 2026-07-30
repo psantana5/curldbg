@@ -6,7 +6,23 @@ on:
       - 'v*'
 
 jobs:
+  check-ci:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check CI status for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          STATE=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/status" --jq '.state')
+          echo "Commit combined status: $STATE"
+          if [ "$STATE" = "failure" ] || [ "$STATE" = "error" ]; then
+            echo "CI checks did not pass for this commit. Release blocked."
+            exit 1
+          fi
+          echo "CI status OK ($STATE)"
+
   release:
+    needs: check-ci
     runs-on: ubuntu-24.04
     permissions:
       contents: write
