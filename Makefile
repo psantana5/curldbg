@@ -28,6 +28,7 @@ HEADERS := include/flags.h include/version.h include/url.h include/http.h \
 
 # --- Regular build ---
 CFLAGS := $(OPT) -Wall -Wextra -Wshadow -Werror -Wconversion -Wsign-conversion -Wpedantic -fstack-protector-strong -fcf-protection=full -fstack-clash-protection -D_FORTIFY_SOURCE=2 -pthread -Iinclude -DHAVE_LIBPSL $(LIBPSL_CFLAGS)
+CFLAGS += $(EXTRA_CFLAGS)
 LDLIBS := -pthread -lssl -lcrypto -lz $(LIBPSL_LIBS)
 OBJS := $(SRCS:src/%.c=$(OBJDIR)/%.o)
 UNIT_OBJS := $(filter-out $(OBJDIR)/main.o,$(OBJS))

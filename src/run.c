@@ -772,13 +772,6 @@ int run_single_request(const struct cmdline_opts *c, struct run_options *opts,
     opts->proxy_port = NULL;
     opts->cookie_jar = cookie_jar;
 
-    if (opts->tls_ctx == NULL) {
-        char err[256];
-        opts->tls_ctx = tls_context_create(&opts->tls_params, err, sizeof(err));
-        if (opts->tls_ctx == NULL) {
-            fprintf(stderr, "TLS context setup failed: %s\n", err); return -1;
-        }
-    }
     if (opts->dns_cache == NULL) {
         opts->dns_cache = dns_cache_create(300000);
         if (opts->dns_cache == NULL) {

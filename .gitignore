@@ -19,3 +19,4 @@ obj/
 obj-*/
 curldbg-static
 curldbg-fuzz*
+gmon.out
