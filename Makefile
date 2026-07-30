@@ -60,12 +60,37 @@ define run_unit_and_integration
 	@tests/integration/run.sh $(OBJDIR)/testd ./$(TARGET)
 endef
 
-.PHONY: all clean install test test-novg test-san test-tsan check static fuzz cppcheck coverage
+.PHONY: all clean install test test-novg test-san test-tsan check static fuzz cppcheck coverage \
+        unit-test unit-test-vg unit-test-san unit-test-tsan integration
 
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
+
+$(OBJDIR)/unit_test: tests/unit.c $(UNIT_OBJS)
+	$(CC) -g -O0 -Wall -Wextra -Werror -pthread -Iinclude \
+		-o $@ tests/unit.c $(UNIT_OBJS) $(LDLIBS)
+
+unit-test: $(OBJDIR)/unit_test
+	./$(OBJDIR)/unit_test
+
+unit-test-vg: $(OBJDIR)/unit_test
+	valgrind --leak-check=full --error-exitcode=1 -q $(OBJDIR)/unit_test
+
+unit-test-san: $(SAN_OBJDIR)/unit_test
+	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+	./$(SAN_OBJDIR)/unit_test
+
+unit-test-tsan: $(TSAN_OBJDIR)/unit_test
+	TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1 \
+	setarch x86_64 -R ./$(TSAN_OBJDIR)/unit_test
+
+integration: $(TARGET)
+	$(CC) -O2 -Wall -Wextra -Wno-unused-result -Iinclude \
+		-o $(OBJDIR)/testd $(TESTD_SRCS)
+	@tests/integration/run.sh $(OBJDIR)/testd ./$(TARGET)
 
 $(OBJDIR)/%.o: src/%.c $(HEADERS)
 	@mkdir -p $(dir $@)

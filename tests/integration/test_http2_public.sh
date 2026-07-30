@@ -29,12 +29,12 @@ fail_result() {
 
 fetch_code() {
     local url="$1" out="${2:-/dev/null}"
-    "$CURLDBG" -s -o "$out" -w "%{http_code}" "$url" 2>/dev/null || echo "0"
+    "$CURLDBG" -s -o "$out" -w "%{http_code}" "$url" 2>/dev/null || true
 }
 
 fetch_http_version() {
     local url="$1"
-    "$CURLDBG" -s -o /dev/null -w "%{http_version}" "$url" 2>/dev/null || echo ""
+    "$CURLDBG" -s -o /dev/null -w "%{http_version}" "$url" 2>/dev/null || true
 }
 
 assert_http2_or_skip() {

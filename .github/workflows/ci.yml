@@ -16,10 +16,10 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq valgrind libssl-dev zlib1g-dev libpsl-dev python3-pip python3-venv
+          sudo apt-get install -y -qq valgrind libssl-dev zlib1g-dev libpsl-dev
 
-      - name: Build and test
-        run: make test
+      - name: Unit tests (gcc + Valgrind)
+        run: make unit-test-vg
 
   asan:
     runs-on: ubuntu-latest
@@ -29,13 +29,13 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq libssl-dev zlib1g-dev libpsl-dev python3-pip python3-venv
+          sudo apt-get install -y -qq libssl-dev zlib1g-dev libpsl-dev
 
-      - name: Build and test (ASan/UBSan)
+      - name: Unit tests (ASan/UBSan)
         env:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-        run: make test-san
+        run: make unit-test-san
 
   tsan:
     runs-on: ubuntu-latest
@@ -45,10 +45,10 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq libssl-dev zlib1g-dev libpsl-dev python3-pip python3-venv
+          sudo apt-get install -y -qq libssl-dev zlib1g-dev libpsl-dev
 
-      - name: Build and test (TSan)
-        run: make test-tsan
+      - name: Unit tests (TSan)
+        run: make unit-test-tsan
 
   clang:
     runs-on: ubuntu-latest
@@ -58,10 +58,23 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq clang libssl-dev zlib1g-dev libpsl-dev python3-pip python3-venv
+          sudo apt-get install -y -qq clang libssl-dev zlib1g-dev libpsl-dev
 
-      - name: Build and test (clang)
-        run: make test-novg CC=clang
+      - name: Unit tests (clang)
+        run: make unit-test CC=clang
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libssl-dev zlib1g-dev libpsl-dev python3-pip python3-venv
+
+      - name: Integration tests
+        run: make integration
 
   cppcheck:
     runs-on: ubuntu-latest
