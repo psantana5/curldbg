@@ -270,9 +270,10 @@ int send_request(
                 const char *end = strchr(body_headers + off, '\n');
                 if (end == NULL) break;
                 fprintf(stderr, "> ");
-                fwrite(body_headers + off, 1, end - (body_headers + off) - (*(end-1)=='\r'?1:0), stderr);
+                size_t frag_len = (size_t)(end - (body_headers + off) - (*(end-1)=='\r'?1:0));
+                fwrite(body_headers + off, 1, frag_len, stderr);
                 fputc('\n', stderr);
-                off = end - body_headers + 1;
+                off = (size_t)(end - body_headers + 1);
             }
         }
         if (auth_len > 0) fprintf(stderr, "> Authorization: Basic <redacted>\n");

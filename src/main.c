@@ -90,8 +90,8 @@ int main(int argc, char **argv) {
         size_t hlen = strlen(c->cookie_data) + 10;
         c->cookie_header_alloc = malloc(hlen);
         if (c->cookie_header_alloc != NULL) {
-            size_t n = snprintf(c->cookie_header_alloc, hlen, "Cookie: %s", c->cookie_data);
-            if (n < hlen) {
+            int nn = snprintf(c->cookie_header_alloc, hlen, "Cookie: %s", c->cookie_data);
+            if (nn > 0 && (size_t)nn < hlen) {
                 const char **new_headers = realloc(c->extra_headers, (c->extra_header_count + 1) * sizeof(*c->extra_headers));
                 if (new_headers != NULL) {
                     c->extra_headers = new_headers;

@@ -1536,6 +1536,89 @@ static int parse_h2_header_block(struct h2_connection *h2,
     return 0;
 }
 
+/*
+ * Handle a DATA frame: validate stream state, strip padding, write body,
+ * update flow control, and detect end-of-stream with content-length check.
+ * Returns 0 on success (caller frees payload), -1 on fatal (caller frees
+ * payload and returns -1).
+ */
+static int handle_h2_data_frame(struct h2_connection *h2,
+    struct h2_stream *s, struct h2_stream *dst,
+    struct connection *conn, uint32_t fid, uint8_t flags,
+    const char *payload, size_t length,
+    const struct timespec *ttfb_start,
+    char *error, size_t error_len)
+{
+    if (dst == NULL) return 0;
+    if (dst->state != H2_SS_OPEN && dst->state != H2_SS_HALF_CLOSED_LOCAL) {
+        send_rst_stream(conn, fid, H2_STREAM_CLOSED, error, error_len);
+        return 0;
+    }
+
+    size_t data_off = 0;
+    if (flags & H2_FLAG_PADDED) {
+        if (length < 1) { set_error(error, error_len, "Truncated padded DATA"); return -1; }
+        unsigned char pad_len = (unsigned char)payload[0];
+        data_off = 1;
+        if (data_off + pad_len > length) { set_error(error, error_len, "Invalid padding in DATA"); return -1; }
+    }
+
+    size_t data_len_actual = length - data_off;
+
+    if (data_len_actual == 0 && !(flags & H2_FLAG_END_STREAM)) {
+        send_rst_stream(conn, fid, H2_ENHANCE_YOUR_CALM, error, error_len);
+        return 0;
+    }
+
+    if (dst == s && !s->seen_first_byte && data_len_actual > 0) {
+        if (clock_gettime(CLOCK_MONOTONIC, &s->first_byte_ts) != 0) {
+            set_error(error, error_len, "clock_gettime failed");
+            return -1;
+        }
+        s->out->ttfb_ms = ms_between(ttfb_start, &s->first_byte_ts);
+        s->seen_first_byte = true;
+    }
+
+    if (data_len_actual > 0) {
+        const char *body_data = payload + data_off;
+        if (dst == s && s->body_out != NULL &&
+            fwrite(body_data, 1, data_len_actual, s->body_out) != data_len_actual) {
+            set_error(error, error_len, "Failed to write response body");
+            return -1;
+        }
+        if (dst == s && s->out->preview_len < PREVIEW_BYTES) {
+            size_t take = data_len_actual;
+            if (take > PREVIEW_BYTES - s->out->preview_len)
+                take = PREVIEW_BYTES - s->out->preview_len;
+            memcpy(s->out->preview + s->out->preview_len, body_data, take);
+            s->out->preview_len += take;
+        }
+
+        dst->recv_data_len += data_len_actual;
+        h2->conn_window_consumed += data_len_actual;
+        dst->recv_window_consumed += data_len_actual;
+        flush_window_updates(conn, h2, error, error_len);
+        dst->trailers_pending = true;
+    }
+
+    if (flags & H2_FLAG_END_STREAM) {
+        if (dst == s && s->out->content_length >= 0 &&
+            s->recv_data_len != (uint64_t)s->out->content_length) {
+            set_error(error, error_len,
+                "HTTP/2 Content-Length mismatch: expected %lld bytes, got %llu",
+                (long long)s->out->content_length,
+                (unsigned long long)s->recv_data_len);
+            return -1;
+        }
+        dst->done = true;
+        dst->state = H2_SS_CLOSED;
+        free_stream(h2, dst);
+        flush_window_updates(conn, h2, error, error_len);
+    }
+
+    return 0;
+}
+
 int http2_receive_response(struct connection *conn, uint32_t stream_id,
                            struct response_info *out,
                            const struct timespec *ttfb_start,
@@ -1870,81 +1953,11 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
         }
 
         if (type == H2_DATA) {
-            if (dst == NULL) {
+            if (handle_h2_data_frame(h2, s, dst, conn, fid, flags, payload, length,
+                                     ttfb_start, error, error_len) < 0) {
                 free(payload);
-                continue;
+                return -1;
             }
-            if (dst->state != H2_SS_OPEN && dst->state != H2_SS_HALF_CLOSED_LOCAL) {
-                send_rst_stream(conn, fid, H2_STREAM_CLOSED, error, error_len);
-                free(payload);
-                continue;
-            }
-
-            size_t data_off = 0;
-            if (flags & H2_FLAG_PADDED) {
-                if (length < 1) { free(payload); set_error(error, error_len, "Truncated padded DATA"); return -1; }
-                unsigned char pad_len = (unsigned char)payload[0];
-                data_off = 1;
-                if (data_off + pad_len > length) { free(payload); set_error(error, error_len, "Invalid padding in DATA"); return -1; }
-            }
-
-            size_t data_len_actual = length - data_off;
-
-            if (data_len_actual == 0 && !(flags & H2_FLAG_END_STREAM)) {
-                send_rst_stream(conn, fid, H2_ENHANCE_YOUR_CALM, error, error_len);
-                free(payload);
-                continue;
-            }
-
-            if (dst == s && !s->seen_first_byte && data_len_actual > 0) {
-                if (clock_gettime(CLOCK_MONOTONIC, &s->first_byte_ts) != 0) {
-                    free(payload);
-                    set_error(error, error_len, "clock_gettime failed");
-                    return -1;
-                }
-                s->out->ttfb_ms = ms_between(ttfb_start, &s->first_byte_ts);
-                s->seen_first_byte = true;
-            }
-
-            if (data_len_actual > 0) {
-                const char *body_data = payload + data_off;
-                if (dst == s && s->body_out != NULL &&
-                    fwrite(body_data, 1, data_len_actual, s->body_out) != data_len_actual) {
-                    free(payload);
-                    set_error(error, error_len, "Failed to write response body");
-                    return -1;
-                }
-                if (dst == s && s->out->preview_len < PREVIEW_BYTES) {
-                    size_t take = data_len_actual;
-                    if (take > PREVIEW_BYTES - s->out->preview_len)
-                        take = PREVIEW_BYTES - s->out->preview_len;
-                    memcpy(s->out->preview + s->out->preview_len, body_data, take);
-                    s->out->preview_len += take;
-                }
-
-                dst->recv_data_len += data_len_actual;
-                h2->conn_window_consumed += data_len_actual;
-                dst->recv_window_consumed += data_len_actual;
-                flush_window_updates(conn, h2, error, error_len);
-                dst->trailers_pending = true;
-            }
-
-            if (flags & H2_FLAG_END_STREAM) {
-                if (dst == s && s->out->content_length >= 0 &&
-                    s->recv_data_len != (uint64_t)s->out->content_length) {
-                    free(payload);
-                    set_error(error, error_len,
-                        "HTTP/2 Content-Length mismatch: expected %lld bytes, got %llu",
-                        (long long)s->out->content_length,
-                        (unsigned long long)s->recv_data_len);
-                    return -1;
-                }
-                dst->done = true;
-                dst->state = H2_SS_CLOSED;
-                free_stream(h2, dst);
-                flush_window_updates(conn, h2, error, error_len);
-            }
-
             free(payload);
             continue;
         }

@@ -84,7 +84,8 @@ int parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--") == 0) {
             for (i++; i < argc; i++) {
-                const char **new_urls = realloc(c->urls, (c->url_count + 1) * sizeof(*c->urls));
+                size_t new_url_count = (size_t)c->url_count + 1;
+                const char **new_urls = realloc(c->urls, new_url_count * sizeof(*c->urls));
                 if (new_urls == NULL) { set_cmdline_error(c, "Out of memory"); return -1; }
                 c->urls = new_urls;
                 c->urls[c->url_count++] = argv[i];
@@ -614,7 +615,8 @@ int parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
 
         if (argv[i][0] == '-') { set_cmdline_error(c, "Unknown option: %s", argv[i]); return -1; }
 
-        const char **new_urls = realloc(c->urls, (c->url_count + 1) * sizeof(*c->urls));
+        size_t new_url_count = (size_t)c->url_count + 1;
+        const char **new_urls = realloc(c->urls, new_url_count * sizeof(*c->urls));
         if (new_urls == NULL) { set_cmdline_error(c, "Out of memory"); return -1; }
         c->urls = new_urls;
         c->urls[c->url_count++] = argv[i];

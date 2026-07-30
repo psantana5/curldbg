@@ -484,8 +484,8 @@ static int run_request(const char *input_url, const struct run_options *opts,
         const char **send_headers = opts->extra_headers;
         size_t send_header_count = opts->extra_header_count;
         const char *stack_headers[32];
-        size_t inject_count = (cookie_header_str != NULL ? 1 : 0) +
-                              (referer_header_buf[0] != '\0' ? 1 : 0);
+        size_t inject_count = (size_t)(cookie_header_str != NULL ? 1 : 0) +
+                              (size_t)(referer_header_buf[0] != '\0' ? 1 : 0);
         if (inject_count > 0) {
             size_t total = opts->extra_header_count + inject_count;
             if (total <= sizeof(stack_headers) / sizeof(stack_headers[0])) {

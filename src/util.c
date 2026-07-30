@@ -151,7 +151,7 @@ int url_encode(const char *input, char *output, size_t output_size) {
         unsigned char c = (unsigned char)*p;
         if (isalnum(c) || c == '-' || c == '.' || c == '_' || c == '~') {
             if (o + 1 >= output_size) return -1;
-            output[o++] = c;
+            output[o++] = (char)c;
         } else if (c == ' ') {
             if (o + 3 >= output_size) return -1;
             output[o++] = '%'; output[o++] = '2'; output[o++] = '0';

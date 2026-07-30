@@ -43,7 +43,7 @@ static int bind_to_interface(int fd, const char *bind_interface) {
         return 0;
     }
 #ifdef SO_BINDTODEVICE
-    if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, bind_interface, strlen(bind_interface)) != 0)
+    if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, bind_interface, (socklen_t)strlen(bind_interface)) != 0)
         return -1;
 #endif
     return 0;

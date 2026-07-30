@@ -1,4 +1,4 @@
-.TH CURLDBG 1 "July 2026" "curldbg" "User Commands"
+.TH CURLDBG 1 "July 2026" "curldbg 2.0.1" "User Commands"
 .SH NAME
 curldbg \- lightweight HTTP/HTTPS client and request debugger
 .SH SYNOPSIS
@@ -12,10 +12,12 @@ curldbg \- lightweight HTTP/HTTPS client and request debugger
 \-\-compare-urls [\fIoptions\fR] \fIurl-a\fR \fIurl-b\fR
 .SH DESCRIPTION
 .B curldbg
-performs a single HTTP/HTTPS request (GET/POST/PUT/HEAD), reports per-hop timing
-metrics (DNS, TCP connect, TTFB, total), and prints a short preview of the response
-body. It can follow redirects, track the full redirect chain with per-hop timing,
-compare IPv4 vs IPv6, or compare two URLs side-by-side.
+performs a single HTTP/1.1 or HTTP/2 request (GET/POST/PUT/HEAD) with automatic
+ALPN-based HTTP/2 negotiation, HPACK header compression (Huffman encode+decode),
+and full multiplexing support. It reports per-hop timing metrics (DNS, TCP connect,
+TTFB, total) and prints a short preview of the response body. It can follow
+redirects, track the full redirect chain with per-hop timing, compare IPv4 vs IPv6,
+or compare two URLs side-by-side.
 .P
 When stdout is not a TTY, curldbg auto-silences normal output and writes the raw
 response body to stdout (pipe-friendly). If no URL scheme is given, https:// is
