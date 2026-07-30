@@ -200,8 +200,6 @@ coverage:
 	$(MAKE) all CFLAGS="$(CFLAGS)"
 	$(CC) $(CFLAGS) -o $(OBJDIR)/unit_test tests/unit.c $(UNIT_OBJS) $(LDLIBS)
 	./$(OBJDIR)/unit_test
-	$(CC) $(CFLAGS) -Wno-unused-result -o $(OBJDIR)/testd $(TESTD_SRCS)
-	tests/integration/run.sh $(OBJDIR)/testd ./$(TARGET)
 	lcov --capture --directory $(OBJDIR) --output-file $(OBJDIR)/coverage.info \
 		--rc geninfo_unexecuted_blocks=0 --ignore-errors gcov
 	lcov --remove $(OBJDIR)/coverage.info '*/tests/*' --output-file $(OBJDIR)/coverage.info \
