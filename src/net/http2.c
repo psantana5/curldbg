@@ -1376,6 +1376,166 @@ static void parse_h2_header(const char *name, const char *value,
     }
 }
 
+/*
+ * Parse a single HPACK header block fragment.
+ * Returns: 0 = OK, -1 = HPACK compression error (send GOAWAY), 1 = stream reset.
+ */
+static int parse_h2_header_block(struct h2_connection *h2,
+    struct h2_stream *dst, struct connection *conn, uint32_t fid,
+    const unsigned char *block, size_t block_len,
+    char *error, size_t error_len)
+{
+    size_t hp = 0;
+    while (hp < block_len) {
+        unsigned char b = block[hp];
+
+        if ((b & 0x80) != 0) {
+            uint64_t idx;
+            if (hpack_decode_int(block, block_len, &hp, 7, &idx) != 0)
+                return -1;
+            const char *name, *value;
+            size_t name_len, value_len;
+            if (get_table_entry(&h2->dyn_table, (int)idx, &name, &name_len,
+                                &value, &value_len) != 0)
+                return -1;
+            if (dst->out) {
+                if (name[0] == ':') {
+                    if (dst->trailers_pending || dst->saw_regular_header) {
+                        send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
+                        return 1;
+                    }
+                } else {
+                    dst->saw_regular_header = true;
+                    for (const char *p = name; *p != '\0'; p++) {
+                        if (*p >= 'A' && *p <= 'Z') {
+                            send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
+                            return 1;
+                        }
+                    }
+                }
+                parse_h2_header(name, value, dst->out);
+            }
+            dst->header_list_size += (uint32_t)(name_len + value_len + 32);
+            if (h2->settings.max_header_list_size > 0 &&
+                dst->header_list_size > h2->settings.max_header_list_size) {
+                send_rst_stream(conn, fid, H2_ENHANCE_YOUR_CALM, error, error_len);
+                return 1;
+            }
+        } else if ((b & 0x40) != 0) {
+            uint64_t name_idx;
+            if (hpack_decode_int(block, block_len, &hp, 6, &name_idx) != 0)
+                return -1;
+
+            char name[H2_MAX_HEADER_NAME_LEN];
+            char value[H2_MAX_HEADER_VALUE_LEN];
+            size_t name_len = 0, value_len = 0;
+
+            if (name_idx == 0) {
+                if (hpack_decode_string(h2, block, block_len, &hp,
+                                        name, sizeof(name), &name_len) != 0)
+                    return -1;
+            } else {
+                const char *sn, *sv;
+                size_t sn_len, sv_len;
+                if (get_table_entry(&h2->dyn_table, (int)name_idx, &sn, &sn_len,
+                                    &sv, &sv_len) != 0)
+                    return -1;
+                name_len = sn_len;
+                if (name_len >= sizeof(name)) return -1;
+                memcpy(name, sn, name_len);
+                name[name_len] = '\0';
+            }
+
+            if (hpack_decode_string(h2, block, block_len, &hp,
+                                    value, sizeof(value), &value_len) != 0)
+                return -1;
+
+            hpack_table_add(&h2->dyn_table, name, name_len, value, value_len);
+            if (dst->out) {
+                if (name[0] == ':') {
+                    if (dst->trailers_pending || dst->saw_regular_header) {
+                        send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
+                        return 1;
+                    }
+                } else {
+                    dst->saw_regular_header = true;
+                    for (const char *p = name; *p != '\0'; p++) {
+                        if (*p >= 'A' && *p <= 'Z') {
+                            send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
+                            return 1;
+                        }
+                    }
+                }
+                parse_h2_header(name, value, dst->out);
+            }
+            dst->header_list_size += (uint32_t)(name_len + value_len + 32);
+            if (h2->settings.max_header_list_size > 0 &&
+                dst->header_list_size > h2->settings.max_header_list_size) {
+                send_rst_stream(conn, fid, H2_ENHANCE_YOUR_CALM, error, error_len);
+                return 1;
+            }
+        } else if ((b & 0x20) != 0) {
+            uint64_t new_size;
+            if (hpack_decode_int(block, block_len, &hp, 5, &new_size) != 0)
+                return -1;
+            hpack_table_set_max_size(&h2->dyn_table, (uint32_t)new_size);
+        } else {
+            uint64_t name_idx;
+            if (hpack_decode_int(block, block_len, &hp, 4, &name_idx) != 0)
+                return -1;
+
+            char name[H2_MAX_HEADER_NAME_LEN];
+            char value[H2_MAX_HEADER_VALUE_LEN];
+            size_t name_len = 0, value_len = 0;
+
+            if (name_idx == 0) {
+                if (hpack_decode_string(h2, block, block_len, &hp,
+                                        name, sizeof(name), &name_len) != 0)
+                    return -1;
+            } else {
+                const char *sn, *sv;
+                size_t sn_len, sv_len;
+                if (get_table_entry(&h2->dyn_table, (int)name_idx, &sn, &sn_len,
+                                    &sv, &sv_len) != 0)
+                    return -1;
+                name_len = sn_len;
+                if (name_len >= sizeof(name)) return -1;
+                memcpy(name, sn, name_len);
+                name[name_len] = '\0';
+            }
+
+            if (hpack_decode_string(h2, block, block_len, &hp,
+                                    value, sizeof(value), &value_len) != 0)
+                return -1;
+
+            if (dst->out) {
+                if (name[0] == ':') {
+                    if (dst->trailers_pending || dst->saw_regular_header) {
+                        send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
+                        return 1;
+                    }
+                } else {
+                    dst->saw_regular_header = true;
+                    for (const char *p = name; *p != '\0'; p++) {
+                        if (*p >= 'A' && *p <= 'Z') {
+                            send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
+                            return 1;
+                        }
+                    }
+                }
+                parse_h2_header(name, value, dst->out);
+            }
+            dst->header_list_size += (uint32_t)(name_len + value_len + 32);
+            if (h2->settings.max_header_list_size > 0 &&
+                dst->header_list_size > h2->settings.max_header_list_size) {
+                send_rst_stream(conn, fid, H2_ENHANCE_YOUR_CALM, error, error_len);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 int http2_receive_response(struct connection *conn, uint32_t stream_id,
                            struct response_info *out,
                            const struct timespec *ttfb_start,
@@ -1688,166 +1848,11 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                 s->seen_first_byte = true;
             }
 
-            size_t hpack_pos = 0;
-            while (hpack_pos < hpack_len) {
-                unsigned char b = (unsigned char)payload[hpack_off + hpack_pos];
-
-                if ((b & 0x80) != 0) {
-                    uint64_t idx;
-                    if (hpack_decode_int((const unsigned char *)payload + hpack_off,
-                                         hpack_len, &hpack_pos, 7, &idx) != 0)
-                        goto hpack_error;
-                    const char *name, *value;
-                    size_t name_len, value_len;
-                    if (get_table_entry(&h2->dyn_table, (int)idx, &name, &name_len,
-                                        &value, &value_len) != 0)
-                        goto hpack_error;
-                    if (dst->out) {
-                        if (name[0] == ':') {
-                            if (dst->trailers_pending || dst->saw_regular_header) {
-                                send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
-                                goto stream_reset;
-                            }
-                        } else {
-                            dst->saw_regular_header = true;
-                            for (const char *p = name; *p != '\0'; p++) {
-                                if (*p >= 'A' && *p <= 'Z') {
-                                    send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
-                                    goto stream_reset;
-                                }
-                            }
-                        }
-                        parse_h2_header(name, value, dst->out);
-                    }
-                    dst->header_list_size += (uint32_t)(name_len + value_len + 32);
-                    if (h2->settings.max_header_list_size > 0 &&
-                        dst->header_list_size > h2->settings.max_header_list_size) {
-                        send_rst_stream(conn, fid, H2_ENHANCE_YOUR_CALM, error, error_len);
-                        goto stream_reset;
-                    }
-                } else if ((b & 0x40) != 0) {
-                    uint64_t name_idx;
-                    if (hpack_decode_int((const unsigned char *)payload + hpack_off,
-                                         hpack_len, &hpack_pos, 6, &name_idx) != 0)
-                        goto hpack_error;
-
-                    char name[H2_MAX_HEADER_NAME_LEN];
-                    char value[H2_MAX_HEADER_VALUE_LEN];
-                    size_t name_len = 0, value_len = 0;
-
-                    if (name_idx == 0) {
-                        if (hpack_decode_string(h2,
-                                                 (const unsigned char *)payload + hpack_off,
-                                                 hpack_len, &hpack_pos,
-                                                 name, sizeof(name), &name_len) != 0)
-                            goto hpack_error;
-                    } else {
-                        const char *sn, *sv;
-                        size_t sn_len, sv_len;
-                        if (get_table_entry(&h2->dyn_table, (int)name_idx, &sn, &sn_len,
-                                            &sv, &sv_len) != 0)
-                            goto hpack_error;
-                        name_len = sn_len;
-                        if (name_len >= sizeof(name)) goto hpack_error;
-                        memcpy(name, sn, name_len);
-                        name[name_len] = '\0';
-                    }
-
-                    if (hpack_decode_string(h2,
-                                             (const unsigned char *)payload + hpack_off,
-                                             hpack_len, &hpack_pos,
-                                             value, sizeof(value), &value_len) != 0)
-                        goto hpack_error;
-
-                    hpack_table_add(&h2->dyn_table, name, name_len, value, value_len);
-                    if (dst->out) {
-                        if (name[0] == ':') {
-                            if (dst->trailers_pending || dst->saw_regular_header) {
-                                send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
-                                goto stream_reset;
-                            }
-                        } else {
-                            dst->saw_regular_header = true;
-                            for (const char *p = name; *p != '\0'; p++) {
-                                if (*p >= 'A' && *p <= 'Z') {
-                                    send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
-                                    goto stream_reset;
-                                }
-                            }
-                        }
-                        parse_h2_header(name, value, dst->out);
-                    }
-                    dst->header_list_size += (uint32_t)(name_len + value_len + 32);
-                    if (h2->settings.max_header_list_size > 0 &&
-                        dst->header_list_size > h2->settings.max_header_list_size) {
-                        send_rst_stream(conn, fid, H2_ENHANCE_YOUR_CALM, error, error_len);
-                        goto stream_reset;
-                    }
-                } else if ((b & 0x20) != 0) {
-                    uint64_t new_size;
-                    if (hpack_decode_int((const unsigned char *)payload + hpack_off,
-                                         hpack_len, &hpack_pos, 5, &new_size) != 0)
-                        goto hpack_error;
-                    hpack_table_set_max_size(&h2->dyn_table, (uint32_t)new_size);
-                } else {
-                    uint64_t name_idx;
-                    if (hpack_decode_int((const unsigned char *)payload + hpack_off,
-                                         hpack_len, &hpack_pos, 4, &name_idx) != 0)
-                        goto hpack_error;
-
-                    char name[H2_MAX_HEADER_NAME_LEN];
-                    char value[H2_MAX_HEADER_VALUE_LEN];
-                    size_t name_len = 0, value_len = 0;
-
-                    if (name_idx == 0) {
-                        if (hpack_decode_string(h2,
-                                                 (const unsigned char *)payload + hpack_off,
-                                                 hpack_len, &hpack_pos,
-                                                 name, sizeof(name), &name_len) != 0)
-                            goto hpack_error;
-                    } else {
-                        const char *sn, *sv;
-                        size_t sn_len, sv_len;
-                        if (get_table_entry(&h2->dyn_table, (int)name_idx, &sn, &sn_len,
-                                            &sv, &sv_len) != 0)
-                            goto hpack_error;
-                        name_len = sn_len;
-                        if (name_len >= sizeof(name)) goto hpack_error;
-                        memcpy(name, sn, name_len);
-                        name[name_len] = '\0';
-                    }
-
-                    if (hpack_decode_string(h2,
-                                             (const unsigned char *)payload + hpack_off,
-                                             hpack_len, &hpack_pos,
-                                             value, sizeof(value), &value_len) != 0)
-                        goto hpack_error;
-
-                    if (dst->out) {
-                        if (name[0] == ':') {
-                            if (dst->trailers_pending || dst->saw_regular_header) {
-                                send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
-                                goto stream_reset;
-                            }
-                        } else {
-                            dst->saw_regular_header = true;
-                            for (const char *p = name; *p != '\0'; p++) {
-                                if (*p >= 'A' && *p <= 'Z') {
-                                    send_rst_stream(conn, fid, H2_PROTOCOL_ERROR, error, error_len);
-                                    goto stream_reset;
-                                }
-                            }
-                        }
-                        parse_h2_header(name, value, dst->out);
-                    }
-                    dst->header_list_size += (uint32_t)(name_len + value_len + 32);
-                    if (h2->settings.max_header_list_size > 0 &&
-                        dst->header_list_size > h2->settings.max_header_list_size) {
-                        send_rst_stream(conn, fid, H2_ENHANCE_YOUR_CALM, error, error_len);
-                        goto stream_reset;
-                    }
-                }
-            }
+            int hp_ret = parse_h2_header_block(h2, dst, conn, fid,
+                (const unsigned char *)payload + hpack_off, hpack_len,
+                error, error_len);
+            if (hp_ret < 0) goto hpack_error;
+            if (hp_ret > 0) goto stream_reset;
 
             if (flags & H2_FLAG_END_STREAM) {
                 dst->done = true;
