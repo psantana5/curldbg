@@ -9,7 +9,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -21,8 +21,21 @@ jobs:
       - name: Unit tests (gcc + Valgrind)
         run: make unit-test-vg
 
-  asan:
+  latest:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libssl-dev zlib1g-dev libpsl-dev
+
+      - name: Unit tests (forward compat)
+        run: make unit-test
+
+  asan:
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -38,7 +51,7 @@ jobs:
         run: make unit-test-san
 
   tsan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -51,7 +64,7 @@ jobs:
         run: make unit-test-tsan
 
   clang:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -64,7 +77,7 @@ jobs:
         run: make unit-test CC=clang
 
   integration:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -77,7 +90,7 @@ jobs:
         run: make integration
 
   cppcheck:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -90,7 +103,7 @@ jobs:
         run: make cppcheck
 
   coverage:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 

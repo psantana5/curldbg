@@ -167,8 +167,8 @@ check: test test-san test-tsan
 	@echo "=== check: all targets passed ==="
 
 static: CFLAGS += -no-pie
-STATIC_SSL_DEPS := $(filter-out -lssl -lcrypto, $(shell pkg-config --static --libs libssl 2>/dev/null))
-static: LDLIBS = -pthread -lz $(LIBPSL_LIBS) /usr/lib/x86_64-linux-gnu/libssl.a /usr/lib/x86_64-linux-gnu/libcrypto.a $(STATIC_SSL_DEPS)
+STATIC_SSL_DEPS := $(filter-out -lssl -lcrypto -ldl -lpthread -pthread, $(shell pkg-config --static --libs libssl 2>/dev/null))
+static: LDLIBS = -pthread -lz $(LIBPSL_LIBS) -l:libssl.a -l:libcrypto.a $(STATIC_SSL_DEPS)
 static: $(OBJS)
 	$(CC) $(CFLAGS) -s -static-libgcc -o $(TARGET)-static $(OBJS) $(LDLIBS)
 	@echo "Built $(TARGET)-static (statically linked)"
