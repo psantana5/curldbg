@@ -600,32 +600,27 @@ static const uint8_t huff_nbits[256] = {
 
 static size_t huffman_encode(const unsigned char *input, size_t input_len,
                               unsigned char *output, size_t output_size) {
-    uint64_t bits = 0;
-    int bits_left = 40;
+    uint64_t buffer = 0;
+    int bits = 0;
     size_t out_pos = 0;
 
     for (size_t i = 0; i < input_len; i++) {
         uint8_t c = input[i];
         uint32_t code = huff_sym[c];
         uint8_t nbits = huff_nbits[c];
-        bits = (bits << nbits) | code;
-        bits_left -= nbits;
-        while (bits_left <= 32) {
+        buffer = (buffer << nbits) | code;
+        bits += nbits;
+        while (bits >= 8) {
             if (out_pos >= output_size) return 0;
-            output[out_pos++] = (unsigned char)(bits >> (bits_left > 0 ? bits_left : 0));
-            bits_left += 8;
+            bits -= 8;
+            output[out_pos++] = (unsigned char)(buffer >> bits);
         }
     }
 
-    if (bits_left < 40) {
-        bits = (bits << bits_left) | (((uint64_t)1 << bits_left) - 1);
-        bits_left = 0;
-        while (bits_left < 40) {
-            if (out_pos >= output_size) return 0;
-            output[out_pos++] = (unsigned char)(bits >> (40 - 8));
-            bits <<= 8;
-            bits_left += 8;
-        }
+    if (bits > 0) {
+        if (out_pos >= output_size) return 0;
+        buffer = (buffer << (8 - bits)) | (uint64_t)((1U << (8 - bits)) - 1);
+        output[out_pos++] = (unsigned char)buffer;
     }
 
     return out_pos;
