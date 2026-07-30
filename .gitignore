@@ -18,3 +18,4 @@ obj/unit_test
 obj/
 obj-*/
 curldbg-static
+curldbg-fuzz*
