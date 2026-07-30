@@ -27,7 +27,7 @@ HEADERS := include/flags.h include/version.h include/url.h include/http.h \
            include/util.h include/curldbg.h
 
 # --- Regular build ---
-CFLAGS := $(OPT) -Wall -Wextra -Wshadow -fstack-protector-strong -D_FORTIFY_SOURCE=2 -pthread -Iinclude -DHAVE_LIBPSL $(LIBPSL_CFLAGS)
+CFLAGS := $(OPT) -Wall -Wextra -Wshadow -Werror -fstack-protector-strong -D_FORTIFY_SOURCE=2 -pthread -Iinclude -DHAVE_LIBPSL $(LIBPSL_CFLAGS)
 LDLIBS := -pthread -lssl -lcrypto -lz $(LIBPSL_LIBS)
 OBJS := $(SRCS:src/%.c=$(OBJDIR)/%.o)
 UNIT_OBJS := $(filter-out $(OBJDIR)/main.o,$(OBJS))
@@ -167,7 +167,8 @@ check: test test-san test-tsan
 	@echo "=== check: all targets passed ==="
 
 static: CFLAGS += -no-pie
-static: LDLIBS = -pthread /usr/lib/x86_64-linux-gnu/libssl.a /usr/lib/x86_64-linux-gnu/libcrypto.a
+STATIC_SSL_DEPS := $(filter-out -lssl -lcrypto, $(shell pkg-config --static --libs libssl 2>/dev/null))
+static: LDLIBS = -pthread -lz $(LIBPSL_LIBS) /usr/lib/x86_64-linux-gnu/libssl.a /usr/lib/x86_64-linux-gnu/libcrypto.a $(STATIC_SSL_DEPS)
 static: $(OBJS)
 	$(CC) $(CFLAGS) -s -static-libgcc -o $(TARGET)-static $(OBJS) $(LDLIBS)
 	@echo "Built $(TARGET)-static (statically linked)"

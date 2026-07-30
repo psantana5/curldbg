@@ -29,4 +29,14 @@ void clear_race_info(struct connect_race_info *race_info);
 void trim_spaces(char **start);
 long deadline_remaining_ms(const struct timespec *start, int max_ms);
 
+static inline size_t safe_strlcpy(char *dst, const char *src, size_t dsize) {
+    size_t slen = strlen(src);
+    if (dsize > 0) {
+        size_t copylen = slen < dsize - 1 ? slen : dsize - 1;
+        memcpy(dst, src, copylen);
+        dst[copylen] = '\0';
+    }
+    return slen;
+}
+
 #endif

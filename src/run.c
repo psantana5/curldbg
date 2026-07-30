@@ -192,7 +192,7 @@ static int establish_connection(struct connection *conn,
         if (opts->proxy_port != NULL)
             strncpy(proxy_ui.port, opts->proxy_port, sizeof(proxy_ui.port) - 1);
         else
-            strcpy(proxy_ui.port, "8080");
+            safe_strlcpy(proxy_ui.port, "8080", sizeof(proxy_ui.port));
         freeaddrinfo(*conn_addrs);
         *conn_addrs = NULL;
         int pgai_error = 0;
@@ -338,7 +338,7 @@ static int run_request(const char *input_url, const struct run_options *opts,
     if (strlen(input_url) >= sizeof(current_url)) {
         snprintf(out->error, sizeof(out->error), "URL too long"); return -1;
     }
-    strcpy(current_url, input_url);
+    safe_strlcpy(current_url, input_url, sizeof(current_url));
 
     if (setup_upload_file(opts->upload_path, &upload_file, &upload_size,
                           &chunked_upload, out->error, sizeof(out->error)) != 0) return -1;
@@ -358,7 +358,7 @@ static int run_request(const char *input_url, const struct run_options *opts,
     char method[32];
     const char *data;
     size_t data_len;
-    strcpy(method, opts->method);
+    safe_strlcpy(method, opts->method, sizeof(method));
     data = opts->data;
     data_len = opts->data_len;
 
@@ -367,7 +367,7 @@ static int run_request(const char *input_url, const struct run_options *opts,
         struct url_info url = {0}, redirected_url = {0};
         struct connect_race_info race_info;
         struct timespec ttfb_start;
-        bool can_redirect = false, reuse_connection = false;
+        bool can_redirect = false, reuse_connection = false, request_retried = false;
         double hop_dns_ms = 0.0, hop_connect_ms = 0.0;
 
         if (opts->max_time_ms > 0) {
@@ -392,7 +392,7 @@ static int run_request(const char *input_url, const struct run_options *opts,
 
         if (use_proxy) {
             reuse_connection = false;
-            strcpy(out->hops[out->hop_count].connected_ip, "via-proxy");
+            safe_strlcpy(out->hops[out->hop_count].connected_ip, "via-proxy", sizeof(out->hops[0].connected_ip));
             out->hops[out->hop_count].connected_family = AF_UNSPEC;
         } else {
             /* Reuse connection if target host/port/tls didn't change vs last hop */
@@ -402,7 +402,7 @@ static int run_request(const char *input_url, const struct run_options *opts,
                 url.use_tls == *conn_use_tls);
             if (reuse_connection && out->hop_count > 0) {
                 const struct hop_info *prev = &out->hops[out->hop_count - 1];
-                strcpy(out->hops[out->hop_count].connected_ip, prev->connected_ip);
+                safe_strlcpy(out->hops[out->hop_count].connected_ip, prev->connected_ip, sizeof(out->hops[0].connected_ip));
                 out->hops[out->hop_count].connected_family = prev->connected_family;
             }
         }
@@ -513,7 +513,6 @@ static int run_request(const char *input_url, const struct run_options *opts,
         }
 
         int sr;
-        bool request_retried = false;
         if (http2_negotiated(conn)) {
             snprintf(out->resp.http_version, sizeof(out->resp.http_version), "HTTP/2");
             const char *effective_auth = opts->basic_auth;
@@ -645,7 +644,7 @@ static int run_request(const char *input_url, const struct run_options *opts,
             /* 301/302/303: downgrade to GET, per RFC 7231 */
             if (out->resp.status_code == 301 || out->resp.status_code == 302 ||
                 out->resp.status_code == 303) {
-                strcpy(method, "GET");
+                safe_strlcpy(method, "GET", sizeof(method));
                 data = NULL;
                 data_len = 0;
                 close_upload_file(&upload_file);
@@ -678,7 +677,7 @@ static int run_request(const char *input_url, const struct run_options *opts,
             conn_host[0] = '\0'; conn_port[0] = '\0';
         }
 
-        strcpy(current_url, next_url);
+        safe_strlcpy(current_url, next_url, sizeof(current_url));
         redirect_count++;
     }
 
@@ -708,7 +707,7 @@ done:
 void init_run_options(struct run_options *opts, const struct cmdline_opts *c) {
     memset(opts, 0, sizeof(*opts));
     opts->follow_redirects = c->follow_redirects;
-    strcpy(opts->method, c->request_method);
+    safe_strlcpy(opts->method, c->request_method, sizeof(opts->method));
     opts->data = c->request_data;
     opts->data_len = c->request_data_len;
     opts->address_family = c->address_family;
@@ -748,6 +747,7 @@ void init_run_options(struct run_options *opts, const struct cmdline_opts *c) {
 int run_single_request(const struct cmdline_opts *c, struct run_options *opts,
                                struct run_result *result, FILE *body_out,
                                struct connection_state *reuse) {
+    char *owned_proxy_host = NULL, *owned_proxy_port = NULL;
     struct cookie_jar *cookie_jar = opts->cookie_jar;
     SSL_CTX *existing_tls_ctx = opts->tls_ctx;
     struct dns_cache *existing_dns_cache = opts->dns_cache;
@@ -779,8 +779,10 @@ int run_single_request(const struct cmdline_opts *c, struct run_options *opts,
         if (parse_url(c->proxy_url, &proxy_ui) != 0) {
             fprintf(stderr, "Invalid proxy URL: %s\n", c->proxy_url); return -1;
         }
-        opts->proxy_host = strdup(proxy_ui.host);
-        opts->proxy_port = strdup(proxy_ui.port);
+        owned_proxy_host = strdup(proxy_ui.host);
+        owned_proxy_port = strdup(proxy_ui.port);
+        opts->proxy_host = owned_proxy_host;
+        opts->proxy_port = owned_proxy_port;
     }
 
     int max_attempts = 1 + opts->retry_count;
@@ -795,8 +797,8 @@ int run_single_request(const struct cmdline_opts *c, struct run_options *opts,
         }
     }
 
-    free((void *)opts->proxy_host);
-    free((void *)opts->proxy_port);
+    free(owned_proxy_host);
+    free(owned_proxy_port);
     if (rc != 0) {
         if (opts->retry_count > 0) {
             if ((!c->silent || c->show_error) && result->error[0] != '\0')

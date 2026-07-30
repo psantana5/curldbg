@@ -66,9 +66,9 @@ int main(int argc, char **argv) {
         if (c->method_explicit && strcasecmp(c->request_method, "PUT") != 0) {
             fprintf(stderr, "-T/--upload-file requires -X PUT or no -X flag\n"); exit_code = EXIT_FAILURE; goto cleanup;
         }
-        if (!c->method_explicit) strcpy(c->request_method, "PUT");
+        if (!c->method_explicit) safe_strlcpy(c->request_method, "PUT", sizeof(c->request_method));
     }
-    if (c->request_data != NULL && !c->method_explicit) strcpy(c->request_method, "POST");
+    if (c->request_data != NULL && !c->method_explicit) safe_strlcpy(c->request_method, "POST", sizeof(c->request_method));
 
     /* Parse proxy URL */
     char proxy_host_buf[256] = "", proxy_port_buf[16] = "";
@@ -79,8 +79,8 @@ int main(int argc, char **argv) {
         if (parse_url(c->proxy_url, &proxy_ui) != 0) {
             fprintf(stderr, "Invalid proxy URL: %s\n", c->proxy_url); exit_code = EXIT_FAILURE; goto cleanup;
         }
-        strcpy(proxy_host_buf, proxy_ui.host);
-        strcpy(proxy_port_buf, proxy_ui.port);
+        safe_strlcpy(proxy_host_buf, proxy_ui.host, sizeof(proxy_host_buf));
+        safe_strlcpy(proxy_port_buf, proxy_ui.port, sizeof(proxy_port_buf));
         proxy_host = proxy_host_buf;
         proxy_port = proxy_port_buf;
     }

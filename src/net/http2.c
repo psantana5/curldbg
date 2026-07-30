@@ -99,7 +99,6 @@ struct h2_hpack_table {
     size_t size;
 };
 
-#define HUFF_NODE_TERMINAL 0x80000000
 
 struct huff_node {
     uint32_t child[2];
@@ -598,7 +597,7 @@ static const uint8_t huff_nbits[256] = {
 #define HUFF_EOS_CODE 0x3fffffff
 #define HUFF_EOS_BITS 30
 
-static size_t huffman_encode(const unsigned char *input, size_t input_len,
+size_t huffman_encode(const unsigned char *input, size_t input_len,
                               unsigned char *output, size_t output_size) {
     uint64_t buffer = 0;
     int bits = 0;
@@ -626,7 +625,7 @@ static size_t huffman_encode(const unsigned char *input, size_t input_len,
     return out_pos;
 }
 
-static int huff_tree_init(struct huff_node **tree, int *alloc) {
+int huff_tree_init(struct huff_node **tree, int *alloc) {
     if (*tree != NULL) return 0;
     *alloc = 512;
     *tree = calloc((size_t)*alloc, sizeof(struct huff_node));
@@ -664,7 +663,7 @@ static int huff_tree_init(struct huff_node **tree, int *alloc) {
     return 0;
 }
 
-static size_t huffman_decode(struct huff_node *tree,
+size_t huffman_decode(const struct huff_node *tree,
                               const unsigned char *input, size_t input_len,
                               unsigned char *output, size_t output_size) {
     if (tree == NULL) return 0;

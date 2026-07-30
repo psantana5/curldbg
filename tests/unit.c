@@ -1907,6 +1907,43 @@ TEST(test_parse_cmdline_combined_flags_H) {
 }
 
 /* ================================================================
+ * Huffman HPACK
+ * ================================================================ */
+
+TEST(test_huffman_roundtrip) {
+    struct huff_node *tree = NULL;
+    int alloc = 0;
+    ASSERT_INT_EQ(huff_tree_init(&tree, &alloc), 0, "huff_tree_init");
+    ASSERT_PTR_NOTNULL(tree, "huff_tree");
+
+    static const char *cases[] = {
+        "",
+        "0",
+        "GET",
+        "https://example.com/path",
+        "Hello, World!",
+        "content-type",
+        "application/json",
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        size_t in_len = strlen(cases[i]);
+        unsigned char enc_buf[4096];
+        size_t enc_len = huffman_encode((const unsigned char *)cases[i], in_len,
+                                         enc_buf, sizeof(enc_buf));
+        ASSERT_TRUE(enc_len > 0 || in_len == 0, "huffman_encode returned >0 for non-empty input");
+
+        unsigned char dec_buf[4096];
+        size_t dec_len = huffman_decode(tree, enc_buf, enc_len, dec_buf, sizeof(dec_buf));
+        ASSERT_INT_EQ(dec_len, in_len, "decoded length matches original" /*, cases[i]*/);
+        ASSERT_INT_EQ(memcmp(dec_buf, cases[i], in_len), 0, "decoded content matches original" /*, cases[i]*/);
+    }
+
+    free(tree);
+}
+
+/* ================================================================
  * Main
  * ================================================================ */
 
@@ -2118,6 +2155,8 @@ int main(void) {
     test_parse_cmdline_combined_flags_o();
     test_parse_cmdline_combined_flags_o_attached();
     test_parse_cmdline_combined_flags_H();
+
+    test_huffman_roundtrip();
 
     printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
            tests_run - tests_failed, tests_failed, tests_run);

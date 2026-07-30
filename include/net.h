@@ -35,6 +35,9 @@ struct connect_race_info {
 };
 
 struct h2_connection;
+struct huff_node;
+
+#define HUFF_NODE_TERMINAL 0x80000000u
 
 struct connection {
     int fd;
@@ -112,5 +115,13 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                            const struct timespec *ttfb_start,
                            FILE *body_out, char *error, size_t error_len);
 void http2_cleanup(struct connection *conn);
+
+/* Huffman HPACK */
+int huff_tree_init(struct huff_node **tree, int *alloc);
+size_t huffman_encode(const unsigned char *input, size_t input_len,
+                       unsigned char *output, size_t output_size);
+size_t huffman_decode(const struct huff_node *tree,
+                       const unsigned char *input, size_t input_len,
+                       unsigned char *output, size_t output_size);
 
 #endif
