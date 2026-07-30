@@ -1940,7 +1940,6 @@ TEST(test_huffman_roundtrip) {
         ASSERT_INT_EQ(memcmp(dec_buf, cases[i], in_len), 0, "decoded content matches original" /*, cases[i]*/);
     }
 
-    free(tree);
 }
 
 /* ================================================================

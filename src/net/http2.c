@@ -136,8 +136,7 @@ struct h2_connection {
     size_t conn_window_consumed;
     struct h2_hpack_table dyn_table;
     struct huff_node *huff_tree;
-    int huff_tree_alloc;
-    struct h2_stream streams[H2_MAX_STREAMS];
+    struct h2_stream *streams;
 };
 
 static uint32_t read24(const unsigned char *p) {
@@ -442,6 +441,13 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
     }
     conn->h2 = h2;
 
+    h2->streams = calloc(H2_MAX_STREAMS, sizeof(struct h2_stream));
+    if (h2->streams == NULL) {
+        free(h2);
+        set_error(error, error_len, "Out of memory");
+        return -1;
+    }
+
     h2->conn_window = H2_RFC_INITIAL_WINDOW;
     h2->settings.max_frame_size = H2_DEFAULT_MAX_FRAME_SIZE;
     h2->settings.initial_window_size = H2_RFC_INITIAL_WINDOW;
@@ -458,7 +464,7 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
         return -1;
     }
 
-    if (huff_tree_init(&h2->huff_tree, &h2->huff_tree_alloc) != 0) {
+    if (huff_tree_init(&h2->huff_tree, NULL) != 0) {
         set_error(error, error_len, "Out of memory");
         return -1;
     }
@@ -1556,7 +1562,7 @@ void http2_cleanup(struct connection *conn) {
     for (size_t i = 0; i < h2->dyn_table.count; i++)
         hpack_entry_free(&h2->dyn_table.entries[i]);
     free(h2->dyn_table.entries);
-    free(h2->huff_tree);
+    free(h2->streams);
     free(h2);
     conn->h2 = NULL;
 }
