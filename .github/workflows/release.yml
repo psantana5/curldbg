@@ -25,7 +25,7 @@ jobs:
       - name: Extract version
         id: version
         run: |
-          VERSION=$(grep -oP '#define CURLDBG_VERSION "\K[^"]+' include/curldbg.h)
+          VERSION=$(grep -oP '#define CURLDBG_VERSION "\K[^"]+' include/version.h)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Validate tag matches version
