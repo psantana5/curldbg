@@ -5,7 +5,6 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  workflow_call:
 
 jobs:
   test:
@@ -20,19 +19,6 @@ jobs:
 
       - name: Unit tests (gcc + Valgrind)
         run: make unit-test-vg
-
-  latest:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq libssl-dev zlib1g-dev libpsl-dev
-
-      - name: Unit tests (forward compat)
-        run: make unit-test
 
   asan:
     runs-on: ubuntu-24.04

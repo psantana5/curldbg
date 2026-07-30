@@ -928,8 +928,8 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
                         return -1;
                     }
                 }
-                uint32_t val = (uint32_t)(p[off + 2] << 24) | (p[off + 3] << 16) |
-                               (p[off + 4] << 8) | p[off + 5];
+                uint32_t val = ((uint32_t)p[off + 2] << 24) | ((uint32_t)p[off + 3] << 16) |
+                               ((uint32_t)p[off + 4] << 8) | (uint32_t)p[off + 5];
                 switch (id) {
                     case H2_SETTINGS_HEADER_TABLE_SIZE:
                         h2->settings.header_table_size = val;
@@ -1705,8 +1705,8 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                         return -1;
                     }
                 }
-                uint32_t val = (uint32_t)(p[off + 2] << 24) | (p[off + 3] << 16) |
-                               (p[off + 4] << 8) | p[off + 5];
+                uint32_t val = ((uint32_t)p[off + 2] << 24) | ((uint32_t)p[off + 3] << 16) |
+                               ((uint32_t)p[off + 4] << 8) | (uint32_t)p[off + 5];
                 if (id == H2_SETTINGS_INITIAL_WINDOW_SIZE) {
                     if (val > 2147483647u) {
                         free(payload);
