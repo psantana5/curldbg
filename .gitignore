@@ -17,3 +17,4 @@ curldbg-fuzz
 obj/unit_test
 obj/
 obj-*/
+curldbg-static
