@@ -338,6 +338,7 @@ void cookie_jar_load(struct cookie_jar *jar, const char *filepath) {
     while (fgets(line, sizeof(line), f) != NULL) {
         if (line[0] == '#' || line[0] == '\n') continue;
         size_t len = strlen(line);
+        if (len >= sizeof(line) - 1 && strchr(line, '\n') == NULL && strchr(line, '\r') == NULL) continue;
         while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = '\0';
         if (len == 0) continue;
 

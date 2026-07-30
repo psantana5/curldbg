@@ -60,6 +60,7 @@ struct cmdline_opts {
     const char *capath;
     const char **urls;
     int url_count;
+    int force_http_version;
     struct tls_params tls_params;
 };
 

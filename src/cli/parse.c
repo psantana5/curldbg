@@ -493,6 +493,14 @@ static int handle_flag(enum flag_id id, const char *value, struct cmdline_opts *
             c->happy_eyeballs = false;
             return 0;
 
+        case FLAG_HTTP1_1:
+            c->force_http_version = 1;
+            return 0;
+
+        case FLAG_HTTP2:
+            c->force_http_version = 2;
+            return 0;
+
         case FLAG_INTERFACE:
             if (value == NULL) { set_cmdline_error(c, "Missing value for --interface"); return -1; }
             c->bind_interface = value;

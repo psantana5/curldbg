@@ -512,6 +512,17 @@ static int run_request(const char *input_url, const struct run_options *opts,
             }
         }
 
+        if (opts->force_http_version == 1 && http2_negotiated(conn)) {
+            snprintf(out->error, sizeof(out->error),
+                     "Server negotiated HTTP/2 but --http1.1 was forced");
+            rc = -1; goto error_cleanup;
+        }
+        if (opts->force_http_version == 2 && conn->use_tls && !http2_negotiated(conn)) {
+            snprintf(out->error, sizeof(out->error),
+                     "Server did not negotiate HTTP/2 but --http2 was forced");
+            rc = -1; goto error_cleanup;
+        }
+
         int sr;
         if (http2_negotiated(conn)) {
             snprintf(out->resp.http_version, sizeof(out->resp.http_version), "HTTP/2");
@@ -735,6 +746,7 @@ void init_run_options(struct run_options *opts, const struct cmdline_opts *c) {
     opts->tls_max_version = c->tls_max_version;
     opts->retry_count = c->retry_count;
     opts->retry_delay_ms = c->retry_delay_ms;
+    opts->force_http_version = c->force_http_version;
     opts->compressed = c->compressed;
     opts->unix_socket_path = c->unix_socket_path;
     opts->cacert = c->cacert;

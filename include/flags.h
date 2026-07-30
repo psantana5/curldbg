@@ -46,6 +46,8 @@ enum flag_id {
     FLAG_COMPARE_URLS,
     FLAG_HELP,
     FLAG_VERSION,
+    FLAG_HTTP1_1,
+    FLAG_HTTP2,
     FLAG_PROGRESS_BAR,
 };
 
@@ -97,6 +99,8 @@ static const struct flag_info g_flags[] = {
     FLG(NULL,  "--interface",     "<addr>",   "Bind to specific interface or IP", "Network", FLAG_INTERFACE),
     FLG(NULL,  "--proxy",         "<url>",    "HTTP CONNECT proxy (http:// only)", "Network", FLAG_PROXY),
     FLG(NULL,  "--unix-socket",   "<path>",   "Connect via Unix domain socket", "Network", FLAG_UNIX_SOCKET),
+    FLG(NULL,  "--http1.1",       NULL,       "Force HTTP/1.1", "Network", FLAG_HTTP1_1),
+    FLG(NULL,  "--http2",         NULL,       "Force HTTP/2", "Network", FLAG_HTTP2),
 
     FLG("-k",  "--insecure",      NULL,       "Skip TLS certificate verification", "TLS", FLAG_INSECURE),
     FLG(NULL,  "--cacert",        "<file>",   "Custom CA certificate file", "TLS", FLAG_CACERT),

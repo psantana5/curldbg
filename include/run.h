@@ -47,6 +47,7 @@ struct run_options {
     int tls_max_version;
     int retry_count;
     int retry_delay_ms;
+    int force_http_version;
     FILE *body_out;
     const char *basic_auth;
     const char **extra_headers;

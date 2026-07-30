@@ -1010,6 +1010,29 @@ static int apply_h2_header(const struct h2_connection *h2, struct h2_stream *dst
     return 0;
 }
 
+static int decode_h2_header_name_value(const struct huff_node *tree,
+    const unsigned char *block, size_t block_len, size_t *hp,
+    struct h2_hpack_table *table, uint64_t name_idx,
+    char *name, char *value, size_t *name_len, size_t *value_len)
+{
+    if (name_idx == 0) {
+        if (hpack_decode_string(tree, block, block_len, hp, name, H2_MAX_HEADER_NAME_LEN, name_len) != 0)
+            return -1;
+    } else {
+        const char *sn, *sv;
+        size_t sn_len, sv_len;
+        if (get_table_entry(table, (int)name_idx, &sn, &sn_len, &sv, &sv_len) != 0)
+            return -1;
+        *name_len = sn_len;
+        if (*name_len >= H2_MAX_HEADER_NAME_LEN) return -1;
+        memcpy(name, sn, *name_len);
+        name[*name_len] = '\0';
+    }
+    if (hpack_decode_string(tree, block, block_len, hp, value, H2_MAX_HEADER_VALUE_LEN, value_len) != 0)
+        return -1;
+    return 0;
+}
+
 /*
  * Parse a single HPACK header block fragment.
  * Returns: 0 = OK, -1 = HPACK compression error (send GOAWAY), 1 = stream reset.
@@ -1044,24 +1067,9 @@ static int parse_h2_header_block(struct h2_connection *h2,
             char value[H2_MAX_HEADER_VALUE_LEN];
             size_t name_len = 0, value_len = 0;
 
-            if (name_idx == 0) {
-                if (hpack_decode_string(h2->huff_tree, block, block_len, &hp,
-                                        name, sizeof(name), &name_len) != 0)
-                    return -1;
-            } else {
-                const char *sn, *sv;
-                size_t sn_len, sv_len;
-                if (get_table_entry(&h2->dyn_table, (int)name_idx, &sn, &sn_len,
-                                    &sv, &sv_len) != 0)
-                    return -1;
-                name_len = sn_len;
-                if (name_len >= sizeof(name)) return -1;
-                memcpy(name, sn, name_len);
-                name[name_len] = '\0';
-            }
-
-            if (hpack_decode_string(h2->huff_tree, block, block_len, &hp,
-                                    value, sizeof(value), &value_len) != 0)
+            if (decode_h2_header_name_value(h2->huff_tree, block, block_len, &hp,
+                                             &h2->dyn_table, name_idx,
+                                             name, value, &name_len, &value_len) != 0)
                 return -1;
 
             hpack_table_add(&h2->dyn_table, name, name_len, value, value_len);
@@ -1081,24 +1089,9 @@ static int parse_h2_header_block(struct h2_connection *h2,
             char value[H2_MAX_HEADER_VALUE_LEN];
             size_t name_len = 0, value_len = 0;
 
-            if (name_idx == 0) {
-                if (hpack_decode_string(h2->huff_tree, block, block_len, &hp,
-                                        name, sizeof(name), &name_len) != 0)
-                    return -1;
-            } else {
-                const char *sn, *sv;
-                size_t sn_len, sv_len;
-                if (get_table_entry(&h2->dyn_table, (int)name_idx, &sn, &sn_len,
-                                    &sv, &sv_len) != 0)
-                    return -1;
-                name_len = sn_len;
-                if (name_len >= sizeof(name)) return -1;
-                memcpy(name, sn, name_len);
-                name[name_len] = '\0';
-            }
-
-            if (hpack_decode_string(h2->huff_tree, block, block_len, &hp,
-                                    value, sizeof(value), &value_len) != 0)
+            if (decode_h2_header_name_value(h2->huff_tree, block, block_len, &hp,
+                                             &h2->dyn_table, name_idx,
+                                             name, value, &name_len, &value_len) != 0)
                 return -1;
 
             rc = apply_h2_header(h2, dst, conn, fid, name, value, name_len, value_len, error, error_len);

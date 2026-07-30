@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.0.5]
+
+### Added
+- `--http1.1` and `--http2` flags to force protocol version
+- Coverage threshold enforcement (70% line coverage minimum)
+
+### Changed
+- Deduplicated name/value extraction in `parse_h2_header_block()` via `decode_h2_header_name_value()`
+- Release notes now pulled from `CHANGELOG.md` instead of static template
+
+### Fixed
+- `cookie_jar_load()` skips truncated lines exceeding 8 KB
+
+## [2.0.4]
+
+### Fixed
+- Body preview no longer leaked to stderr when `-o` writes to a file
+
 ## [2.0.3]
 
 ### Added
