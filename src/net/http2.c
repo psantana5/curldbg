@@ -729,7 +729,7 @@ static size_t hpack_encode_string(unsigned char *out, size_t out_size,
     return off;
 }
 
-static int hpack_decode_string(struct h2_connection *h2,
+static int hpack_decode_string(const struct h2_connection *h2,
                                 const unsigned char *buf, size_t buf_len,
                                 size_t *offset, char *out, size_t out_size,
                                 size_t *out_len) {
