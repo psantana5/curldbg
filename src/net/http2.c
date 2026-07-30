@@ -1158,7 +1158,7 @@ static int handle_h2_data_frame(struct h2_connection *h2,
             set_error(error, error_len, "Failed to write response body");
             return -1;
         }
-        if (dst == s && s->out->preview_len < PREVIEW_BYTES) {
+        if (dst == s && s->body_out == NULL && s->out->preview_len < PREVIEW_BYTES) {
             size_t take = data_len_actual;
             if (take > PREVIEW_BYTES - s->out->preview_len)
                 take = PREVIEW_BYTES - s->out->preview_len;

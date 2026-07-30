@@ -256,7 +256,7 @@ int receive_response(
     bool header_done = false;
     bool seen_first_byte = false;
     bool write_body = body_out != NULL && !head_method;
-    bool capture_preview = !head_method;
+    bool capture_preview = !head_method && body_out == NULL;
     struct timespec first_byte_ts;
     bool chunked = false;
     int chunk_state = 0;

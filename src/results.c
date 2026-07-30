@@ -73,13 +73,11 @@ void print_single_output(const struct run_result *result) {
                    result->hops[i].loser_connect_ms - result->hops[i].tcp_ms);
     }
 
-    fprintf(stderr, "\nResponse body preview (first ~1KB):\n");
     if (result->resp.preview_len > 0) {
+        fprintf(stderr, "\nResponse body preview (first ~1KB):\n");
         fwrite(result->resp.preview, 1, result->resp.preview_len, stderr);
         if (result->resp.preview[result->resp.preview_len - 1] != '\n')
             fputc('\n', stderr);
-    } else {
-        fprintf(stderr, "(empty)\n");
     }
 }
 
