@@ -35,7 +35,10 @@ struct connect_race_info {
 };
 
 struct h2_connection;
-struct huff_node;
+
+struct huff_node {
+    uint32_t child[2];
+};
 
 #define HUFF_NODE_TERMINAL 0x80000000u
 
@@ -117,11 +120,39 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
 void http2_cleanup(struct connection *conn);
 
 /* Huffman HPACK */
+struct h2_static_entry {
+    const char *name;
+    size_t name_len;
+    const char *value;
+    size_t value_len;
+};
+
 int huff_tree_init(struct huff_node **tree, int *alloc);
 size_t huffman_encode(const unsigned char *input, size_t input_len,
                        unsigned char *output, size_t output_size);
+int hpack_decode_string_ext(const struct huff_node *tree,
+                             const unsigned char *buf, size_t buf_len,
+                             size_t *offset, char *out, size_t out_size,
+                             size_t *out_len);
 size_t huffman_decode(const struct huff_node *tree,
                        const unsigned char *input, size_t input_len,
                        unsigned char *output, size_t output_size);
+int lookup_static_name(const char *name, size_t name_len, int *idx_out);
+const struct h2_static_entry *get_static_entry(int idx);
+size_t hpack_encode_int(unsigned char *out, size_t out_size,
+                         uint64_t value, uint8_t prefix_bits);
+int hpack_decode_int(const unsigned char *buf, size_t buf_len,
+                      size_t *offset, uint8_t prefix_bits,
+                      uint64_t *out);
+size_t hpack_encode_string(unsigned char *out, size_t out_size,
+                            const char *str, size_t str_len);
+int hpack_decode_string(const struct huff_node *tree,
+                         const unsigned char *buf, size_t buf_len,
+                         size_t *offset, char *out, size_t out_size,
+                         size_t *out_len);
+int hpack_encode_literal_with_indexing(unsigned char *out, size_t out_size,
+                                        uint64_t name_index,
+                                        const char *name, size_t name_len,
+                                        const char *value, size_t value_len);
 
 #endif

@@ -43,32 +43,10 @@ int main(int argc, char **argv) {
 
     /* Free allocated memory on exit */
 
-    if (c->compare_family_mode && c->compare_urls_mode) {
-        fprintf(stderr, "--compare and --compare-urls are mutually exclusive\n");
+    if (validate_cmdline_opts(c) != 0) {
+        fprintf(stderr, "%s\n", c->error);
         exit_code = EXIT_FAILURE; goto cleanup;
     }
-    if (c->output_path != NULL && c->output_remote_name) {
-        fprintf(stderr, "-o and -O are mutually exclusive\n"); exit_code = EXIT_FAILURE; goto cleanup;
-    }
-    if ((c->output_path != NULL || c->output_remote_name) && (c->compare_family_mode || c->compare_urls_mode)) {
-        fprintf(stderr, "-o/-O are only supported in single request mode\n"); exit_code = EXIT_FAILURE; goto cleanup;
-    }
-    if (c->upload_path != NULL && (c->compare_family_mode || c->compare_urls_mode)) {
-        fprintf(stderr, "-T/--upload-file is only supported in single request mode\n"); exit_code = EXIT_FAILURE; goto cleanup;
-    }
-    if (c->upload_path != NULL && c->request_data != NULL) {
-        fprintf(stderr, "-T/--upload-file cannot be combined with -d/--data\n"); exit_code = EXIT_FAILURE; goto cleanup;
-    }
-    if (c->basic_auth != NULL && strchr(c->basic_auth, ':') == NULL) {
-        fprintf(stderr, "-u/--user must be in the form user:password\n"); exit_code = EXIT_FAILURE; goto cleanup;
-    }
-    if (c->upload_path != NULL) {
-        if (c->method_explicit && strcasecmp(c->request_method, "PUT") != 0) {
-            fprintf(stderr, "-T/--upload-file requires -X PUT or no -X flag\n"); exit_code = EXIT_FAILURE; goto cleanup;
-        }
-        if (!c->method_explicit) safe_strlcpy(c->request_method, "PUT", sizeof(c->request_method));
-    }
-    if (c->request_data != NULL && !c->method_explicit) safe_strlcpy(c->request_method, "POST", sizeof(c->request_method));
 
     /* Parse proxy URL */
     char proxy_host_buf[256] = "", proxy_port_buf[16] = "";

@@ -64,6 +64,7 @@ struct cmdline_opts {
 };
 
 int parse_cmdline(int argc, char **argv, struct cmdline_opts *c);
+int validate_cmdline_opts(struct cmdline_opts *c);
 void print_help(const char *prog);
 
 #endif

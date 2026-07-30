@@ -9,7 +9,7 @@ TSAN_OBJDIR := obj-tsan
 
 # --- Sources ---
 SRCS := src/main.c src/run.c src/results.c src/util.c src/url.c \
-        src/net/dns.c src/net/tls.c src/net/connect.c src/net/proxy.c src/net/http2.c \
+        src/net/dns.c src/net/tls.c src/net/connect.c src/net/proxy.c src/net/hpack.c src/net/http2.c \
         src/http/request.c src/http/response.c \
         src/cookie.c src/cli/parse.c src/cli/help.c src/output.c src/compare.c
 TESTD_SRCS := tests/server/testd.c tests/server/route.c tests/server/handlers.c
@@ -178,15 +178,43 @@ install: $(TARGET) $(MANPAGE)
 	install -m 755 $(TARGET) $(DESTDIR)$(BINDIR)/$(TARGET)
 	install -m 644 $(MANPAGE) $(DESTDIR)$(MANDIR)/curldbg.1
 
-fuzz: FUZZ_CC := clang
-fuzz: FUZZ_CFLAGS := -g -O1 -fsanitize=fuzzer,address -Iinclude
-fuzz: FUZZ_LIBS := -lz -lssl -lcrypto
-fuzz:
-	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $(OBJDIR)/fuzz_response.o src/http/response.c
-	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $(OBJDIR)/fuzz_util.o src/util.c
-	$(FUZZ_CC) $(FUZZ_CFLAGS) -o $(TARGET)-fuzz $(OBJDIR)/fuzz_response.o $(OBJDIR)/fuzz_util.o tests/fuzz_response.c $(FUZZ_LIBS)
-	@echo "Built $(TARGET)-fuzz (libFuzzer). Run with time limit, e.g.:"
+FUZZ_CC := clang
+FUZZ_CFLAGS := -g -O1 -fsanitize=fuzzer,address -Iinclude
+FUZZ_LIBS := -lz -lssl -lcrypto
+
+fuzz: $(TARGET)-fuzz
+	@echo "Run with time limit, e.g.:"
 	@echo "  ./$(TARGET)-fuzz -max_total_time=30"
+
+$(OBJDIR)/fuzz_response.o: src/http/response.c
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $@ $<
+
+$(OBJDIR)/fuzz_util.o: src/util.c
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $@ $<
+
+$(TARGET)-fuzz: $(OBJDIR)/fuzz_response.o $(OBJDIR)/fuzz_util.o tests/fuzz_response.c
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -o $@ $(OBJDIR)/fuzz_response.o $(OBJDIR)/fuzz_util.o tests/fuzz_response.c $(FUZZ_LIBS)
+
+$(TARGET)-fuzz-url: $(OBJDIR)/fuzz_url.o $(OBJDIR)/fuzz_util.o tests/fuzz_url.c
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -o $@ $(OBJDIR)/fuzz_url.o $(OBJDIR)/fuzz_util.o tests/fuzz_url.c $(FUZZ_LIBS)
+
+$(OBJDIR)/fuzz_url.o: src/url.c
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $@ $<
+
+$(OBJDIR)/fuzz_hpack.o: src/net/hpack.c
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $@ $<
+
+$(TARGET)-fuzz-huffman: $(OBJDIR)/fuzz_hpack.o $(OBJDIR)/fuzz_util.o tests/fuzz_huffman.c
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -o $@ $(OBJDIR)/fuzz_hpack.o $(OBJDIR)/fuzz_util.o tests/fuzz_huffman.c $(FUZZ_LIBS)
+
+$(TARGET)-fuzz-hpack: $(OBJDIR)/fuzz_hpack.o $(OBJDIR)/fuzz_util.o tests/fuzz_hpack.c
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -o $@ $(OBJDIR)/fuzz_hpack.o $(OBJDIR)/fuzz_util.o tests/fuzz_hpack.c $(FUZZ_LIBS)
+
+fuzz-url: $(TARGET)-fuzz-url
+fuzz-huffman: $(TARGET)-fuzz-huffman
+fuzz-hpack: $(TARGET)-fuzz-hpack
+fuzz-all: fuzz fuzz-url fuzz-huffman fuzz-hpack
+	@echo "=== All fuzzers built ==="
 
 cppcheck:
 	cppcheck --enable=warning,performance,portability,style \
