@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.0.7]
+
+### Fixed
+- DNS and TCP connect timing now displayed on connection failure (was incorrectly 0.00 ms)
+
 ## [2.0.6]
 
 ### Changed

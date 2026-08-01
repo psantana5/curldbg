@@ -177,7 +177,10 @@ static int establish_connection(struct connection *conn,
     if (use_unix) {
         fd = connect_unix_socket(opts->unix_socket_path, error, error_len);
         clock_gettime(CLOCK_MONOTONIC, &connect_end);
-        if (fd < 0) return -1;
+        if (fd < 0) {
+            *connect_ms_out = ms_between(&connect_start, &connect_end);
+            return -1;
+        }
         snprintf(hop->connected_ip, sizeof(hop->connected_ip), "%s", opts->unix_socket_path);
         hop->connected_family = AF_UNIX;
         *connect_ms_out = ms_between(&connect_start, &connect_end);
@@ -213,6 +216,8 @@ static int establish_connection(struct connection *conn,
                           opts->bind_interface);
         clock_gettime(CLOCK_MONOTONIC, &connect_end);
         if (fd < 0) {
+            *connect_ms_out = (race_info->winner_connect_ms > 0.0) ? race_info->winner_connect_ms
+                               : ms_between(&connect_start, &connect_end);
             snprintf(error, error_len, "Proxy TCP connect failed: %s", strerror(errno));
             return -1;
         }
@@ -240,6 +245,8 @@ static int establish_connection(struct connection *conn,
                           opts->bind_interface);
         clock_gettime(CLOCK_MONOTONIC, &connect_end);
         if (fd < 0) {
+            *connect_ms_out = (race_info->winner_connect_ms > 0.0) ? race_info->winner_connect_ms
+                               : ms_between(&connect_start, &connect_end);
             snprintf(error, error_len, "TCP connect failed: %s", strerror(errno));
             return -1;
         }
@@ -422,8 +429,11 @@ static int run_request(const char *input_url, const struct run_options *opts,
                                      &url, opts, &out->hops[out->hop_count],
                                      &preferred_family, &race_info, &total_start,
                                      &hop_connect_ms, &hop_dns_ms,
-                                     out->error, sizeof(out->error)) != 0)
+                                     out->error, sizeof(out->error)) != 0) {
+                out->dns_ms += hop_dns_ms;
+                out->connect_ms += hop_connect_ms;
                 goto error_cleanup;
+            }
         } else {
             memset(&race_info, 0, sizeof(race_info));
         }
