@@ -49,6 +49,7 @@ enum flag_id {
     FLAG_HTTP1_1,
     FLAG_HTTP2,
     FLAG_PROGRESS_BAR,
+    FLAG_DISABLE,
 };
 
 struct flag_info {
@@ -116,6 +117,7 @@ static const struct flag_info g_flags[] = {
     FLG("-h",  "--help",          NULL,       "Show this help", "Other", FLAG_HELP),
     FLG(NULL,  "--version",       NULL,       "Print version", "Other", FLAG_VERSION),
     FLG(NULL,  "--progress-bar",  NULL,       "Progress bar (no-op, for curl compat)", "Other", FLAG_PROGRESS_BAR),
+    FLG("-q",  "--disable",       NULL,       "Disable .curlrc (no-op, for curl compat)", "Other", FLAG_DISABLE),
 
     { NULL, NULL, NULL, NULL, NULL, FLAG_NONE }
 };
