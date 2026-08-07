@@ -88,6 +88,14 @@ static int handle_int_flag(struct cmdline_opts *c, const char *flag_name,
     return 0;
 }
 
+static int handle_int_flag_sec(struct cmdline_opts *c, const char *flag_name,
+                                const char *value, const char *desc, int *target) {
+    int v = parse_nn(c, flag_name, value, desc);
+    if (v < 0) return -1;
+    *target = v * 1000;
+    return 0;
+}
+
 static int add_extra_header(struct cmdline_opts *c, const char *value) {
     const char **next = realloc(c->extra_headers, (c->extra_header_count + 1) * sizeof(*c->extra_headers));
     if (next == NULL) { set_cmdline_error(c, "Out of memory"); return -1; }
@@ -468,7 +476,7 @@ static int handle_flag(enum flag_id id, const char *value, struct cmdline_opts *
 
         case FLAG_CONNECT_TIMEOUT:
             if (value == NULL) { set_cmdline_error(c, "Missing value for --connect-timeout"); return -1; }
-            return handle_int_flag(c, "--connect-timeout", value, "Invalid connect timeout", &c->connect_timeout_ms);
+            return handle_int_flag_sec(c, "--connect-timeout", value, "Invalid connect timeout", &c->connect_timeout_ms);
 
         case FLAG_READ_TIMEOUT:
             if (value == NULL) { set_cmdline_error(c, "Missing value for --read-timeout"); return -1; }
@@ -476,7 +484,7 @@ static int handle_flag(enum flag_id id, const char *value, struct cmdline_opts *
 
         case FLAG_MAX_TIME:
             if (value == NULL) { set_cmdline_error(c, "Missing value for --max-time"); return -1; }
-            return handle_int_flag(c, "--max-time", value, "Invalid max time", &c->max_time_ms);
+            return handle_int_flag_sec(c, "--max-time", value, "Invalid max time", &c->max_time_ms);
 
         case FLAG_RETRY:
             if (value == NULL) { set_cmdline_error(c, "Missing value for --retry"); return -1; }

@@ -1748,7 +1748,7 @@ TEST(test_parse_cmdline_boolean_flags) {
 TEST(test_parse_cmdline_value_flags) {
     struct cmdline_opts c;
     char *argv[] = {(char *)"prog", (char *)"-A", (char *)"MyAgent",
-                    (char *)"--connect-timeout", (char *)"5000",
+                    (char *)"--connect-timeout", (char *)"5",
                     (char *)"--max-redirs", (char *)"3",
                     (char *)"-u", (char *)"user:pass",
                     (char *)"-H", (char *)"X-Foo: bar",

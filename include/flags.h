@@ -90,9 +90,9 @@ static const struct flag_info g_flags[] = {
 
     FLG("-4",  NULL,              NULL,       "Force IPv4", "Network", FLAG_IPV4),
     FLG("-6",  NULL,              NULL,       "Force IPv6", "Network", FLAG_IPV6),
-    FLG(NULL,  "--connect-timeout","<ms>",    "Connection timeout in milliseconds", "Network", FLAG_CONNECT_TIMEOUT),
+    FLG(NULL,  "--connect-timeout","<s>",     "Connection timeout in seconds", "Network", FLAG_CONNECT_TIMEOUT),
     FLG(NULL,  "--read-timeout",  "<ms>",     "Read timeout in milliseconds", "Network", FLAG_READ_TIMEOUT),
-    FLG(NULL,  "--max-time",      "<ms>",     "Maximum total time in milliseconds", "Network", FLAG_MAX_TIME),
+    FLG(NULL,  "--max-time",      "<s>",      "Maximum total time in seconds", "Network", FLAG_MAX_TIME),
     FLG(NULL,  "--retry",         "<n>",      "Retry on failure", "Network", FLAG_RETRY),
     FLG(NULL,  "--retry-delay",   "<s>",      "Delay between retries in seconds", "Network", FLAG_RETRY_DELAY),
     FLG(NULL,  "--no-happy-eyeballs", NULL,   "Disable Happy Eyeballs (RFC 8305)", "Network", FLAG_NO_HAPPY_EYEBALLS),

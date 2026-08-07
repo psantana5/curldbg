@@ -1,6 +1,6 @@
 #ifndef CURLDBG_VERSION_H
 #define CURLDBG_VERSION_H
 
-#define CURLDBG_VERSION "2.0.8"
+#define CURLDBG_VERSION "2.0.9"
 
 #endif

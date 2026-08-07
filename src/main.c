@@ -108,7 +108,7 @@ int main(int argc, char **argv) {
         if (c->input_url == NULL) {
             fprintf(stderr, "Usage: %s [-L] [-4|-6] [-X GET|POST|PUT] [-d data] [-f] [-s] [-S] [-k] "
                     "[-u user:pass] [-H header] [-o file | -O] [-T file] "
-                    "[--connect-timeout ms] [--read-timeout ms] [--no-happy-eyeballs] "
+                    "[--connect-timeout s] [--read-timeout ms] [--no-happy-eyeballs] "
                     "[--max-redirs n] [--compressed] [--data-urlencode data] "
                     "[--cacert file] [--capath dir] [--unix-socket path] [-w fmt] "
                     "<url> [url2...]\n",

@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.0.9]
+
+### Fixed
+- `--max-time` and `--connect-timeout` now accept seconds instead of milliseconds (curl compat)
+
+## [2.0.8]
+
+### Added
+- `-q`/`--disable` flag as curl compatibility no-op
+
 ## [2.0.7]
 
 ### Fixed
