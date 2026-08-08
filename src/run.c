@@ -282,6 +282,7 @@ static int establish_connection(struct connection *conn,
             if (http2_init_connection(conn, error, error_len) != 0) return -1;
         }
     }
+    conn->last_errno = 0;
     return 0;
 }
 
@@ -300,19 +301,232 @@ bool is_connection_error(const struct connection *conn) {
     }
 }
 
+/* ================================================================
+ * built_headers — owns cookie/referer injection + stack/heap array
+ * ================================================================ */
+struct built_headers {
+    const char **headers;
+    size_t count;
+    unsigned int flags;
+    char cookie_buf[8192];
+    char referer_buf[2048];
+    const char *stack_headers[32];
+    bool heap_owned;
+};
+
+static void free_built_headers(struct built_headers *h) {
+    if (h->heap_owned) free((void *)h->headers);
+}
+
+static int build_request_headers(const struct run_options *opts,
+                                  const struct url_info *url,
+                                  struct built_headers *hdrs,
+                                  char *error, size_t error_len) {
+    memset(hdrs, 0, sizeof(*hdrs));
+
+    bool has_cookie_header = false, has_referer_header = false;
+    unsigned int header_flags = 0;
+    for (size_t i = 0; i < opts->extra_header_count; i++) {
+        if (opts->extra_headers[i] == NULL) continue;
+        const char *h = opts->extra_headers[i];
+        char c = (char)(h[0] | 32);
+        if (c == 'c') {
+            if (h[1] == 'o') {
+                if (strncasecmp(h + 2, "ntent-Type:", 11) == 0)
+                    header_flags |= HF_CONTENT_TYPE;
+                else if (strncasecmp(h + 2, "ntent-Length:", 13) == 0)
+                    header_flags |= HF_CONTENT_LENGTH;
+                else if (strncasecmp(h + 2, "okie:", 5) == 0)
+                    header_flags |= HF_COOKIE;
+            }
+        } else if (c == 'h' && strncasecmp(h + 1, "ost:", 4) == 0) {
+            header_flags |= HF_HOST;
+        } else if (c == 'a' && strncasecmp(h + 1, "ccept-Encoding:", 15) == 0) {
+            header_flags |= HF_ACCEPT_ENC;
+        } else if (c == 'u' && strncasecmp(h + 1, "ser-Agent:", 10) == 0) {
+            header_flags |= HF_USER_AGENT;
+        } else if (c == 'r' && strncasecmp(h + 1, "eferer:", 7) == 0) {
+            header_flags |= HF_REFERER;
+        }
+    }
+    has_cookie_header = (header_flags & HF_COOKIE) != 0;
+    has_referer_header = (header_flags & HF_REFERER) != 0;
+    hdrs->flags = header_flags;
+
+    const char *cookie_header_str = NULL;
+    if (opts->cookie_jar != NULL && !has_cookie_header) {
+        cookie_jar_get_header(opts->cookie_jar, url->host, url->path, url->use_tls,
+                               hdrs->cookie_buf, sizeof(hdrs->cookie_buf));
+        if (hdrs->cookie_buf[0] != '\0') cookie_header_str = hdrs->cookie_buf;
+    }
+
+    if (opts->referer != NULL && !has_referer_header) {
+        int n = snprintf(hdrs->referer_buf, sizeof(hdrs->referer_buf),
+                         "Referer: %s", opts->referer);
+        if (n < 0 || (size_t)n >= sizeof(hdrs->referer_buf))
+            hdrs->referer_buf[0] = '\0';
+    }
+
+    hdrs->headers = opts->extra_headers;
+    hdrs->count = opts->extra_header_count;
+
+    size_t inject_count = (size_t)(cookie_header_str != NULL ? 1 : 0) +
+                           (size_t)(hdrs->referer_buf[0] != '\0' ? 1 : 0);
+    if (inject_count == 0) return 0;
+
+    size_t total = opts->extra_header_count + inject_count;
+    size_t max_stack = sizeof(hdrs->stack_headers) / sizeof(hdrs->stack_headers[0]);
+
+    if (total <= max_stack) {
+        hdrs->headers = hdrs->stack_headers;
+        hdrs->heap_owned = false;
+    } else {
+        const char **dh = malloc(total * sizeof(*dh));
+        if (dh == NULL) {
+            snprintf(error, error_len, "Out of memory");
+            return -1;
+        }
+        hdrs->headers = dh;
+        hdrs->heap_owned = true;
+    }
+    for (size_t i = 0; i < opts->extra_header_count; i++)
+        hdrs->headers[i] = opts->extra_headers[i];
+    hdrs->count = total;
+    size_t idx = opts->extra_header_count;
+    if (cookie_header_str != NULL) hdrs->headers[idx++] = cookie_header_str;
+    if (hdrs->referer_buf[0] != '\0') hdrs->headers[idx++] = hdrs->referer_buf;
+    return 0;
+}
+
+/* Returns 0 on success, -1 on failure (error already set in out->error).
+ * May append h2 content-type/length pseudo-headers to hdrs->stack_headers. */
+static int dispatch_request(struct connection *conn, const struct url_info *url,
+                             const char *method, const char *data, size_t data_len,
+                             FILE *upload_file, size_t upload_size,
+                             bool chunked_upload, struct built_headers *hdrs,
+                             bool use_proxy, const struct run_options *opts,
+                             struct run_result *out, const struct timespec *ttfb_start) {
+    if (opts->force_http_version == 1 && http2_negotiated(conn)) {
+        snprintf(out->error, sizeof(out->error),
+                 "Server negotiated HTTP/2 but --http1.1 was forced");
+        return -1;
+    }
+    if (opts->force_http_version == 2 && conn->use_tls && !http2_negotiated(conn)) {
+        snprintf(out->error, sizeof(out->error),
+                 "Server did not negotiate HTTP/2 but --http2 was forced");
+        return -1;
+    }
+
+    if (http2_negotiated(conn)) {
+        snprintf(out->resp.http_version, sizeof(out->resp.http_version), "HTTP/2");
+        const char *effective_auth = opts->basic_auth;
+        if (effective_auth == NULL || effective_auth[0] == '\0') {
+            if (url->user[0] != '\0') effective_auth = url->user;
+        }
+
+        bool has_ct = (hdrs->flags & HF_CONTENT_TYPE) != 0;
+        bool has_cl = (hdrs->flags & HF_CONTENT_LENGTH) != 0;
+        char ct_buf[128] = "", cl_buf[64] = "";
+        size_t extra = 0;
+        if ((data != NULL && data_len > 0) || upload_file != NULL) {
+            size_t body_len = (upload_file != NULL) ? upload_size : data_len;
+            if (!has_ct) {
+                const char *ct = (upload_file != NULL) ? "application/octet-stream"
+                                                         : "application/x-www-form-urlencoded";
+                int n = snprintf(ct_buf, sizeof(ct_buf), "content-type: %s", ct);
+                if (n > 0 && (size_t)n < sizeof(ct_buf)) extra++;
+            }
+            if (!has_cl) {
+                int n = snprintf(cl_buf, sizeof(cl_buf), "content-length: %zu", body_len);
+                if (n > 0 && (size_t)n < sizeof(cl_buf)) extra++;
+            }
+        }
+        if (extra > 0) {
+            size_t max_s = sizeof(hdrs->stack_headers) / sizeof(hdrs->stack_headers[0]);
+            if (hdrs->count + extra <= max_s) {
+                if (hdrs->headers != hdrs->stack_headers) {
+                    for (size_t i = 0; i < hdrs->count && i < max_s; i++)
+                        hdrs->stack_headers[i] = hdrs->headers[i];
+                    hdrs->headers = hdrs->stack_headers;
+                }
+                size_t idx = hdrs->count;
+                if (ct_buf[0] != '\0') hdrs->stack_headers[idx++] = ct_buf;
+                if (cl_buf[0] != '\0') hdrs->stack_headers[idx++] = cl_buf;
+                hdrs->count += extra;
+            }
+        }
+
+        uint32_t sid = http2_send_request(conn, url, method, data, data_len,
+                                           hdrs->headers, hdrs->count,
+                                           opts->user_agent, effective_auth,
+                                           out->error, sizeof(out->error));
+        if (sid == 0) return -1;
+        if (http2_receive_response(conn, sid, &out->resp, ttfb_start,
+                                    opts->body_out, out->error, sizeof(out->error)) != 0)
+            return -1;
+        return 0;
+    }
+
+    if (send_request(conn, url, method, data, data_len,
+                      upload_file, upload_size, hdrs->headers, hdrs->count,
+                      opts->basic_auth, opts->user_agent, out->error, sizeof(out->error),
+                      use_proxy && !url->use_tls, chunked_upload, opts->compressed,
+                      hdrs->flags) != 0)
+        return -1;
+
+    snprintf(out->resp.http_version, sizeof(out->resp.http_version), "HTTP/1.1");
+    if (receive_response(conn, ttfb_start, &out->resp, out->error, sizeof(out->error),
+                          opts->body_out, opts->follow_redirects,
+                          opts->fail_on_http_error, opts->is_head_method) != 0)
+        return -1;
+    return 0;
+}
+
+static void update_hop_record(struct hop_info *hop, const struct url_info *url,
+                               const struct run_result *out, bool reuse_connection,
+                               double hop_dns_ms, double hop_connect_ms,
+                               const struct connect_race_info *race_info) {
+    snprintf(hop->host, sizeof(hop->host), "%s", url->host);
+    hop->status_code = out->resp.status_code;
+    if (!reuse_connection) {
+        hop->dns_ms = hop_dns_ms;
+        hop->tcp_ms = hop_connect_ms;
+        hop->has_loser = race_info->has_loser;
+        if (race_info->has_loser) {
+            snprintf(hop->loser_ip, sizeof(hop->loser_ip), "%s", race_info->loser_ip);
+            hop->loser_family = race_info->loser_family;
+            hop->loser_connect_ms = race_info->loser_connect_ms;
+        }
+    }
+    hop->ttfb_ms = out->resp.ttfb_ms;
+}
+
+struct redirect_plan {
+    bool should_redirect;
+    bool downgrade_to_get;
+    char next_url[2048];
+    struct url_info redirected_url;
+};
+
+static bool plan_redirect(const struct response_info *resp,
+                           const struct url_info *url,
+                           struct redirect_plan *plan) {
+    memset(plan, 0, sizeof(*plan));
+    if (!is_redirect_status(resp->status_code) || resp->location[0] == '\0')
+        return false;
+    if (build_redirect_url(resp->location, url, plan->next_url, sizeof(plan->next_url)) != 0)
+        return false;
+    if (parse_url(plan->next_url, &plan->redirected_url) != 0)
+        return false;
+    plan->should_redirect = true;
+    plan->downgrade_to_get = (resp->status_code == 301 || resp->status_code == 302 ||
+                              resp->status_code == 303);
+    return true;
+}
+
 static int run_request(const char *input_url, const struct run_options *opts,
                        struct run_result *out, struct connection_state *reuse) {
-    /*
-     * State machine for one request including all redirect hops:
-     *   1. Parse URL → DNS → TCP/TLS connect → send request → receive response
-     *   2. If redirect: loop (up to max_redirects), downgrade method on 301/302/303
-     *   3. If connection error on reused conn: retry once with fresh connection
-     *
-     * Connection reuse: if 'reuse' is non-NULL, conn/addrs/host/port are carried
-     * across calls (used for multi-URL batches in main.c).  The state tracks
-     * whether the target host changed since the last hop so we can skip reconnect.
-     */
-    char current_url[2048], next_url[2048];
+    char current_url[2048];
     int redirect_count = 0;
     FILE *upload_file = NULL;
     size_t upload_size = 0;
@@ -370,17 +584,18 @@ static int run_request(const char *input_url, const struct run_options *opts,
     data_len = opts->data_len;
 
     for (;;) {
-        /* Each iteration is one hop: URL → connect → send → receive → redirect? */
-        struct url_info url = {0}, redirected_url = {0};
+        /* --- outer loop: one iteration per hop --- */
+        struct url_info url = {0};
         struct connect_race_info race_info;
         struct timespec ttfb_start;
-        bool can_redirect = false, reuse_connection = false, request_retried = false;
         double hop_dns_ms = 0.0, hop_connect_ms = 0.0;
+        bool reuse_connection = false;
 
         if (opts->max_time_ms > 0) {
             long rem = deadline_remaining_ms(&total_start, opts->max_time_ms);
             if (rem <= 0) {
-                snprintf(out->error, sizeof(out->error), "Operation timed out after %d ms", opts->max_time_ms);
+                snprintf(out->error, sizeof(out->error),
+                         "Operation timed out after %d ms", opts->max_time_ms);
                 goto error_cleanup;
             }
         }
@@ -398,225 +613,85 @@ static int run_request(const char *input_url, const struct run_options *opts,
         bool use_proxy = (opts->proxy_host != NULL);
 
         if (use_proxy) {
-            reuse_connection = false;
-            safe_strlcpy(out->hops[out->hop_count].connected_ip, "via-proxy", sizeof(out->hops[0].connected_ip));
+            safe_strlcpy(out->hops[out->hop_count].connected_ip, "via-proxy",
+                         sizeof(out->hops[0].connected_ip));
             out->hops[out->hop_count].connected_family = AF_UNSPEC;
         } else {
-            /* Reuse connection if target host/port/tls didn't change vs last hop */
             reuse_connection = (conn->fd >= 0 &&
                 strcmp(url.host, conn_host) == 0 &&
                 strcmp(url.port, conn_port) == 0 &&
                 url.use_tls == *conn_use_tls);
             if (reuse_connection && out->hop_count > 0) {
                 const struct hop_info *prev = &out->hops[out->hop_count - 1];
-                safe_strlcpy(out->hops[out->hop_count].connected_ip, prev->connected_ip, sizeof(out->hops[0].connected_ip));
+                safe_strlcpy(out->hops[out->hop_count].connected_ip,
+                             prev->connected_ip, sizeof(out->hops[0].connected_ip));
                 out->hops[out->hop_count].connected_family = prev->connected_family;
             }
         }
 
-    reconnect:
-        /* Fresh connection path: close old, resolve DNS, TCP/TLS connect */
-        if (!reuse_connection) {
-            close_connection(conn);
-            freeaddrinfo(*conn_addrs);
-            *conn_addrs = NULL;
-            conn_host[0] = '\0';
-            conn_port[0] = '\0';
-            memset(&race_info, 0, sizeof(race_info));
+        /* === inner loop: hop attempt, retried at most once on connection error === */
+        bool need_fresh_connection = !reuse_connection;
+        bool retried_this_hop = false;
+        int sr;
 
-            if (establish_connection(conn, conn_addrs, conn_host, 256,
-                                     conn_port, 16, conn_use_tls,
-                                     &url, opts, &out->hops[out->hop_count],
-                                     &preferred_family, &race_info, &total_start,
-                                     &hop_connect_ms, &hop_dns_ms,
-                                     out->error, sizeof(out->error)) != 0) {
-                out->dns_ms += hop_dns_ms;
-                out->connect_ms += hop_connect_ms;
-                goto error_cleanup;
-            }
-        } else {
-            memset(&race_info, 0, sizeof(race_info));
-        }
+        for (;;) {
+            struct built_headers hdrs;
 
-        out->dns_ms += hop_dns_ms;
-        out->connect_ms += hop_connect_ms;
+            if (need_fresh_connection) {
+                close_connection(conn);
+                freeaddrinfo(*conn_addrs);
+                *conn_addrs = NULL;
+                conn_host[0] = '\0';
+                conn_port[0] = '\0';
+                memset(&race_info, 0, sizeof(race_info));
 
-        clock_gettime(CLOCK_MONOTONIC, &ttfb_start);
-        if (upload_file != NULL && !chunked_upload) {
-            if (fseeko(upload_file, 0, SEEK_SET) != 0) {
-                snprintf(out->error, sizeof(out->error), "Failed to rewind upload file");
-                goto error_cleanup;
-            }
-        }
-
-        bool has_cookie_header = false, has_referer_header = false;
-        unsigned int header_flags = 0;
-        for (size_t i = 0; i < opts->extra_header_count; i++) {
-            if (opts->extra_headers[i] == NULL) continue;
-            const char *h = opts->extra_headers[i];
-            char c = (char)(h[0] | 32);
-            if (c == 'c') {
-                if (h[1] == 'o') {
-                    if (strncasecmp(h + 2, "ntent-Type:", 11) == 0)
-                        header_flags |= HF_CONTENT_TYPE;
-                    else if (strncasecmp(h + 2, "ntent-Length:", 13) == 0)
-                        header_flags |= HF_CONTENT_LENGTH;
-                    else if (strncasecmp(h + 2, "okie:", 5) == 0)
-                        header_flags |= HF_COOKIE;
-                }
-            } else if (c == 'h' && strncasecmp(h + 1, "ost:", 4) == 0) {
-                header_flags |= HF_HOST;
-            } else if (c == 'a' && strncasecmp(h + 1, "ccept-Encoding:", 15) == 0) {
-                header_flags |= HF_ACCEPT_ENC;
-            } else if (c == 'u' && strncasecmp(h + 1, "ser-Agent:", 10) == 0) {
-                header_flags |= HF_USER_AGENT;
-            } else if (c == 'r' && strncasecmp(h + 1, "eferer:", 7) == 0) {
-                header_flags |= HF_REFERER;
-            }
-        }
-        has_cookie_header = (header_flags & HF_COOKIE) != 0;
-        has_referer_header = (header_flags & HF_REFERER) != 0;
-
-        char cookie_header_buf[8192] = "";
-        const char *cookie_header_str = NULL;
-        if (opts->cookie_jar != NULL && !has_cookie_header) {
-            cookie_jar_get_header(opts->cookie_jar, url.host, url.path, url.use_tls,
-                                  cookie_header_buf, sizeof(cookie_header_buf));
-            if (cookie_header_buf[0] != '\0') cookie_header_str = cookie_header_buf;
-        }
-
-        char referer_header_buf[2048] = "";
-        if (opts->referer != NULL && !has_referer_header) {
-            int n = snprintf(referer_header_buf, sizeof(referer_header_buf), "Referer: %s", opts->referer);
-            if (n < 0 || (size_t)n >= sizeof(referer_header_buf)) referer_header_buf[0] = '\0';
-        }
-
-        const char **send_headers = opts->extra_headers;
-        size_t send_header_count = opts->extra_header_count;
-        const char *stack_headers[32];
-        size_t inject_count = (size_t)(cookie_header_str != NULL ? 1 : 0) +
-                              (size_t)(referer_header_buf[0] != '\0' ? 1 : 0);
-        if (inject_count > 0) {
-            size_t total = opts->extra_header_count + inject_count;
-            if (total <= sizeof(stack_headers) / sizeof(stack_headers[0])) {
-                for (size_t i = 0; i < opts->extra_header_count; i++)
-                    stack_headers[i] = opts->extra_headers[i];
-                size_t idx = opts->extra_header_count;
-                if (cookie_header_str != NULL) stack_headers[idx++] = cookie_header_str;
-                if (referer_header_buf[0] != '\0') stack_headers[idx++] = referer_header_buf;
-                send_headers = stack_headers;
-                send_header_count = total;
-            } else {
-                const char **dh = malloc(total * sizeof(*dh));
-                if (dh == NULL) {
-                    snprintf(out->error, sizeof(out->error), "Out of memory");
+                if (establish_connection(conn, conn_addrs, conn_host, 256,
+                                         conn_port, 16, conn_use_tls,
+                                         &url, opts, &out->hops[out->hop_count],
+                                         &preferred_family, &race_info, &total_start,
+                                         &hop_connect_ms, &hop_dns_ms,
+                                         out->error, sizeof(out->error)) != 0) {
+                    out->dns_ms += hop_dns_ms;
+                    out->connect_ms += hop_connect_ms;
                     goto error_cleanup;
                 }
-                for (size_t i = 0; i < opts->extra_header_count; i++)
-                    dh[i] = opts->extra_headers[i];
-                size_t idx = opts->extra_header_count;
-                if (cookie_header_str != NULL) dh[idx++] = cookie_header_str;
-                if (referer_header_buf[0] != '\0') dh[idx++] = referer_header_buf;
-                send_headers = dh;
-                send_header_count = total;
-            }
-        }
-
-        if (opts->force_http_version == 1 && http2_negotiated(conn)) {
-            snprintf(out->error, sizeof(out->error),
-                     "Server negotiated HTTP/2 but --http1.1 was forced");
-            rc = -1; goto error_cleanup;
-        }
-        if (opts->force_http_version == 2 && conn->use_tls && !http2_negotiated(conn)) {
-            snprintf(out->error, sizeof(out->error),
-                     "Server did not negotiate HTTP/2 but --http2 was forced");
-            rc = -1; goto error_cleanup;
-        }
-
-        int sr;
-        if (http2_negotiated(conn)) {
-            snprintf(out->resp.http_version, sizeof(out->resp.http_version), "HTTP/2");
-            const char *effective_auth = opts->basic_auth;
-            if (effective_auth == NULL || effective_auth[0] == '\0') {
-                if (url.user[0] != '\0') {
-                    effective_auth = url.user; /* http2.c handles : in user */
-                }
-            }
-
-            /* auto-generate content-type and content-length for request body */
-            bool has_content_type_h2 = (header_flags & HF_CONTENT_TYPE) != 0;
-            bool has_content_length_h2 = (header_flags & HF_CONTENT_LENGTH) != 0;
-            char h2_ct_buf[128] = "", h2_cl_buf[64] = "";
-            size_t h2_body_inject = 0;
-            if ((data != NULL && data_len > 0) || upload_file != NULL) {
-                size_t body_len = (upload_file != NULL) ? upload_size : data_len;
-                if (!has_content_type_h2) {
-                    const char *ct = (upload_file != NULL) ? "application/octet-stream" : "application/x-www-form-urlencoded";
-                    int nct = snprintf(h2_ct_buf, sizeof(h2_ct_buf), "content-type: %s", ct);
-                    if (nct > 0 && (size_t)nct < sizeof(h2_ct_buf))
-                        h2_body_inject++;
-                }
-                if (!has_content_length_h2) {
-                    int ncl = snprintf(h2_cl_buf, sizeof(h2_cl_buf), "content-length: %zu", body_len);
-                    if (ncl > 0 && (size_t)ncl < sizeof(h2_cl_buf))
-                        h2_body_inject++;
-                }
-            }
-            if (h2_body_inject > 0) {
-                size_t total = send_header_count + h2_body_inject;
-                size_t max_stack = sizeof(stack_headers) / sizeof(stack_headers[0]);
-                if (send_headers == opts->extra_headers) {
-                    for (size_t i = 0; i < send_header_count && i < max_stack; i++)
-                        stack_headers[i] = send_headers[i];
-                    send_headers = stack_headers;
-                }
-                size_t idx = send_header_count;
-                if (h2_ct_buf[0] != '\0') stack_headers[idx++] = h2_ct_buf;
-                if (h2_cl_buf[0] != '\0') stack_headers[idx++] = h2_cl_buf;
-                send_header_count = total;
-            }
-
-            uint32_t h2_stream_id = http2_send_request(conn, &url, method, data, data_len,
-                    send_headers, send_header_count,
-                    opts->user_agent, effective_auth,
-                    out->error, sizeof(out->error));
-            if (h2_stream_id == 0) {
-                sr = -1;
-            } else if (http2_receive_response(conn, h2_stream_id, &out->resp, &ttfb_start,
-                    opts->body_out, out->error, sizeof(out->error)) != 0) {
-                sr = -1;
             } else {
-                sr = 0;
+                memset(&race_info, 0, sizeof(race_info));
             }
-        } else {
-            sr = send_request(conn, &url, method, data, data_len,
-                    upload_file, upload_size, send_headers, send_header_count,
-                    opts->basic_auth, opts->user_agent, out->error, sizeof(out->error),
-                    use_proxy && !url.use_tls, chunked_upload, opts->compressed,
-                    header_flags);
-            if (sr == 0) {
-                snprintf(out->resp.http_version, sizeof(out->resp.http_version), "HTTP/1.1");
-                bool head_method = opts->is_head_method;
-                if (receive_response(conn, &ttfb_start, &out->resp, out->error, sizeof(out->error),
-                        opts->body_out, opts->follow_redirects, opts->fail_on_http_error, head_method) != 0)
-                    sr = -1;
-            }
-        }
-        /* On connection-level error with a reused socket, retry once with a fresh TCP/TLS */
-        if (sr != 0 && reuse_connection && !request_retried && is_connection_error(conn)) {
-            close_connection(conn);
-            freeaddrinfo(*conn_addrs);
-            *conn_addrs = NULL;
-            conn_host[0] = '\0';
-            conn_port[0] = '\0';
-            reuse_connection = false;
-            request_retried = true;
-            goto reconnect;
-        }
-        if (send_headers != opts->extra_headers && send_headers != stack_headers)
-            free((void *)send_headers);
 
-        if (sr != 0) goto error_cleanup;
+            out->dns_ms += hop_dns_ms;
+            out->connect_ms += hop_connect_ms;
+
+            if (build_request_headers(opts, &url, &hdrs,
+                                      out->error, sizeof(out->error)) != 0) {
+                sr = -1; goto dispatch_cleanup;
+            }
+
+            clock_gettime(CLOCK_MONOTONIC, &ttfb_start);
+            if (upload_file != NULL && !chunked_upload) {
+                if (fseeko(upload_file, 0, SEEK_SET) != 0) {
+                    snprintf(out->error, sizeof(out->error),
+                             "Failed to rewind upload file");
+                    sr = -1; goto dispatch_cleanup;
+                }
+            }
+
+            sr = dispatch_request(conn, &url, method, data, data_len,
+                                   upload_file, upload_size, chunked_upload,
+                                   &hdrs, use_proxy, opts, out, &ttfb_start);
+
+            if (sr != 0 && !retried_this_hop && reuse_connection && is_connection_error(conn)) {
+                retried_this_hop = true;
+                need_fresh_connection = true;
+                free_built_headers(&hdrs);
+                continue;
+            }
+
+        dispatch_cleanup:
+            free_built_headers(&hdrs);
+            if (sr != 0) goto error_cleanup;
+            break; /* hop succeeded */
+        }
 
         if (opts->cookie_jar != NULL && out->resp.set_cookie_len > 0) {
             char *buf = out->resp.set_cookie_buf;
@@ -637,35 +712,21 @@ static int run_request(const char *input_url, const struct run_options *opts,
         }
         out->ttfb_ms = out->resp.ttfb_ms;
 
-        snprintf(out->hops[out->hop_count].host, sizeof(out->hops[out->hop_count].host), "%s", url.host);
-        out->hops[out->hop_count].status_code = out->resp.status_code;
-        if (!reuse_connection) {
-            out->hops[out->hop_count].dns_ms = hop_dns_ms;
-            out->hops[out->hop_count].tcp_ms = hop_connect_ms;
-            out->hops[out->hop_count].has_loser = race_info.has_loser;
-            if (race_info.has_loser) {
-                snprintf(out->hops[out->hop_count].loser_ip, sizeof(out->hops[out->hop_count].loser_ip),
-                         "%s", race_info.loser_ip);
-                out->hops[out->hop_count].loser_family = race_info.loser_family;
-                out->hops[out->hop_count].loser_connect_ms = race_info.loser_connect_ms;
-            }
-        }
-        out->hops[out->hop_count].ttfb_ms = out->resp.ttfb_ms;
+        update_hop_record(&out->hops[out->hop_count], &url, out, reuse_connection,
+                          hop_dns_ms, hop_connect_ms, &race_info);
 
-        if (is_redirect_status(out->resp.status_code) && out->resp.location[0] != '\0' &&
-            build_redirect_url(out->resp.location, &url, next_url, sizeof(next_url)) == 0 &&
-            parse_url(next_url, &redirected_url) == 0) {
+        struct redirect_plan rplan;
+        bool can_redirect = false;
+        if (plan_redirect(&out->resp, &url, &rplan)) {
             snprintf(out->hops[out->hop_count].redirect_to_host,
                      sizeof(out->hops[out->hop_count].redirect_to_host),
-                     "%s", redirected_url.host);
+                     "%s", rplan.redirected_url.host);
             snprintf(out->hops[out->hop_count].redirect_url,
                      sizeof(out->hops[out->hop_count].redirect_url),
-                     "%s", next_url);
+                     "%s", rplan.next_url);
             out->hops[out->hop_count].has_redirect_target = true;
             can_redirect = true;
-            /* 301/302/303: downgrade to GET, per RFC 7231 */
-            if (out->resp.status_code == 301 || out->resp.status_code == 302 ||
-                out->resp.status_code == 303) {
+            if (rplan.downgrade_to_get) {
                 safe_strlcpy(method, "GET", sizeof(method));
                 data = NULL;
                 data_len = 0;
@@ -685,13 +746,14 @@ static int run_request(const char *input_url, const struct run_options *opts,
         }
 
         if (redirect_count >= opts->max_redirects) {
-            snprintf(out->error, sizeof(out->error), "Too many redirects (limit %d)", opts->max_redirects);
+            snprintf(out->error, sizeof(out->error),
+                     "Too many redirects (limit %d)", opts->max_redirects);
             goto error_cleanup;
         }
 
-        bool same_host = (strcmp(redirected_url.host, conn_host) == 0 &&
-                          strcmp(redirected_url.port, conn_port) == 0 &&
-                          redirected_url.use_tls == *conn_use_tls);
+        bool same_host = (strcmp(rplan.redirected_url.host, conn_host) == 0 &&
+                          strcmp(rplan.redirected_url.port, conn_port) == 0 &&
+                          rplan.redirected_url.use_tls == *conn_use_tls);
         if (!same_host) {
             close_connection(conn);
             freeaddrinfo(*conn_addrs);
@@ -699,7 +761,7 @@ static int run_request(const char *input_url, const struct run_options *opts,
             conn_host[0] = '\0'; conn_port[0] = '\0';
         }
 
-        safe_strlcpy(current_url, next_url, sizeof(current_url));
+        safe_strlcpy(current_url, rplan.next_url, sizeof(current_url));
         redirect_count++;
     }
 
@@ -711,8 +773,6 @@ done:
     close_upload_file(&upload_file);
     clock_gettime(CLOCK_MONOTONIC, &total_end);
     out->total_ms = ms_between(&total_start, &total_end);
-    /* Keep connection open for reuse when a reuse state is provided and the
-     * request succeeded. The caller owns the connection and must close it. */
     if (rc != 0 || reuse == NULL) {
         close_connection(conn);
         freeaddrinfo(*conn_addrs);
