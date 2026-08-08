@@ -127,6 +127,19 @@ static bool cookie_domain_matches(const char *host, const char *domain, bool inc
     return strcasecmp(host + host_len - dom_len, d) == 0;
 }
 
+static int cookie_jar_reserve(struct cookie_jar *jar, int needed) {
+    if (needed <= jar->capacity) return 0;
+    int new_cap = (jar->capacity == 0) ? 16 : jar->capacity * 2;
+    if (new_cap > MAX_COOKIES) new_cap = MAX_COOKIES;
+    if (needed > new_cap) new_cap = needed;
+    struct cookie_entry *new_entries = realloc(jar->entries,
+                                               (size_t)new_cap * sizeof(*new_entries));
+    if (new_entries == NULL) return -1;
+    jar->entries = new_entries;
+    jar->capacity = new_cap;
+    return 0;
+}
+
 static void cookie_jar_remove_at(struct cookie_jar *jar, int idx) {
     if (jar == NULL || idx < 0 || idx >= jar->count) return;
     if (idx + 1 < jar->count) {
@@ -155,6 +168,14 @@ static bool cookie_is_expired(const struct cookie_entry *entry, time_t now) {
 void cookie_jar_init(struct cookie_jar *jar) {
     if (jar == NULL) return;
     memset(jar, 0, sizeof(*jar));
+}
+
+void cookie_jar_destroy(struct cookie_jar *jar) {
+    if (jar == NULL) return;
+    free(jar->entries);
+    jar->entries = NULL;
+    jar->count = 0;
+    jar->capacity = 0;
 }
 
 void cookie_jar_add_set_cookie(struct cookie_jar *jar, const char *set_cookie,
@@ -192,6 +213,7 @@ void cookie_jar_add_set_cookie(struct cookie_jar *jar, const char *set_cookie,
             return;
         }
         if (jar->count >= MAX_COOKIES) return;
+        if (cookie_jar_reserve(jar, jar->count + 1) != 0) return;
         jar->entries[jar->count++] = entry;
         return;
     }
@@ -278,6 +300,7 @@ void cookie_jar_add_set_cookie(struct cookie_jar *jar, const char *set_cookie,
     }
 
     if (jar->count >= MAX_COOKIES) return;
+    if (cookie_jar_reserve(jar, jar->count + 1) != 0) return;
     jar->entries[jar->count++] = entry;
 }
 
@@ -376,6 +399,7 @@ void cookie_jar_load(struct cookie_jar *jar, const char *filepath) {
         const char *value = tab;
 
         if (jar->count >= MAX_COOKIES) break;
+        if (cookie_jar_reserve(jar, jar->count + 1) != 0) break;
         struct cookie_entry *e = &jar->entries[jar->count];
         memset(e, 0, sizeof(*e));
         copy_string(e->domain, sizeof(e->domain), domain);

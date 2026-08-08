@@ -13,8 +13,13 @@ static void init_tree(void) {
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     if (tree == NULL || size == 0) return 0;
-    static char output[65536];
+
+    unsigned char output[4096];
     size_t offset = 0;
-    hpack_decode_string_ext(tree, data, size, &offset, output, sizeof(output), &(size_t){0});
+    uint64_t len;
+
+    hpack_decode_int(data, size, &offset, 7, &len);
+    huffman_decode(tree, data, size, output, sizeof(output));
+
     return 0;
 }

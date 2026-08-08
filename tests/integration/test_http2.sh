@@ -20,8 +20,8 @@ for p in python3 python; do
     fi
 done
 if [ -z "$PYTHON" ]; then
-    echo "skipped (no Python)" >&2
-    exit 0
+    echo "skipped (no Python found)" >&2
+    exit 2
 fi
 
 H2_SERVER="$DIR/../server/h2d.py"
@@ -37,9 +37,10 @@ fi
 if [ -f "$H2_VENV/bin/python" ]; then
     PYTHON="$H2_VENV/bin/python"
 fi
-"$PYTHON" -c "import h2" 2>/dev/null || "$PYTHON" -m pip install h2 2>/dev/null || {
+"$PYTHON" -c "import h2" 2>/dev/null || "$PYTHON" -m pip install -r "$DIR/../server/requirements.txt" 2>/dev/null || {
     echo "skipped (h2 library not available)" >&2
-    exit 0
+    echo "  install with: python3 -m pip install -r tests/server/requirements.txt" >&2
+    exit 2
 }
 
 # Use CURLDBG_BIN if set, else first arg

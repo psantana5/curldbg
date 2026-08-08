@@ -22,11 +22,13 @@ struct cookie_entry {
 };
 
 struct cookie_jar {
-    struct cookie_entry entries[MAX_COOKIES];
+    struct cookie_entry *entries;
     int count;
+    int capacity;
 };
 
 void cookie_jar_init(struct cookie_jar *jar);
+void cookie_jar_destroy(struct cookie_jar *jar);
 void cookie_jar_add_set_cookie(struct cookie_jar *jar, const char *set_cookie,
                                const char *request_host, const char *request_path);
 void cookie_jar_get_header(struct cookie_jar *jar, const char *host, const char *path,

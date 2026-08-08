@@ -4,6 +4,7 @@ TESTD="$1"
 CURLDBG="$2"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 FAILED=0
+SKIPPED=0
 
 export CURLDBG_BIN="$CURLDBG"
 
@@ -18,8 +19,14 @@ run_test() {
     if bash "$DIR/$name" "$port"; then
         echo "    OK"
     else
-        echo "    FAILED"
-        FAILED=1
+        local rc=$?
+        if [ "$rc" -eq 2 ]; then
+            echo "    SKIPPED"
+            SKIPPED=$((SKIPPED + 1))
+        else
+            echo "    FAILED"
+            FAILED=1
+        fi
     fi
 }
 
@@ -52,8 +59,12 @@ wait $TDPID 2>/dev/null
 rm -f /tmp/testd.log
 
 if [ $FAILED -eq 0 ]; then
-    echo "all integration tests passed"
+    echo "all integration tests passed (${SKIPPED} skipped)"
+    if [ "${CURLDBG_STRICT_SKIP:-0}" = "1" ] && [ "$SKIPPED" -gt 0 ]; then
+        echo "ERROR: CURLDBG_STRICT_SKIP=1 but ${SKIPPED} test(s) were skipped" >&2
+        exit 1
+    fi
 else
-    echo "some tests failed"
+    echo "some tests failed (${SKIPPED} skipped)"
     exit 1
 fi

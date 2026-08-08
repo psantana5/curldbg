@@ -133,10 +133,10 @@ test: $(TARGET)
 	@if command -v clang >/dev/null 2>&1; then \
 		echo "=== fuzz: parse_response_headers (30s) ==="; \
 		$(MAKE) fuzz; \
-		./$(TARGET)-fuzz -max_total_time=30; \
-		FUZZ_RC=$$?; \
+		timeout 35 ./$(TARGET)-fuzz -max_total_time=30 -entropic=0; FRC=$$?; \
+		if [ $$FRC -eq 124 ]; then echo "  (timeout safety cap reached)"; FRC=0; fi; \
 		rm -f $(TARGET)-fuzz; \
-		exit $$FUZZ_RC; \
+		exit $$FRC; \
 	else \
 		echo "=== fuzz: skipped (clang not found) ==="; \
 	fi

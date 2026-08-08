@@ -45,8 +45,11 @@ void parse_response_headers(const char *headers, struct response_info *out) {
         if (*sp == ' ') {
             sp++;
             int code = 0;
-            while (*sp >= '0' && *sp <= '9')
-                code = code * 10 + (*sp++ - '0');
+            while (*sp >= '0' && *sp <= '9') {
+                if (code <= 599)
+                    code = code * 10 + (*sp - '0');
+                sp++;
+            }
             if (code >= 100 && code <= 599)
                 out->status_code = code;
             else { out->status_code = 0; return; }

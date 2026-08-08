@@ -1,0 +1,5 @@
+# Python dependencies for the local HTTP/2 test server (tests/server/h2d.py)
+#
+# Install with:
+#   python3 -m pip install -r tests/server/requirements.txt
+h2>=4.0

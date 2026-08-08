@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.0.10]
+
+### Changed
+- Cookie jar entries allocated on demand (doubling capacity up to `MAX_COOKIES`) instead of a fixed 256-slot array (~1.4 MB) — empty jars are now 16 bytes
+- Integration runner reports skipped tests separately; `CURLDBG_STRICT_SKIP=1` (set in CI) fails the build if any test is skipped
+
+### Added
+- `tests/server/requirements.txt` documents the `h2` dependency for the local HTTP/2 test server
+
+### Fixed
+- HTTP/2 integration test no longer silently skips: it exits with a distinct status and prints install instructions when the `h2` library is unavailable
+- Removed stray comment and unified CLI error reporting in `main.c`
+- Signed integer overflow in response status-code parsing (`parse_response_headers`) caught by UBSan — now bounds-checked without undefined behavior
+- HPACK fuzzer speed regression (~100 exec/s, `-max_total_time` ignored): restructured to exercise `hpack_decode_int` and `huffman_decode` independently (~85k exec/s, `-max_total_time` works)
+- Fuzzers now use `timeout` as a hard safety cap (some libFuzzer+ASan builds ignore `-max_total_time`) and `-entropic=0` for consistent throughput
+
 ## [2.0.9]
 
 ### Fixed

@@ -77,6 +77,8 @@ jobs:
           sudo apt-get install -y -qq libssl-dev zlib1g-dev libpsl-dev python3-pip python3-venv
 
       - name: Integration tests
+        env:
+          CURLDBG_STRICT_SKIP: "1"
         run: make integration
 
   cppcheck:

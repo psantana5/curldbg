@@ -575,6 +575,16 @@ TEST(test_parse_response_headers_bad_status) {
     ASSERT_INT_EQ(ri.status_code, 0, "bad status line gives 0");
 }
 
+TEST(test_parse_response_headers_overflow_status) {
+    char buf[HEADER_MAX + 1];
+    struct response_info ri;
+    memset(buf, 0, sizeof(buf));
+    snprintf(buf, sizeof(buf), "HTTP/1.1 99999999999999999999999999 OK\r\n\r\n");
+    memset(&ri, 0, sizeof(ri));
+    parse_response_headers(buf, &ri);
+    ASSERT_INT_EQ(ri.status_code, 0, "overflowing status line rejected without UB");
+}
+
 TEST(test_parse_response_headers_transfer_encoding_list) {
     char buf[HEADER_MAX + 1];
     struct response_info ri;
@@ -617,6 +627,7 @@ TEST(test_cookie_jar_add_and_get) {
     char header[512];
     cookie_jar_get_header(&jar, "example.com", "/", true, header, sizeof(header));
     ASSERT_STR_EQ(header, "session=abc", "cookie header sent to matching host");
+    cookie_jar_destroy(&jar);
 }
 
 TEST(test_cookie_jar_path_mismatch) {
@@ -627,6 +638,7 @@ TEST(test_cookie_jar_path_mismatch) {
     char header[512];
     cookie_jar_get_header(&jar, "example.com", "/other", true, header, sizeof(header));
     ASSERT_STR_EQ(header, "", "cookie not sent for non-matching path");
+    cookie_jar_destroy(&jar);
 }
 
 TEST(test_cookie_jar_domain_mismatch) {
@@ -637,6 +649,7 @@ TEST(test_cookie_jar_domain_mismatch) {
     char header[512];
     cookie_jar_get_header(&jar, "other.com", "/", true, header, sizeof(header));
     ASSERT_STR_EQ(header, "", "cookie not sent for non-matching domain");
+    cookie_jar_destroy(&jar);
 }
 
 TEST(test_cookie_jar_multiple_cookies) {
@@ -649,6 +662,7 @@ TEST(test_cookie_jar_multiple_cookies) {
     cookie_jar_get_header(&jar, "example.com", "/", true, header, sizeof(header));
     ASSERT_TRUE(strstr(header, "a=1") != NULL, "first cookie present");
     ASSERT_TRUE(strstr(header, "b=2") != NULL, "second cookie present");
+    cookie_jar_destroy(&jar);
 }
 
 TEST(test_cookie_jar_secure_over_http) {
@@ -662,6 +676,7 @@ TEST(test_cookie_jar_secure_over_http) {
 
     cookie_jar_get_header(&jar, "example.com", "/", true, header, sizeof(header));
     ASSERT_STR_EQ(header, "session=abc", "secure cookie sent over HTTPS");
+    cookie_jar_destroy(&jar);
 }
 
 TEST(test_cookie_jar_save_load_roundtrip) {
@@ -683,6 +698,8 @@ TEST(test_cookie_jar_save_load_roundtrip) {
     ASSERT_TRUE(strstr(header, "b=2") != NULL, "saved cookie b loaded");
 
     remove(tmpfile);
+    cookie_jar_destroy(&jar);
+    cookie_jar_destroy(&loaded);
 }
 
 TEST(test_cookie_jar_max_capacity) {
@@ -694,6 +711,7 @@ TEST(test_cookie_jar_max_capacity) {
         cookie_jar_add_set_cookie(&jar, val, "example.com", "/");
     }
     ASSERT_INT_EQ(jar.count, MAX_COOKIES, "cookie jar capped at MAX_COOKIES");
+    cookie_jar_destroy(&jar);
 }
 
 TEST(test_cookie_jar_init) {
@@ -708,6 +726,7 @@ TEST(test_cookie_jar_reject_tld_domain) {
     cookie_jar_init(&jar);
     cookie_jar_add_set_cookie(&jar, "x=1; Domain=.com", "example.com", "/");
     ASSERT_INT_EQ(jar.count, 0, "TLD domain cookie rejected");
+    cookie_jar_destroy(&jar);
 }
 
 TEST(test_cookie_jar_reject_ip_domain) {
@@ -715,6 +734,7 @@ TEST(test_cookie_jar_reject_ip_domain) {
     cookie_jar_init(&jar);
     cookie_jar_add_set_cookie(&jar, "x=1; Domain=192.168.1.1", "example.com", "/");
     ASSERT_INT_EQ(jar.count, 0, "IP domain cookie rejected for non-matching host");
+    cookie_jar_destroy(&jar);
 }
 
 TEST(test_cookie_jar_secure_roundtrip) {
@@ -736,6 +756,8 @@ TEST(test_cookie_jar_secure_roundtrip) {
     ASSERT_STR_EQ(header, "", "secure cookie not sent over HTTP after load");
 
     remove(tmpfile);
+    cookie_jar_destroy(&jar);
+    cookie_jar_destroy(&loaded);
 }
 
 TEST(test_cookie_jar_httponly_samesite_parsed) {
@@ -745,6 +767,7 @@ TEST(test_cookie_jar_httponly_samesite_parsed) {
     ASSERT_INT_EQ(jar.count, 1, "HttpOnly/SameSite cookie stored");
     ASSERT_TRUE(strcmp(jar.entries[0].samesite, "Strict") == 0, "SameSite=Strict parsed");
     ASSERT_TRUE(jar.entries[0].httponly, "HttpOnly parsed");
+    cookie_jar_destroy(&jar);
 }
 
 /* ================================================================
@@ -2014,6 +2037,7 @@ int main(void) {
     test_parse_response_headers_content_encoding_deflate();
     test_parse_response_headers_multiple_set_cookie();
     test_parse_response_headers_bad_status();
+    test_parse_response_headers_overflow_status();
     test_parse_response_headers_transfer_encoding_list();
     test_parse_response_headers_content_length_duplicate();
     test_parse_response_headers_content_length_negative();

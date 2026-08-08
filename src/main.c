@@ -41,10 +41,8 @@ int main(int argc, char **argv) {
         goto cleanup;
     }
 
-    /* Free allocated memory on exit */
-
     if (validate_cmdline_opts(c) != 0) {
-        fprintf(stderr, "%s\n", c->error);
+        fprintf(stderr, "%s\n", c->error[0] != '\0' ? c->error : "Invalid options");
         exit_code = EXIT_FAILURE; goto cleanup;
     }
 
@@ -85,7 +83,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* Initialize cookie jar (heap-allocated; ~1.4 MB if fully populated) */
+    /* Initialize cookie jar (heap-allocated; grows on demand as cookies arrive) */
     if (c->cookie_jar_path != NULL || c->cookie_data != NULL || c->cookie_file_to_load != NULL) {
         cookie_jar_ptr = calloc(1, sizeof(*cookie_jar_ptr));
         if (cookie_jar_ptr == NULL) die("calloc");
@@ -248,6 +246,7 @@ cleanup:
     free(c->cookie_data_alloc);
     free(c->cookie_header_alloc);
     free(c->urls);
+    cookie_jar_destroy(cookie_jar_ptr);
     free(cookie_jar_ptr);
     free(c);
     return exit_code;

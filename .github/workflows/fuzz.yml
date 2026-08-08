@@ -17,10 +17,10 @@ jobs:
       - name: Build fuzzers
         run: make fuzz-all
       - name: Fuzz URL parser (60s)
-        run: ./curldbg-fuzz-url -max_total_time=60
+        run: timeout 65 ./curldbg-fuzz-url -max_total_time=60 -entropic=0
       - name: Fuzz Huffman decode (60s)
-        run: ./curldbg-fuzz-huffman -max_total_time=60
+        run: timeout 65 ./curldbg-fuzz-huffman -max_total_time=60 -entropic=0
       - name: Fuzz HPACK decode (60s)
-        run: ./curldbg-fuzz-hpack -max_total_time=60
+        run: timeout 65 ./curldbg-fuzz-hpack -max_total_time=60 -entropic=0
       - name: Fuzz response headers (60s)
-        run: ./curldbg-fuzz -max_total_time=60
+        run: timeout 65 ./curldbg-fuzz -max_total_time=60 -entropic=0
