@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.0.11]
+
+### Changed
+- `run_request()` refactored: extracted `build_request_headers`, `dispatch_request`, `update_hop_record`, and `plan_redirect` into independently-testable functions
+- Replaced `goto reconnect` retry with an explicit inner `for(;;)` loop — at-most-one-retry-per-hop is now structural, not goto-based
+
+### Fixed
+- Stale `conn->last_errno` now cleared on fresh connection establishment, preventing spurious retries on version-mismatch errors after a prior-hop transient failure
+
 ## [2.0.10]
 
 ### Changed
