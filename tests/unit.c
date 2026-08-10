@@ -1965,6 +1965,23 @@ TEST(test_huffman_roundtrip) {
 
 }
 
+TEST(test_hpack_decode_empty_huffman) {
+    struct huff_node *tree = NULL;
+    int alloc = 0;
+    ASSERT_INT_EQ(huff_tree_init(&tree, &alloc), 0, "huff_tree_init");
+    ASSERT_PTR_NOTNULL(tree, "huff_tree");
+
+    unsigned char buf = 0x80;
+    size_t offset = 0;
+    char out[256];
+    size_t out_len = 0;
+
+    int rc = hpack_decode_string(tree, &buf, 1, &offset, out, sizeof(out), &out_len);
+    ASSERT_INT_EQ(rc, 0, "empty Huffman string decode succeeds");
+    ASSERT_INT_EQ(out_len, (size_t)0, "empty Huffman string produces zero-length output");
+    ASSERT_INT_EQ(offset, (size_t)1, "offset advanced past the encoding");
+}
+
 /* ================================================================
  * Main
  * ================================================================ */
@@ -2180,6 +2197,7 @@ int main(void) {
     test_parse_cmdline_combined_flags_H();
 
     test_huffman_roundtrip();
+    test_hpack_decode_empty_huffman();
 
     printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
            tests_run - tests_failed, tests_failed, tests_run);

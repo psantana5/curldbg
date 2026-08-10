@@ -576,7 +576,7 @@ int hpack_decode_string(const struct huff_node *tree,
     if (huffman) {
         size_t decoded = huffman_decode(tree, buf + *offset, slen,
                                          (unsigned char *)out, out_size);
-        if (decoded == 0 || decoded >= out_size) return -1;
+        if (decoded >= out_size || (decoded == 0 && slen > 0)) return -1;
         out[decoded] = '\0';
         *out_len = decoded;
     } else {
