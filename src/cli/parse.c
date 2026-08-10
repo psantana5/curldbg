@@ -435,6 +435,11 @@ static int handle_flag(enum flag_id id, const char *value, struct cmdline_opts *
             c->write_out_format = value;
             return 0;
 
+        case FLAG_DUMP_HEADER:
+            if (value == NULL) { set_cmdline_error(c, "Missing value for --dump-header"); return -1; }
+            c->dump_header_path = value;
+            return 0;
+
         case FLAG_SILENT:
             c->silent = true;
             return 0;

@@ -98,8 +98,10 @@ int main(int argc, char **argv) {
         struct run_result result;
         struct connection_state rconn;
         FILE *body_out = NULL;
+        FILE *header_out = NULL;
         char output_path_buf[1024];
         bool close_body = false;
+        bool close_header = false;
         memset(&rconn, 0, sizeof(rconn));
         rconn.conn.fd = -1;
 
@@ -143,6 +145,19 @@ int main(int argc, char **argv) {
             }
         }
 
+        if (c->dump_header_path != NULL) {
+            if (strcmp(c->dump_header_path, "-") == 0) {
+                header_out = stdout;
+            } else {
+                header_out = fopen(c->dump_header_path, "wb");
+                if (header_out == NULL) {
+                    fprintf(stderr, "Unable to open dump-header file '%s': %s\n", c->dump_header_path, strerror(errno));
+                    exit_code = EXIT_FAILURE; goto cleanup;
+                }
+                close_header = true;
+            }
+        }
+
         session_opts.proxy_host = proxy_host;
         session_opts.proxy_port = proxy_port;
         session_opts.cookie_jar = cookie_jar_ptr;
@@ -161,6 +176,10 @@ int main(int argc, char **argv) {
 
             if (c->write_out_format != NULL) {
                 write_out_expand(c->write_out_format, &result);
+            }
+
+            if (header_out != NULL && result.resp.header_text[0] != '\0') {
+                fputs(result.resp.header_text, header_out);
             }
 
             if (result.is_head && result.resp.header_text[0] != '\0') {
@@ -183,6 +202,7 @@ int main(int argc, char **argv) {
 
             if (rc != 0) {
                 if (close_body) fclose(body_out);
+                if (close_header) fclose(header_out);
                 close_connection(&rconn.conn);
                 freeaddrinfo(rconn.addrs);
                 rconn.addrs = NULL;
@@ -199,6 +219,7 @@ int main(int argc, char **argv) {
             cookie_jar_save(cookie_jar_ptr, c->cookie_jar_path);
 
         if (close_body) fclose(body_out);
+        if (close_header) fclose(header_out);
         goto cleanup;
     }
 

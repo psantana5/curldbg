@@ -52,6 +52,7 @@ enum flag_id {
     FLAG_DISABLE,
     FLAG_PROTO,
     FLAG_PROTO_REDIR,
+    FLAG_DUMP_HEADER,
 };
 
 struct flag_info {
@@ -122,6 +123,7 @@ static const struct flag_info g_flags[] = {
     FLG("-q",  "--disable",       NULL,       "Disable .curlrc (no-op, for curl compat)", "Other", FLAG_DISABLE),
     FLG(NULL,  "--proto",         "<protocols>", "Protocols to use (no-op, for curl compat)", "Other", FLAG_PROTO),
     FLG(NULL,  "--proto-redir",   "<protocols>", "Protocols to redirect on (no-op, for curl compat)", "Other", FLAG_PROTO_REDIR),
+    FLG("-D",  "--dump-header",   "<file>",    "Write response headers to file", "Output", FLAG_DUMP_HEADER),
 
     { NULL, NULL, NULL, NULL, NULL, FLAG_NONE }
 };

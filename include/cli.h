@@ -56,6 +56,7 @@ struct cmdline_opts {
     bool compressed;
     const char *unix_socket_path;
     const char *write_out_format;
+    const char *dump_header_path;
     const char *cacert;
     const char *capath;
     const char **urls;
