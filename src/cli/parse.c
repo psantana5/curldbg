@@ -572,6 +572,9 @@ static int handle_flag(enum flag_id id, const char *value, struct cmdline_opts *
         case FLAG_DISABLE:
             return 0;
 
+        case FLAG_PROTO:
+            return 0;
+
         case FLAG_NONE:
             break;
     }
