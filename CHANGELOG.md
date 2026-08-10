@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.12]
+
+### Added
+- `--proto` flag as curl compatibility no-op
+
+### Fixed
+- `make clean` now removes fuzz binaries, static binary, and `gmon.out`
+
 ## [2.0.11]
 
 ### Changed
