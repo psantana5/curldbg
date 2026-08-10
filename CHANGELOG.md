@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.0.13]
+
+### Fixed
+- HPACK decompression error when decoding empty Huffman-encoded header values
+
 ## [2.0.12]
 
 ### Added
