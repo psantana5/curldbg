@@ -51,6 +51,7 @@ enum flag_id {
     FLAG_PROGRESS_BAR,
     FLAG_DISABLE,
     FLAG_PROTO,
+    FLAG_PROTO_REDIR,
 };
 
 struct flag_info {
@@ -120,6 +121,7 @@ static const struct flag_info g_flags[] = {
     FLG(NULL,  "--progress-bar",  NULL,       "Progress bar (no-op, for curl compat)", "Other", FLAG_PROGRESS_BAR),
     FLG("-q",  "--disable",       NULL,       "Disable .curlrc (no-op, for curl compat)", "Other", FLAG_DISABLE),
     FLG(NULL,  "--proto",         "<protocols>", "Protocols to use (no-op, for curl compat)", "Other", FLAG_PROTO),
+    FLG(NULL,  "--proto-redir",   "<protocols>", "Protocols to redirect on (no-op, for curl compat)", "Other", FLAG_PROTO_REDIR),
 
     { NULL, NULL, NULL, NULL, NULL, FLAG_NONE }
 };
