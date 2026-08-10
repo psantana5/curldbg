@@ -127,6 +127,7 @@ $(TSAN_OBJDIR)/unit_test: $(TSAN_UNIT_OBJS) tests/unit.c
 
 clean:
 	rm -rf $(TARGET) $(OBJDIR) $(SAN_OBJDIR) $(TSAN_OBJDIR)
+	rm -f $(TARGET)-fuzz $(TARGET)-fuzz-url $(TARGET)-fuzz-huffman $(TARGET)-fuzz-hpack $(TARGET)-static gmon.out
 
 test: $(TARGET)
 	$(call run_unit_and_integration,valgrind --leak-check=full --error-exitcode=1 -q $(OBJDIR)/unit_test)
