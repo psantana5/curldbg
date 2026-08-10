@@ -4,6 +4,8 @@
 
 ### Added
 - `--proto` flag as curl compatibility no-op
+- `--proto-redir` flag as curl compatibility no-op
+- `-D`/`--dump-header` flag to write response headers to a file
 
 ### Fixed
 - `make clean` now removes fuzz binaries, static binary, and `gmon.out`
