@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.0.15]
+
+### Changed
+- Default User-Agent now uses `CURLDBG_VERSION` (`curldbg/2.0.15`) instead of hardcoded `curldbg/1.0`
+
 ## [2.0.14]
 
 ### Added
