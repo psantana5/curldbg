@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.0.14]
+
+### Added
+- `-V` short flag for `--version`
+
 ## [2.0.13]
 
 ### Fixed

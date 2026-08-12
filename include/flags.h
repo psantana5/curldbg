@@ -118,7 +118,7 @@ static const struct flag_info g_flags[] = {
     FLG(NULL,  "--compare-urls",  NULL,       "Compare two different URLs (A vs B)", "Comparison", FLAG_COMPARE_URLS),
 
     FLG("-h",  "--help",          NULL,       "Show this help", "Other", FLAG_HELP),
-    FLG(NULL,  "--version",       NULL,       "Print version", "Other", FLAG_VERSION),
+    FLG("-V",  "--version",       NULL,       "Print version", "Other", FLAG_VERSION),
     FLG(NULL,  "--progress-bar",  NULL,       "Progress bar (no-op, for curl compat)", "Other", FLAG_PROGRESS_BAR),
     FLG("-q",  "--disable",       NULL,       "Disable .curlrc (no-op, for curl compat)", "Other", FLAG_DISABLE),
     FLG(NULL,  "--proto",         "<protocols>", "Protocols to use (no-op, for curl compat)", "Other", FLAG_PROTO),

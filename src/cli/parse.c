@@ -638,6 +638,7 @@ int parse_cmdline(int argc, char **argv, struct cmdline_opts *c) {
                     case 's': c->silent = true; break;
                     case 'S': c->show_error = true; break;
                     case 'v': c->verbose = true; break;
+                    case 'V': printf("curldbg %s\n", CURLDBG_VERSION); printf("Author: Pau Santana\n"); return 1;
                     case 'k': c->insecure_tls = true; break;
                     case 'L': c->follow_redirects = true; break;
                     case 'O': c->output_remote_name = true; break;
