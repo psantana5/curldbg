@@ -641,7 +641,7 @@ uint32_t http2_send_request(struct connection *conn, const struct url_info *url,
     struct h2_connection *h2 = conn->h2;
     (void)error;
     (void)error_len;
-    if (user_agent == NULL) user_agent = "curldbg/1.0";
+    if (user_agent == NULL) user_agent = "curldbg/" CURLDBG_VERSION;
 
     if (h2->goaway_received) {
         if (!h2->goaway_graceful) {

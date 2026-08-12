@@ -163,7 +163,7 @@ int send_request(
     bool compressed,
     unsigned int header_flags
 ) {
-    if (user_agent == NULL) user_agent = "curldbg/1.0";
+    if (user_agent == NULL) user_agent = "curldbg/" CURLDBG_VERSION;
 
     char host_header[320], body_headers[256], auth_header[1024];
     const char *verb = (method != NULL) ? method : "GET";
