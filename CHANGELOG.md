@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.1.1]
+
+### Fixed
+- Response body now printed after timing output, with `Response:` label and separator
+
+### Changed
+- Body buffering uses dynamic allocation (realloc) capped at 100 MB with overflow protection
+
 ## [2.1.0]
 
 ### Added
