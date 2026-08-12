@@ -144,13 +144,28 @@ char *find_header_end(char *buf, size_t len) {
 
 size_t write_body_data(const char *buf, size_t len, FILE *body_out, struct response_info *out,
                        bool capture_preview) {
-    (void)out;
     (void)capture_preview;
     if (body_out != NULL && len > 0) {
         if (fwrite(buf, 1, len, body_out) != len) return (size_t)-1;
     }
     if (body_out == NULL && len > 0) {
-        if (fwrite(buf, 1, len, stderr) != len) return (size_t)-1;
+        if (out->body_len > MAX_BODY_BUF || len > MAX_BODY_BUF - out->body_len)
+            return (size_t)-1;
+        size_t needed = out->body_len + len;
+        if (needed > out->body_cap) {
+            size_t new_cap = out->body_cap ? out->body_cap : 4096;
+            while (new_cap < needed) {
+                if (new_cap > MAX_BODY_BUF / 2) { new_cap = MAX_BODY_BUF; break; }
+                new_cap *= 2;
+            }
+            if (new_cap > MAX_BODY_BUF) new_cap = MAX_BODY_BUF;
+            char *new_buf = realloc(out->body_buf, new_cap);
+            if (new_buf == NULL) return (size_t)-1;
+            out->body_buf = new_buf;
+            out->body_cap = new_cap;
+        }
+        memcpy(out->body_buf + out->body_len, buf, len);
+        out->body_len = needed;
     }
     return 0;
 }

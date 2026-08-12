@@ -1219,6 +1219,7 @@ TEST(test_write_body_data_preview) {
     memset(&out, 0, sizeof(out));
     write_body_data("abcdefghij", 10, NULL, &out, true);
     ASSERT_INT_EQ(1, 1, "body written to stderr without crash");
+    free(out.body_buf);
 }
 
 TEST(test_write_body_data_null_file) {
@@ -1226,6 +1227,7 @@ TEST(test_write_body_data_null_file) {
     memset(&out, 0, sizeof(out));
     size_t rc = write_body_data("ok", 2, NULL, &out, true);
     ASSERT_INT_EQ((int)rc, 0, "null file succeeds");
+    free(out.body_buf);
 }
 
 TEST(test_write_body_data_no_preview_still_writes) {
@@ -1277,6 +1279,7 @@ TEST(test_receive_response_captures_preview_without_body_file) {
         NULL, false, &out, err, sizeof(err));
     ASSERT_INT_EQ(rc, 0, "receive ok");
     ASSERT_INT_EQ(out.status_code, 200, "status is 200");
+    free(out.body_buf);
 }
 
 TEST(test_receive_response_head_ignores_body) {
@@ -1288,6 +1291,7 @@ TEST(test_receive_response_head_ignores_body) {
         NULL, true, &out, err, sizeof(err));
     ASSERT_INT_EQ(rc, 0, "head receive ok");
     ASSERT_INT_EQ(out.status_code, 200, "status parsed");
+    free(out.body_buf);
 }
 
 TEST(test_receive_response_100_continue) {
@@ -1300,6 +1304,7 @@ TEST(test_receive_response_100_continue) {
     ASSERT_INT_EQ(rc, 0, "100 Continue handled");
     ASSERT_INT_EQ(out.status_code, 200, "final status is 200");
     ASSERT_TRUE(out.ttfb_ms > 0, "ttfb measured");
+    free(out.body_buf);
 }
 
 TEST(test_receive_response_100_continue_no_body) {
@@ -1311,6 +1316,7 @@ TEST(test_receive_response_100_continue_no_body) {
         NULL, false, &out, err, sizeof(err));
     ASSERT_INT_EQ(rc, 0, "100 Continue -> 204 handled");
     ASSERT_INT_EQ(out.status_code, 204, "final status is 204");
+    free(out.body_buf);
 }
 
 TEST(test_receive_response_103_early_hints) {
@@ -1323,6 +1329,7 @@ TEST(test_receive_response_103_early_hints) {
         NULL, false, &out, err, sizeof(err));
     ASSERT_INT_EQ(rc, 0, "103 Early Hints handled");
     ASSERT_INT_EQ(out.status_code, 200, "final status is 200");
+    free(out.body_buf);
 }
 
 TEST(test_final_status_code_no_hops) {
@@ -1687,6 +1694,7 @@ TEST(test_chunked_write_simple) {
     chunked_write("5\r\nhello\r\n0\r\n\r\n", 15, NULL, &out,
         &state, &rem, line_buf, &line_len, NULL, false, err, sizeof(err));
     ASSERT_INT_EQ(state, 3, "state done");
+    free(out.body_buf);
 }
 
 TEST(test_chunked_write_multiple) {
@@ -1700,6 +1708,7 @@ TEST(test_chunked_write_multiple) {
     chunked_write("3\r\nabc\r\n0\r\n\r\n", 13, NULL, &out,
         &state, &rem, line_buf, &line_len, NULL, false, err, sizeof(err));
     ASSERT_INT_EQ(state, 3, "state done");
+    free(out.body_buf);
 }
 
 TEST(test_chunked_write_split) {
@@ -1715,6 +1724,7 @@ TEST(test_chunked_write_split) {
     chunked_write("cd\r\n0\r\n\r\n", 10, NULL, &out,
         &state, &rem, line_buf, &line_len, NULL, false, err, sizeof(err));
     ASSERT_INT_EQ(state, 3, "state done");
+    free(out.body_buf);
 }
 
 TEST(test_setup_upload_file_stdin) {

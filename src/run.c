@@ -32,6 +32,10 @@ static void close_upload_file(FILE **file) {
 void free_run_result(struct run_result *result) {
     free(result->hops);
     result->hops = NULL;
+    free(result->resp.body_buf);
+    result->resp.body_buf = NULL;
+    result->resp.body_len = 0;
+    result->resp.body_cap = 0;
     result->hop_count = 0;
 }
 
@@ -769,6 +773,10 @@ error_cleanup:
     rc = -1;
     free(out->hops);
     out->hops = NULL;
+    free(out->resp.body_buf);
+    out->resp.body_buf = NULL;
+    out->resp.body_len = 0;
+    out->resp.body_cap = 0;
 done:
     close_upload_file(&upload_file);
     clock_gettime(CLOCK_MONOTONIC, &total_end);

@@ -10,6 +10,7 @@
 #define RESPONSE_READ_BUF 32768
 #define RECV_BUF_SIZE 102400
 #define UPLOAD_READ_BUF 32768
+#define MAX_BODY_BUF (100ULL * 1024 * 1024)
 
 enum {
     HF_CONTENT_TYPE   = 1 << 0,
@@ -22,6 +23,9 @@ enum {
 };
 
 struct response_info {
+    char *body_buf;
+    size_t body_len;
+    size_t body_cap;
     double ttfb_ms;
     int status_code;
     char location[2048];

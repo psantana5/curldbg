@@ -1157,10 +1157,29 @@ static int handle_h2_data_frame(struct h2_connection *h2,
             set_error(error, error_len, "Failed to write response body");
             return -1;
         }
-        if (dst == s && s->body_out == NULL &&
-            fwrite(body_data, 1, data_len_actual, stderr) != data_len_actual) {
-            set_error(error, error_len, "Failed to write response body");
-            return -1;
+        if (dst == s && s->body_out == NULL) {
+            if (s->out->body_len > MAX_BODY_BUF || data_len_actual > MAX_BODY_BUF - s->out->body_len) {
+                set_error(error, error_len, "Response body too large");
+                return -1;
+            }
+            size_t needed = s->out->body_len + data_len_actual;
+            if (needed > s->out->body_cap) {
+                size_t new_cap = s->out->body_cap ? s->out->body_cap : 4096;
+                while (new_cap < needed) {
+                    if (new_cap > MAX_BODY_BUF / 2) { new_cap = MAX_BODY_BUF; break; }
+                    new_cap *= 2;
+                }
+                if (new_cap > MAX_BODY_BUF) new_cap = MAX_BODY_BUF;
+                char *new_buf = realloc(s->out->body_buf, new_cap);
+                if (new_buf == NULL) {
+                    set_error(error, error_len, "Out of memory");
+                    return -1;
+                }
+                s->out->body_buf = new_buf;
+                s->out->body_cap = new_cap;
+            }
+            memcpy(s->out->body_buf + s->out->body_len, body_data, data_len_actual);
+            s->out->body_len = needed;
         }
 
         dst->recv_data_len += data_len_actual;
