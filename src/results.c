@@ -72,13 +72,6 @@ void print_single_output(const struct run_result *result) {
                    result->hops[i].loser_ip, family_short_name(result->hops[i].loser_family),
                    result->hops[i].loser_connect_ms - result->hops[i].tcp_ms);
     }
-
-    if (result->resp.preview_len > 0) {
-        fprintf(stderr, "\nResponse body preview (first ~1KB):\n");
-        fwrite(result->resp.preview, 1, result->resp.preview_len, stderr);
-        if (result->resp.preview[result->resp.preview_len - 1] != '\n')
-            fputc('\n', stderr);
-    }
 }
 
 void print_compare_metric_row(const char *metric, double a, double b) {

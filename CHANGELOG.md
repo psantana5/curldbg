@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.1.0]
+
+### Added
+- `-V` short flag for `--version`
+- `VERSIONING` document specifying semver conventions and release checklist
+
+### Changed
+- Response body output now shows full content (was capped at first 1KB)
+- Default User-Agent now uses `CURLDBG_VERSION` (`curldbg/2.1.0`) instead of hardcoded `curldbg/1.0`
+
+### Removed
+- `preview` buffer and `PREVIEW_BYTES` limit from response pipeline
+
 ## [2.0.15]
 
 ### Changed

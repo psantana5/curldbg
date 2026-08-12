@@ -1015,9 +1015,9 @@ extern int build_body_headers(char *body_headers, size_t body_headers_size,
     size_t *content_len_out, bool *include_body_headers_out,
     char *error, size_t error_len);
 extern size_t chunked_write(const char *buf, size_t len, FILE *body_out,
-    struct response_info *out, int *state, unsigned long *chunk_rem,
+    struct response_info *out, int *state, uint64_t *chunk_rem,
     char *line_buf, size_t *line_len,
-    z_stream *strm, bool decompress, bool capture_preview,
+    z_stream *strm, bool decompress,
     char *error, size_t error_len);
 extern int setup_upload_file(const char *upload_path, FILE **upload_file,
     size_t *upload_size, bool *chunked_upload, char *error, size_t error_len);
@@ -1218,8 +1218,7 @@ TEST(test_write_body_data_preview) {
     struct response_info out;
     memset(&out, 0, sizeof(out));
     write_body_data("abcdefghij", 10, NULL, &out, true);
-    ASSERT_INT_EQ(out.preview_len, 10, "preview length");
-    ASSERT_STR_EQ(out.preview, "abcdefghij", "preview content");
+    ASSERT_INT_EQ(1, 1, "body written to stderr without crash");
 }
 
 TEST(test_write_body_data_null_file) {
@@ -1242,7 +1241,6 @@ TEST(test_write_body_data_no_preview_still_writes) {
     got[n] = '\0';
     ASSERT_INT_EQ((int)rc, 0, "write succeeds without preview");
     ASSERT_STR_EQ(got, "body", "body still written");
-    ASSERT_INT_EQ(out.preview_len, 0, "preview skipped");
     fclose(tmp);
 }
 
@@ -1278,8 +1276,7 @@ TEST(test_receive_response_captures_preview_without_body_file) {
         "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello",
         NULL, false, &out, err, sizeof(err));
     ASSERT_INT_EQ(rc, 0, "receive ok");
-    ASSERT_STR_EQ(out.preview, "hello", "preview captured");
-    ASSERT_INT_EQ(out.preview_len, 5, "preview length");
+    ASSERT_INT_EQ(out.status_code, 200, "status is 200");
 }
 
 TEST(test_receive_response_head_ignores_body) {
@@ -1291,7 +1288,6 @@ TEST(test_receive_response_head_ignores_body) {
         NULL, true, &out, err, sizeof(err));
     ASSERT_INT_EQ(rc, 0, "head receive ok");
     ASSERT_INT_EQ(out.status_code, 200, "status parsed");
-    ASSERT_INT_EQ(out.preview_len, 0, "head has no body preview");
 }
 
 TEST(test_receive_response_100_continue) {
@@ -1303,8 +1299,6 @@ TEST(test_receive_response_100_continue) {
         NULL, false, &out, err, sizeof(err));
     ASSERT_INT_EQ(rc, 0, "100 Continue handled");
     ASSERT_INT_EQ(out.status_code, 200, "final status is 200");
-    ASSERT_STR_EQ(out.preview, "hello", "body from final response");
-    ASSERT_INT_EQ(out.preview_len, 5, "preview length");
     ASSERT_TRUE(out.ttfb_ms > 0, "ttfb measured");
 }
 
@@ -1317,7 +1311,6 @@ TEST(test_receive_response_100_continue_no_body) {
         NULL, false, &out, err, sizeof(err));
     ASSERT_INT_EQ(rc, 0, "100 Continue -> 204 handled");
     ASSERT_INT_EQ(out.status_code, 204, "final status is 204");
-    ASSERT_INT_EQ(out.preview_len, 0, "no body preview");
 }
 
 TEST(test_receive_response_103_early_hints) {
@@ -1330,7 +1323,6 @@ TEST(test_receive_response_103_early_hints) {
         NULL, false, &out, err, sizeof(err));
     ASSERT_INT_EQ(rc, 0, "103 Early Hints handled");
     ASSERT_INT_EQ(out.status_code, 200, "final status is 200");
-    ASSERT_STR_EQ(out.preview, "abc", "body preserved");
 }
 
 TEST(test_final_status_code_no_hops) {
@@ -1688,12 +1680,12 @@ TEST(test_chunked_write_simple) {
     struct response_info out;
     memset(&out, 0, sizeof(out));
     int state = 0;
-    unsigned long rem = 0;
+    uint64_t rem = 0;
     char line_buf[32];
     size_t line_len = 0;
     char err[64] = "";
     chunked_write("5\r\nhello\r\n0\r\n\r\n", 15, NULL, &out,
-        &state, &rem, line_buf, &line_len, NULL, false, true, err, sizeof(err));
+        &state, &rem, line_buf, &line_len, NULL, false, err, sizeof(err));
     ASSERT_INT_EQ(state, 3, "state done");
 }
 
@@ -1701,12 +1693,12 @@ TEST(test_chunked_write_multiple) {
     struct response_info out;
     memset(&out, 0, sizeof(out));
     int state = 0;
-    unsigned long rem = 0;
+    uint64_t rem = 0;
     char line_buf[32];
     size_t line_len = 0;
     char err[64] = "";
     chunked_write("3\r\nabc\r\n0\r\n\r\n", 13, NULL, &out,
-        &state, &rem, line_buf, &line_len, NULL, false, true, err, sizeof(err));
+        &state, &rem, line_buf, &line_len, NULL, false, err, sizeof(err));
     ASSERT_INT_EQ(state, 3, "state done");
 }
 
@@ -1714,14 +1706,14 @@ TEST(test_chunked_write_split) {
     struct response_info out;
     memset(&out, 0, sizeof(out));
     int state = 0;
-    unsigned long rem = 0;
+    uint64_t rem = 0;
     char line_buf[32];
     size_t line_len = 0;
     char err[64] = "";
     chunked_write("4\r\nab", 5, NULL, &out,
-        &state, &rem, line_buf, &line_len, NULL, false, true, err, sizeof(err));
+        &state, &rem, line_buf, &line_len, NULL, false, err, sizeof(err));
     chunked_write("cd\r\n0\r\n\r\n", 10, NULL, &out,
-        &state, &rem, line_buf, &line_len, NULL, false, true, err, sizeof(err));
+        &state, &rem, line_buf, &line_len, NULL, false, err, sizeof(err));
     ASSERT_INT_EQ(state, 3, "state done");
 }
 

@@ -6,7 +6,6 @@
 #include <stdio.h>
 #include <time.h>
 
-#define PREVIEW_BYTES 1024
 #define HEADER_MAX 16384
 #define RESPONSE_READ_BUF 32768
 #define RECV_BUF_SIZE 102400
@@ -23,8 +22,6 @@ enum {
 };
 
 struct response_info {
-    char preview[PREVIEW_BYTES + 1];
-    size_t preview_len;
     double ttfb_ms;
     int status_code;
     char location[2048];

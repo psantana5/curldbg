@@ -1157,12 +1157,10 @@ static int handle_h2_data_frame(struct h2_connection *h2,
             set_error(error, error_len, "Failed to write response body");
             return -1;
         }
-        if (dst == s && s->body_out == NULL && s->out->preview_len < PREVIEW_BYTES) {
-            size_t take = data_len_actual;
-            if (take > PREVIEW_BYTES - s->out->preview_len)
-                take = PREVIEW_BYTES - s->out->preview_len;
-            memcpy(s->out->preview + s->out->preview_len, body_data, take);
-            s->out->preview_len += take;
+        if (dst == s && s->body_out == NULL &&
+            fwrite(body_data, 1, data_len_actual, stderr) != data_len_actual) {
+            set_error(error, error_len, "Failed to write response body");
+            return -1;
         }
 
         dst->recv_data_len += data_len_actual;
@@ -1211,7 +1209,6 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
     out->set_cookie_buf[0] = '\0';
     out->content_encoding[0] = '\0';
     out->location[0] = '\0';
-    out->preview_len = 0;
     out->ttfb_ms = -1.0;
 
     while (!s->done) {
@@ -1545,7 +1542,6 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
         return -1;
     }
 
-    if (s->out) s->out->preview[s->out->preview_len] = '\0';
     if (!s->seen_first_byte) s->out->ttfb_ms = -1.0;
     return 0;
 }
