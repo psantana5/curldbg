@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.1.2]
+
+### Added
+- Document all previously missing CLI flags in `man/curldbg.1` (`--data-urlencode`,
+  `--referer`, `--write-out`, `--dump-header`, `--cacert`, `--capath`, `--tlsv1.2`,
+  `--tlsv1.3`, `--retry`, `--retry-delay`, `--resolve`, `--interface`, `--unix-socket`,
+  `--http1.1`, `--http2`, `--compressed`, `--help`, `--disable`, `--proto`,
+  `--proto-redir`)
+
 ## [2.1.1]
 
 ### Fixed
