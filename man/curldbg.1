@@ -36,6 +36,11 @@ Repeatable \(em values are concatenated with &.
 .B \-\-data-binary
 Alias for \-d.
 .TP
+.B \-\-data-urlencode \fIdata\fR
+URL-encode and send request data. Accepts \fBname=content\fR (name is left
+as-is, content is encoded), \fB@file\fR, or \fB=content\fR (raw content is
+encoded). Defaults method to POST if \-X is not set.
+.TP
 .B \-T, \-\-upload-file \fIfile\fR
 Upload file as the PUT request body (single request mode only).
 .TP
@@ -61,6 +66,16 @@ Write response body to file (single request mode only).
 .B \-O, \-\-remote-name
 Write response body using the URL's filename component (single request mode only).
 .TP
+.B \-D, \-\-dump-header \fIfile\fR
+Write the response headers to \fIfile\fR.
+.TP
+.B \-w, \-\-write-out \fIformat\fR
+Print the given format string after the request completes. Supports
+\fB%{http_code}\fR, \fB%{time_total}\fR, \fB%{time_namelookup}\fR,
+\fB%{time_connect}\fR, \fB%{time_starttransfer}\fR, \fB%{url_effective}\fR,
+\fB%{num_redirects}\fR, \fB%{http_version}\fR, and \fB%{redirect_url}\fR, as
+well as \fB\\n\fR, \fB\\r\fR, \fB\\t\fR escapes.
+.TP
 .B \-\-progress-bar
 Accepted for curl compatibility (no-op).
 .SS "TLS / Auth"
@@ -71,13 +86,28 @@ Skip TLS certificate verification.
 .B \-u, \-\-user \fIuser:pass\fR
 Use HTTP Basic authentication.
 .TP
-.B -A, \-\-user-agent \fIstring\fR
+.B \-A, \-\-user-agent \fIstring\fR
 Set a custom User-Agent header (default: curldbg/<version>).
+.TP
+.B \-\-cacert \fIfile\fR
+Use \fIfile\fR as the CA certificate bundle for TLS verification.
+.TP
+.B \-\-capath \fIdir\fR
+Use \fIdir\fR as a directory of CA certificates (hashed) for TLS verification.
+.TP
+.B \-\-tlsv1.2
+Force TLS 1.2 (disable TLS 1.3).
+.TP
+.B \-\-tlsv1.3
+Force TLS 1.3 (disable TLS 1.2).
 .SS "Headers"
 .TP
 .B \-H, \-\-header \fIheader\fR
 Add a request header (repeatable). Providing Content-Type, Content-Length, or
 Host via \-H skips auto-generation of those headers.
+.TP
+.B \-e, \-\-referer \fIurl\fR
+Set the Referer request header.
 .SS "Connectivity"
 .TP
 .B \-4
@@ -98,6 +128,36 @@ Timeout for read/write operations in milliseconds.
 .B \-\-max-time \fIms\fR
 Total operation timeout in milliseconds (applied across all phases including
 redirects).
+.TP
+.B \-\-retry \fIn\fR
+Retry the request up to \fIn\fR times on failure (default: 0).
+.TP
+.B \-\-retry-delay \fIs\fR
+Delay in seconds between retries (default: 0).
+.TP
+.B \-\-resolve \fIhost:port:addr\fR
+Provide a custom address for a specific host and port, bypassing DNS
+(repeatable). \fIaddr\fR may be an IPv4 or IPv6 address (bracket IPv6 as
+\fB[::1]\fR).
+.TP
+.B \-\-interface \fIaddr\fR
+Bind the connection to a specific local IP address or network interface.
+.TP
+.B \-\-unix-socket \fIpath\fR
+Connect through a Unix domain socket instead of TCP (e.g. to reach a local
+daemon such as the Docker socket). The URL host/port are still used for the
+Host header.
+.TP
+.B \-\-http1.1
+Force HTTP/1.1 (error if the server negotiates HTTP/2).
+.TP
+.B \-\-http2
+Force HTTP/2 (error if the server does not negotiate it).
+.SS "Compression"
+.TP
+.B \-\-compressed
+Request a compressed response (adds Accept-Encoding: gzip, deflate) and
+decompress the body automatically.
 .SS "Redirects"
 .TP
 .B \-L, \-\-location
@@ -126,8 +186,20 @@ with deltas.
 Run two different URLs concurrently and print side-by-side metrics with deltas.
 .SS "Miscellaneous"
 .TP
+.B \-h, \-\-help
+Show usage and available options.
+.TP
 .B \-V, \-\-version
 Show version and author.
+.TP
+.B \-q, \-\-disable
+Accepted for curl compatibility (no-op; no .curlrc support).
+.TP
+.B \-\-proto \fIprotocols\fR
+Accepted for curl compatibility (no-op).
+.TP
+.B \-\-proto-redir \fIprotocols\fR
+Accepted for curl compatibility (no-op).
 .SH "OUTPUT FIELDS"
 When not in silent mode, curldbg prints:
 .TP
