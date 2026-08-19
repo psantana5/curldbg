@@ -110,7 +110,7 @@ static int append_data(struct cmdline_opts *c, const char *data, size_t data_len
         size_t old_len = c->request_data_len;
         size_t new_len = old_len + 1 + data_len + 1;
         char *combined = malloc(new_len);
-        if (combined == NULL) { set_cmdline_error(c, "Out of memory"); return -1; }
+        if (combined == NULL) { if (alloced) free((void *)data); set_cmdline_error(c, "Out of memory"); return -1; }
         memcpy(combined, c->request_data, old_len);
         combined[old_len] = '&';
         memcpy(combined + old_len + 1, data, data_len);
@@ -164,16 +164,18 @@ static int handle_data_urlencode(struct cmdline_opts *c, const char *arg) {
     char *file_buf = NULL;
     if (arg[0] == '@') {
         const char *fpath = arg + 1;
-        FILE *fp = NULL;
-        if (fpath[0] == '-' && fpath[1] == '\0') fp = stdin;
-        else fp = fopen(fpath, "rb");
-        if (fp == NULL) { set_cmdline_error(c, "Cannot open '%s' for --data-urlencode", fpath); return -1; }
         size_t total = 0;
-        file_buf = read_data_file(fp, &total);
-        if (fp != stdin) fclose(fp);
+        if (fpath[0] == '-' && fpath[1] == '\0') {
+            file_buf = read_data_file(stdin, &total);
+        } else {
+            FILE *fp = fopen(fpath, "rb");
+            if (fp == NULL) { set_cmdline_error(c, "Cannot open '%s' for --data-urlencode", fpath); goto fail; }
+            file_buf = read_data_file(fp, &total);
+            fclose(fp);
+        }
         if (file_buf == NULL) {
             set_cmdline_error(c, "Failed to read '%s' (too large or out of memory)", fpath);
-            return -1;
+            goto fail;
         }
         content = file_buf;
     } else if (arg[0] == '=') {
@@ -184,7 +186,7 @@ static int handle_data_urlencode(struct cmdline_opts *c, const char *arg) {
         if (eq != NULL && (at == NULL || eq < at)) {
             size_t nlen = (size_t)(eq - arg);
             char *n = malloc(nlen + 1);
-            if (n == NULL) { set_cmdline_error(c, "Out of memory"); return -1; }
+            if (n == NULL) { set_cmdline_error(c, "Out of memory"); goto fail; }
             memcpy(n, arg, nlen); n[nlen] = '\0';
             name = n;
             content = eq + 1;
@@ -192,21 +194,23 @@ static int handle_data_urlencode(struct cmdline_opts *c, const char *arg) {
             size_t nlen = (size_t)(at - arg);
             if (nlen > 0) {
                 char *n = malloc(nlen + 1);
-                if (n == NULL) { set_cmdline_error(c, "Out of memory"); return -1; }
+                if (n == NULL) { set_cmdline_error(c, "Out of memory"); goto fail; }
                 memcpy(n, arg, nlen); n[nlen] = '\0';
                 name = n;
             }
             const char *fpath = at + 1;
-            FILE *fp = NULL;
-            if (fpath[0] == '-' && fpath[1] == '\0') fp = stdin;
-            else fp = fopen(fpath, "rb");
-            if (fp == NULL) { set_cmdline_error(c, "Cannot open '%s' for --data-urlencode", fpath); return -1; }
             size_t total = 0;
-            file_buf = read_data_file(fp, &total);
-            if (fp != stdin) fclose(fp);
+            if (fpath[0] == '-' && fpath[1] == '\0') {
+                file_buf = read_data_file(stdin, &total);
+            } else {
+                FILE *fp = fopen(fpath, "rb");
+                if (fp == NULL) { set_cmdline_error(c, "Cannot open '%s' for --data-urlencode", fpath); goto fail; }
+                file_buf = read_data_file(fp, &total);
+                fclose(fp);
+            }
             if (file_buf == NULL) {
                 set_cmdline_error(c, "Failed to read '%s' (too large or out of memory)", fpath);
-                return -1;
+                goto fail;
             }
             content = file_buf;
         } else {
@@ -216,24 +220,31 @@ static int handle_data_urlencode(struct cmdline_opts *c, const char *arg) {
     size_t clen = strlen(content);
     size_t max_encoded = clen * 3 + 1;
     encoded = malloc(max_encoded);
-    if (encoded == NULL) { set_cmdline_error(c, "Out of memory"); free(file_buf); return -1; }
+    if (encoded == NULL) { set_cmdline_error(c, "Out of memory"); goto fail; }
     if (url_encode(content, encoded, max_encoded) != 0) {
-        set_cmdline_error(c, "URL-encoding failed"); free(encoded); free(file_buf); return -1;
+        set_cmdline_error(c, "URL-encoding failed"); goto fail;
     }
     size_t name_len = (name != NULL) ? strlen(name) : 0;
     size_t need = name_len + 1 + strlen(encoded) + 1;
     char *final = malloc(need);
-    if (final == NULL) { set_cmdline_error(c, "Out of memory"); free(encoded); free(file_buf); return -1; }
+    if (final == NULL) { set_cmdline_error(c, "Out of memory"); goto fail; }
     if (name != NULL)
         snprintf(final, need, "%s=%s", name, encoded);
     else
         snprintf(final, need, "%s", encoded);
     free(encoded);
+    encoded = NULL;
     free(file_buf);
-    int rc = append_data(c, final, strlen(final), true);
-    if (rc != 0) free(final);
+    file_buf = NULL;
     free((void *)name);
+    name = NULL;
+    int rc = append_data(c, final, strlen(final), true);
     return rc;
+fail:
+    free(encoded);
+    free(file_buf);
+    free((void *)name);
+    return -1;
 }
 
 static const struct flag_info *find_flag(const char *name) {

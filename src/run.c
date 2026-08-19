@@ -570,12 +570,12 @@ static int run_request(const char *input_url, const struct run_options *opts,
 
     if (opts->max_redirects < 0 || opts->max_redirects > 100) {
         snprintf(out->error, sizeof(out->error), "Invalid max_redirects value");
-        return -1;
+        goto error_cleanup;
     }
     out->hops = calloc((size_t)opts->max_redirects + 1, sizeof(*out->hops));
     if (out->hops == NULL) {
         snprintf(out->error, sizeof(out->error), "Out of memory");
-        return -1;
+        goto error_cleanup;
     }
 
     if (__builtin_expect(clock_gettime(CLOCK_MONOTONIC, &total_start) != 0, 0)) die("clock_gettime");

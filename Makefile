@@ -208,7 +208,7 @@ cppcheck:
 		--inline-suppr \
 		-Iinclude src/ tests/server/
 
-coverage: CFLAGS := -g -O0 --coverage $(WARN_FLAGS) -pthread -Iinclude
+coverage: CFLAGS := -g -O0 --coverage $(WARN_FLAGS) -pthread -Iinclude -Isrc/net/http2
 coverage:
 	$(MAKE) clean
 	$(MAKE) all CFLAGS="$(CFLAGS)"
