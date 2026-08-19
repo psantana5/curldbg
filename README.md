@@ -118,6 +118,14 @@ src/
     └── curldbg.h            — umbrella header (includes all above)
 ```
 
+## Requirements
+
+- Linux (uses glibc-specific APIs: `strcasecmp`, `strncasecmp`, `SO_BINDTODEVICE`)
+- OpenSSL (libssl, libcrypto)
+- zlib
+- libpsl (via pkg-config)
+- GCC or Clang with C11 support
+
 ## Testing
 
 ```bash

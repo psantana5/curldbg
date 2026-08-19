@@ -40,4 +40,15 @@ static inline size_t safe_strlcpy(char *dst, const char *src, size_t dsize) {
     return slen;
 }
 
+#define AUTO_BUF_STACK_SIZE 8192
+
+struct auto_buf {
+    char *data;
+    char stack_buf[AUTO_BUF_STACK_SIZE];
+    bool on_heap;
+};
+
+void auto_buf_init(struct auto_buf *ab, size_t need);
+void auto_buf_done(struct auto_buf *ab);
+
 #endif

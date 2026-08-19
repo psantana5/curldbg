@@ -165,3 +165,21 @@ int url_encode(const char *input, char *output, size_t output_size) {
     output[o] = '\0';
     return 0;
 }
+
+void auto_buf_init(struct auto_buf *ab, size_t need) {
+    if (need <= AUTO_BUF_STACK_SIZE) {
+        ab->data = ab->stack_buf;
+        ab->on_heap = false;
+    } else {
+        ab->data = malloc(need);
+        ab->on_heap = (ab->data != NULL);
+    }
+}
+
+void auto_buf_done(struct auto_buf *ab) {
+    if (ab->on_heap) {
+        free(ab->data);
+        ab->data = NULL;
+        ab->on_heap = false;
+    }
+}

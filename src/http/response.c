@@ -373,11 +373,12 @@ parse_response: {}
                     if (decomp_init) inflateEnd(&decomp_strm);
                     return -1;
                 }
-                if (out->content_length == -2) {
+                if (out->content_length == -2 && !out->chunked) {
                     set_error(error, error_len, "Invalid Content-Length header");
                     if (decomp_init) inflateEnd(&decomp_strm);
                     return -1;
                 }
+                if (out->content_length == -2) out->content_length = -1;
                 if (out->status_code >= 100 && out->status_code < 200) {
                     if (decomp_init) { inflateEnd(&decomp_strm); decomp_init = false; }
                     need_decompress = false;

@@ -1,4 +1,5 @@
 #include "curldbg.h"
+#include "http2_internal.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -1985,6 +1986,310 @@ TEST(test_hpack_decode_empty_huffman) {
 }
 
 /* ================================================================
+ * HTTP/2 settings
+ * ================================================================ */
+
+static struct h2_connection *make_test_h2(void) {
+    struct h2_connection *h2 = calloc(1, sizeof(*h2));
+    if (h2 == NULL) return NULL;
+    h2->settings.header_table_size = 4096;
+    h2->settings.initial_window_size = 65535;
+    h2->settings.max_frame_size = 16384;
+    h2->settings.max_concurrent_streams = 100;
+    h2->settings.max_header_list_size = 0;
+    h2->settings.enable_push = true;
+    h2->conn_window = 65535;
+    h2->streams = calloc(H2_MAX_STREAMS, sizeof(struct h2_stream));
+    if (h2->streams == NULL) { free(h2); return NULL; }
+    huff_tree_init(&h2->huff_tree, NULL);
+    hpack_table_set_max_size(&h2->dyn_table, 4096);
+    return h2;
+}
+
+static void free_test_h2(struct h2_connection *h2) {
+    if (h2 == NULL) return;
+    for (size_t i = 0; i < h2->dyn_table.capacity; i++)
+        hpack_entry_free(&h2->dyn_table.entries[i]);
+    free(h2->dyn_table.entries);
+    free(h2->streams);
+    free(h2);
+}
+
+static void write_setting(unsigned char *p, uint16_t id, uint32_t val) {
+    p[0] = (unsigned char)(id >> 8);
+    p[1] = (unsigned char)(id);
+    p[2] = (unsigned char)(val >> 24);
+    p[3] = (unsigned char)(val >> 16);
+    p[4] = (unsigned char)(val >> 8);
+    p[5] = (unsigned char)(val);
+}
+
+TEST(test_h2_settings_apply_valid) {
+    struct h2_connection *h2 = make_test_h2();
+    ASSERT_PTR_NOTNULL(h2, "make_test_h2");
+
+    unsigned char payload[12];
+    write_setting(payload + 0, H2_SETTINGS_MAX_FRAME_SIZE_ID, 32768);
+    write_setting(payload + 6, H2_SETTINGS_INITIAL_WINDOW_SIZE, 131072);
+
+    char err[256] = {0};
+    int rc = h2_settings_apply(h2, payload, sizeof(payload), err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "valid settings accepted");
+    ASSERT_INT_EQ(h2->settings.max_frame_size, 32768, "max_frame_size updated");
+    ASSERT_INT_EQ(h2->settings.initial_window_size, 131072, "initial_window_size updated");
+
+    free_test_h2(h2);
+}
+
+TEST(test_h2_settings_apply_duplicate) {
+    struct h2_connection *h2 = make_test_h2();
+    ASSERT_PTR_NOTNULL(h2, "make_test_h2");
+
+    unsigned char payload[12];
+    write_setting(payload + 0, H2_SETTINGS_HEADER_TABLE_SIZE, 1024);
+    write_setting(payload + 6, H2_SETTINGS_HEADER_TABLE_SIZE, 2048);
+
+    char err[256] = {0};
+    int rc = h2_settings_apply(h2, payload, sizeof(payload), err, sizeof(err));
+    ASSERT_INT_EQ(rc, -1, "duplicate setting rejected");
+    ASSERT_TRUE(strlen(err) > 0, "error message set");
+
+    free_test_h2(h2);
+}
+
+TEST(test_h2_settings_apply_header_table_cap) {
+    struct h2_connection *h2 = make_test_h2();
+    ASSERT_PTR_NOTNULL(h2, "make_test_h2");
+
+    unsigned char payload[6];
+    write_setting(payload, H2_SETTINGS_HEADER_TABLE_SIZE, 99999);
+
+    char err[256] = {0};
+    int rc = h2_settings_apply(h2, payload, sizeof(payload), err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "oversized header table accepted (capped)");
+    ASSERT_INT_EQ(h2->settings.header_table_size, (uint32_t)H2_MAX_DYNAMIC_TABLE_SIZE,
+                  "header_table_size capped to H2_MAX_DYNAMIC_TABLE_SIZE");
+
+    free_test_h2(h2);
+}
+
+TEST(test_h2_settings_apply_invalid_frame_size) {
+    struct h2_connection *h2 = make_test_h2();
+    ASSERT_PTR_NOTNULL(h2, "make_test_h2");
+
+    unsigned char payload[6];
+
+    /* Too small */
+    write_setting(payload, H2_SETTINGS_MAX_FRAME_SIZE_ID, 100);
+    char err[256] = {0};
+    int rc = h2_settings_apply(h2, payload, sizeof(payload), err, sizeof(err));
+    ASSERT_INT_EQ(rc, -1, "frame size too small rejected");
+
+    /* Too large */
+    write_setting(payload, H2_SETTINGS_MAX_FRAME_SIZE_ID, 20000000);
+    memset(err, 0, sizeof(err));
+    rc = h2_settings_apply(h2, payload, sizeof(payload), err, sizeof(err));
+    ASSERT_INT_EQ(rc, -1, "frame size too large rejected");
+
+    free_test_h2(h2);
+}
+
+TEST(test_h2_settings_apply_invalid_enable_push) {
+    struct h2_connection *h2 = make_test_h2();
+    ASSERT_PTR_NOTNULL(h2, "make_test_h2");
+
+    unsigned char payload[6];
+    write_setting(payload, H2_SETTINGS_ENABLE_PUSH, 2);
+
+    char err[256] = {0};
+    int rc = h2_settings_apply(h2, payload, sizeof(payload), err, sizeof(err));
+    ASSERT_INT_EQ(rc, -1, "enable_push > 1 rejected");
+
+    free_test_h2(h2);
+}
+
+TEST(test_h2_settings_apply_empty) {
+    struct h2_connection *h2 = make_test_h2();
+    ASSERT_PTR_NOTNULL(h2, "make_test_h2");
+
+    char err[256] = {0};
+    int rc = h2_settings_apply(h2, (const unsigned char *)"", 0, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "empty payload accepted");
+
+    free_test_h2(h2);
+}
+
+TEST(test_h2_settings_apply_max_concurrent_streams) {
+    struct h2_connection *h2 = make_test_h2();
+    ASSERT_PTR_NOTNULL(h2, "make_test_h2");
+
+    unsigned char payload[6];
+    write_setting(payload, H2_SETTINGS_MAX_CONCURRENT_STREAMS, 200);
+
+    char err[256] = {0};
+    int rc = h2_settings_apply(h2, payload, sizeof(payload), err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "max_concurrent_streams accepted");
+    ASSERT_INT_EQ(h2->settings.max_concurrent_streams, 200, "max_concurrent_streams updated");
+
+    free_test_h2(h2);
+}
+
+TEST(test_h2_settings_apply_max_header_list_size) {
+    struct h2_connection *h2 = make_test_h2();
+    ASSERT_PTR_NOTNULL(h2, "make_test_h2");
+
+    unsigned char payload[6];
+    write_setting(payload, H2_SETTINGS_MAX_HEADER_LIST_SIZE, 8192);
+
+    char err[256] = {0};
+    int rc = h2_settings_apply(h2, payload, sizeof(payload), err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "max_header_list_size accepted");
+    ASSERT_INT_EQ(h2->settings.max_header_list_size, 8192, "max_header_list_size updated");
+
+    free_test_h2(h2);
+}
+
+/* ================================================================
+ * parse_h2_header_block
+ * ================================================================ */
+
+static struct connection *make_test_conn(void) {
+    struct connection *conn = calloc(1, sizeof(*conn));
+    return conn;
+}
+
+TEST(test_parse_h2_header_block_status) {
+    struct h2_connection *h2 = make_test_h2();
+    ASSERT_PTR_NOTNULL(h2, "make_test_h2");
+    struct connection *conn = make_test_conn();
+    ASSERT_PTR_NOTNULL(conn, "make_test_conn");
+
+    struct h2_stream *s = &h2->streams[0];
+    s->active = true;
+    struct response_info ri;
+    memset(&ri, 0, sizeof(ri));
+    s->out = &ri;
+
+    /* Encode ":status: 200" with literal without indexing (no huffman) */
+    unsigned char block[64];
+    size_t hp = 0;
+
+    /* Literal without indexing, new name: 0x00 prefix */
+    block[hp++] = 0x00;
+    /* name: ":status" (7 bytes, no huffman) */
+    block[hp++] = 0x07;  /* name length = 7, no Huffman */
+    memcpy(block + hp, ":status", 7);
+    hp += 7;
+    /* value: "200" (3 bytes, no huffman) */
+    block[hp++] = 0x03;  /* value length = 3, no Huffman */
+    memcpy(block + hp, "200", 3);
+    hp += 3;
+
+    char err[256] = {0};
+    int rc = parse_h2_header_block(h2, s, conn, 1, block, hp, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "parse succeeds");
+    ASSERT_INT_EQ(ri.status_code, 200, "status code parsed");
+
+    free(conn);
+    free_test_h2(h2);
+}
+
+TEST(test_parse_h2_header_block_content_length) {
+    struct h2_connection *h2 = make_test_h2();
+    ASSERT_PTR_NOTNULL(h2, "make_test_h2");
+    struct connection *conn = make_test_conn();
+    ASSERT_PTR_NOTNULL(conn, "make_test_conn");
+
+    struct h2_stream *s = &h2->streams[0];
+    s->active = true;
+    struct response_info ri;
+    memset(&ri, 0, sizeof(ri));
+    s->out = &ri;
+
+    unsigned char block[64];
+    size_t hp = 0;
+
+    /* Literal without indexing, new name */
+    block[hp++] = 0x00;
+    block[hp++] = 0x0E;  /* name len = 14, no Huffman */
+    memcpy(block + hp, "content-length", 14);
+    hp += 14;
+    block[hp++] = 0x02;  /* value len = 2, no Huffman */
+    memcpy(block + hp, "42", 2);
+    hp += 2;
+
+    char err[256] = {0};
+    int rc = parse_h2_header_block(h2, s, conn, 1, block, hp, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "parse succeeds");
+    ASSERT_INT_EQ(ri.content_length, 42, "content-length parsed");
+
+    free(conn);
+    free_test_h2(h2);
+}
+
+TEST(test_parse_h2_header_block_literal_without_indexing) {
+    struct h2_connection *h2 = make_test_h2();
+    ASSERT_PTR_NOTNULL(h2, "make_test_h2");
+    struct connection *conn = make_test_conn();
+    ASSERT_PTR_NOTNULL(conn, "make_test_conn");
+
+    struct h2_stream *s = &h2->streams[0];
+    s->active = true;
+    struct response_info ri;
+    memset(&ri, 0, sizeof(ri));
+    s->out = &ri;
+
+    unsigned char block[64];
+    size_t hp = 0;
+
+    /* Two literal-without-indexing headers */
+    /* First: x-custom: foo */
+    block[hp++] = 0x00;
+    block[hp++] = 0x08;  /* name len = 8 */
+    memcpy(block + hp, "x-custom", 8);
+    hp += 8;
+    block[hp++] = 0x03;  /* value len = 3 */
+    memcpy(block + hp, "foo", 3);
+    hp += 3;
+
+    /* Second: x-other: bar */
+    block[hp++] = 0x00;
+    block[hp++] = 0x06;  /* name len = 6 */
+    memcpy(block + hp, "x-other", 6);
+    hp += 6;
+    block[hp++] = 0x03;  /* value len = 3 */
+    memcpy(block + hp, "bar", 3);
+    hp += 3;
+
+    char err[256] = {0};
+    int rc = parse_h2_header_block(h2, s, conn, 1, block, hp, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "parse succeeds");
+
+    free(conn);
+    free_test_h2(h2);
+}
+
+TEST(test_parse_h2_header_block_empty) {
+    struct h2_connection *h2 = make_test_h2();
+    ASSERT_PTR_NOTNULL(h2, "make_test_h2");
+    struct connection *conn = make_test_conn();
+    ASSERT_PTR_NOTNULL(conn, "make_test_conn");
+
+    struct h2_stream *s = &h2->streams[0];
+    s->active = true;
+    struct response_info ri;
+    memset(&ri, 0, sizeof(ri));
+    s->out = &ri;
+
+    char err[256] = {0};
+    int rc = parse_h2_header_block(h2, s, conn, 1, (const unsigned char *)"", 0, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "empty block accepted");
+
+    free(conn);
+    free_test_h2(h2);
+}
+
+/* ================================================================
  * Main
  * ================================================================ */
 
@@ -2200,6 +2505,20 @@ int main(void) {
 
     test_huffman_roundtrip();
     test_hpack_decode_empty_huffman();
+
+    test_h2_settings_apply_valid();
+    test_h2_settings_apply_duplicate();
+    test_h2_settings_apply_header_table_cap();
+    test_h2_settings_apply_invalid_frame_size();
+    test_h2_settings_apply_invalid_enable_push();
+    test_h2_settings_apply_empty();
+    test_h2_settings_apply_max_concurrent_streams();
+    test_h2_settings_apply_max_header_list_size();
+
+    test_parse_h2_header_block_status();
+    test_parse_h2_header_block_content_length();
+    test_parse_h2_header_block_literal_without_indexing();
+    test_parse_h2_header_block_empty();
 
     printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
            tests_run - tests_failed, tests_failed, tests_run);

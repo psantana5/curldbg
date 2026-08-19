@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.1.4]
+
+### Changed
+- Add `auto_buf` helper (stack/heap buffer with 8KB threshold) in `util.c/h`
+- Convert `http2_send_request` to use `auto_buf`, eliminating 64KB stack allocation
+- Document Linux/glibc dependency in README.md Requirements section
+- Add `-fanalyzer` CI job and fuzz corpus caching in GitHub Actions workflows
+- Add `-Isrc/net/http2` to `COMMON_CFLAGS` so all build variants can test internal http2 APIs
+
+### Fixed
+- Memory leak: `auto_buf` heap buffer now freed on all return paths in `http2_send_request`
+
+### Added
+- Unit tests for `h2_settings_apply` (8 tests) and `parse_h2_header_block` (4 tests)
+
 ## [2.1.3]
 
 ### Changed

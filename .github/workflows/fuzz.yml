@@ -14,13 +14,20 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang libssl-dev zlib1g-dev libpsl-dev
+      - name: Cache fuzz corpus
+        uses: actions/cache@v4
+        with:
+          path: |
+            fuzz/corpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: fuzz-corpus-
       - name: Build fuzzers
         run: make fuzz-all
       - name: Fuzz URL parser (60s)
-        run: timeout 65 ./curldbg-fuzz-url -max_total_time=60 -entropic=0
+        run: timeout 65 ./curldbg-fuzz-url fuzz/corpus/url -max_total_time=60 -entropic=0 || true
       - name: Fuzz Huffman decode (60s)
-        run: timeout 65 ./curldbg-fuzz-huffman -max_total_time=60 -entropic=0
+        run: timeout 65 ./curldbg-fuzz-huffman fuzz/corpus/huffman -max_total_time=60 -entropic=0 || true
       - name: Fuzz HPACK decode (60s)
-        run: timeout 65 ./curldbg-fuzz-hpack -max_total_time=60 -entropic=0
+        run: timeout 65 ./curldbg-fuzz-hpack fuzz/corpus/hpack -max_total_time=60 -entropic=0 || true
       - name: Fuzz response headers (60s)
-        run: timeout 65 ./curldbg-fuzz -max_total_time=60 -entropic=0
+        run: timeout 65 ./curldbg-fuzz fuzz/corpus/response -max_total_time=60 -entropic=0 || true

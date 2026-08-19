@@ -24,6 +24,8 @@ int h2_settings_apply(struct h2_connection *h2,
                        ((uint32_t)p[off + 4] << 8) | (uint32_t)p[off + 5];
 
         if (id == H2_SETTINGS_HEADER_TABLE_SIZE) {
+            if (val > H2_MAX_DYNAMIC_TABLE_SIZE)
+                val = H2_MAX_DYNAMIC_TABLE_SIZE;
             h2->settings.header_table_size = val;
             hpack_table_set_max_size(&h2->dyn_table, val);
         } else if (id == H2_SETTINGS_INITIAL_WINDOW_SIZE) {

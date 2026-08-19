@@ -24,7 +24,7 @@ HEADERS := $(wildcard include/*.h)
 # --- Shared flags ---
 WARN_FLAGS := -Wall -Wextra -Wshadow -Werror -Wconversion -Wsign-conversion -Wpedantic \
               -Wformat=2 -Wnull-dereference -Wdouble-promotion -Wundef -Wstrict-prototypes
-COMMON_CFLAGS := $(WARN_FLAGS) -pthread -Iinclude -DHAVE_LIBPSL $(LIBPSL_CFLAGS)
+COMMON_CFLAGS := $(WARN_FLAGS) -pthread -Iinclude -Isrc/net/http2 -DHAVE_LIBPSL $(LIBPSL_CFLAGS)
 HARDEN_FLAGS := -fstack-protector-strong -fcf-protection=full -fstack-clash-protection -D_FORTIFY_SOURCE=2
 
 # --- Build variant flags ---
@@ -35,7 +35,7 @@ TSAN_CFLAGS := -g -O1 -fsanitize=thread $(COMMON_CFLAGS)
 
 # Test binaries (regular build): unit tests run unoptimized; the test server
 # uses the same warnings but skips hardening/libpsl flags.
-UNIT_CFLAGS := -g -O0 $(WARN_FLAGS) -pthread -Iinclude
+UNIT_CFLAGS := -g -O0 $(WARN_FLAGS) -pthread -Iinclude -Isrc/net/http2
 TESTD_CFLAGS := -O2 $(WARN_FLAGS) -Iinclude
 
 LDLIBS := -pthread -lssl -lcrypto -lz $(LIBPSL_LIBS)

@@ -248,6 +248,7 @@ int build_redirect_url(
         path_to_use = location;
     } else {
         /* Relative path: resolve against base path directory */
+        if (contains_crlf(location)) return -1;
         strncpy(base_dir, base->path, sizeof(base_dir) - 1);
         base_dir[sizeof(base_dir) - 1] = '\0';
         char *last_slash = strrchr(base_dir, '/');

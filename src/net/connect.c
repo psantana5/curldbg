@@ -532,7 +532,10 @@ void close_connection(struct connection *conn) {
 
 ssize_t connection_read(struct connection *conn, void *buf, size_t len, char *error, size_t error_len) {
     if (__builtin_expect(!conn->use_tls, 1)) {
-        ssize_t n = recv(conn->fd, buf, len, 0);
+        ssize_t n;
+        do {
+            n = recv(conn->fd, buf, len, 0);
+        } while (n < 0 && errno == EINTR);
         if (__builtin_expect(n >= 0, 1)) return n;
         conn->last_errno = errno;
         if (is_timeout_errno(errno)) { set_error(error, error_len, "Read timeout"); return -1; }
@@ -563,7 +566,10 @@ int connection_write_all(struct connection *conn, const char *buf, size_t len, c
     size_t sent = 0;
     while (__builtin_expect(sent < len, 1)) {
         if (__builtin_expect(!conn->use_tls, 1)) {
-            ssize_t n = send(conn->fd, buf + sent, len - sent, 0);
+            ssize_t n;
+            do {
+                n = send(conn->fd, buf + sent, len - sent, 0);
+            } while (n < 0 && errno == EINTR);
             if (n < 0) {
                 conn->last_errno = errno;
                 if (is_timeout_errno(errno)) set_error(error, error_len, "Write timeout");
