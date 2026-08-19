@@ -12,7 +12,8 @@ struct connect_race_info;
 struct addrinfo;
 
 __attribute__((noreturn)) void die(const char *msg);
-void set_error(char *error, size_t error_len, const char *fmt, ...);
+void set_error(char *error, size_t error_len, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
 int url_encode(const char *input, char *output, size_t output_size);
 void set_ssl_error(char *error, size_t error_len, const char *prefix);
 double ms_between(const struct timespec *start, const struct timespec *end);

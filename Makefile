@@ -8,10 +8,7 @@ SAN_OBJDIR := obj-san
 TSAN_OBJDIR := obj-tsan
 
 # --- Sources ---
-SRCS := src/main.c src/run.c src/results.c src/util.c src/url.c \
-        src/net/dns.c src/net/tls.c src/net/connect.c src/net/proxy.c src/net/hpack.c src/net/http2.c \
-        src/http/request.c src/http/response.c \
-        src/cookie.c src/cli/parse.c src/cli/help.c src/output.c src/compare.c
+SRCS := $(sort $(shell find src -name '*.c'))
 TESTD_SRCS := tests/server/testd.c tests/server/route.c tests/server/handlers.c
 
 # --- Required dependencies ---
@@ -22,24 +19,32 @@ ifeq ($(LIBPSL_LIBS),)
 endif
 
 # --- Headers ---
-HEADERS := include/flags.h include/version.h include/url.h include/http.h \
-           include/net.h include/cookie.h include/cli.h include/run.h \
-           include/util.h include/curldbg.h
+HEADERS := $(wildcard include/*.h)
 
-# --- Regular build ---
-CFLAGS := $(OPT) -Wall -Wextra -Wshadow -Werror -Wconversion -Wsign-conversion -Wpedantic -fstack-protector-strong -fcf-protection=full -fstack-clash-protection -D_FORTIFY_SOURCE=2 -pthread -Iinclude -DHAVE_LIBPSL $(LIBPSL_CFLAGS)
+# --- Shared flags ---
+WARN_FLAGS := -Wall -Wextra -Wshadow -Werror -Wconversion -Wsign-conversion -Wpedantic \
+              -Wformat=2 -Wnull-dereference -Wdouble-promotion -Wundef -Wstrict-prototypes
+COMMON_CFLAGS := $(WARN_FLAGS) -pthread -Iinclude -DHAVE_LIBPSL $(LIBPSL_CFLAGS)
+HARDEN_FLAGS := -fstack-protector-strong -fcf-protection=full -fstack-clash-protection -D_FORTIFY_SOURCE=2
+
+# --- Build variant flags ---
+CFLAGS := $(OPT) $(COMMON_CFLAGS) $(HARDEN_FLAGS)
 CFLAGS += $(EXTRA_CFLAGS)
+SAN_CFLAGS := -g -O0 -fsanitize=address,undefined $(COMMON_CFLAGS)
+TSAN_CFLAGS := -g -O1 -fsanitize=thread $(COMMON_CFLAGS)
+
+# Test binaries (regular build): unit tests run unoptimized; the test server
+# uses the same warnings but skips hardening/libpsl flags.
+UNIT_CFLAGS := -g -O0 $(WARN_FLAGS) -pthread -Iinclude
+TESTD_CFLAGS := -O2 $(WARN_FLAGS) -Iinclude
+
 LDLIBS := -pthread -lssl -lcrypto -lz $(LIBPSL_LIBS)
+
+# --- Object lists per variant ---
 OBJS := $(SRCS:src/%.c=$(OBJDIR)/%.o)
 UNIT_OBJS := $(filter-out $(OBJDIR)/main.o,$(OBJS))
-
-# --- ASan/UBSan ---
-SAN_CFLAGS := -g -O0 -fsanitize=address,undefined -Wall -Wextra -Werror -pthread -Iinclude -DHAVE_LIBPSL $(LIBPSL_CFLAGS)
 SAN_OBJS := $(SRCS:src/%.c=$(SAN_OBJDIR)/%.o)
 SAN_UNIT_OBJS := $(filter-out $(SAN_OBJDIR)/main.o,$(SAN_OBJS))
-
-# --- TSan ---
-TSAN_CFLAGS := -g -O1 -fsanitize=thread -Wall -Wextra -Werror -pthread -Iinclude -DHAVE_LIBPSL $(LIBPSL_CFLAGS)
 TSAN_OBJS := $(SRCS:src/%.c=$(TSAN_OBJDIR)/%.o)
 TSAN_UNIT_OBJS := $(filter-out $(TSAN_OBJDIR)/main.o,$(TSAN_OBJS))
 
@@ -49,29 +54,33 @@ BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man/man1
 MANPAGE := man/curldbg.1
 
-# --- Test runner template ---
-# $(call run_unit_and_integration,<unit_runner_cmd>)
-define run_unit_and_integration
-	$(CC) -g -O0 -Wall -Wextra -Werror -pthread -Iinclude \
-		-o $(OBJDIR)/unit_test tests/unit.c $(UNIT_OBJS) $(LDLIBS)
-	$(1)
-	@rm -f $(OBJDIR)/unit_test
-	$(CC) -O2 -Wall -Wextra -Wno-unused-result -Iinclude \
-		-o $(OBJDIR)/testd $(TESTD_SRCS)
-	@tests/integration/run.sh $(OBJDIR)/testd ./$(TARGET)
+# --- Per-variant build rules (regular / ASan+UBSan / TSan) ---
+# $(1)=objdir  $(2)=cflags-var  $(3)=binary  $(4)=objs  $(5)=unit-objs
+# $(6)=unit-test-cflags-var  $(7)=testd-cflags-var
+define variant_rules
+$(1)/%.o: src/%.c $(HEADERS)
+	@mkdir -p $$(dir $$@)
+	$$(CC) $$($(2)) -c -o $$@ $$<
+
+$(3): $(4)
+	$$(CC) $$($(2)) $$(LDFLAGS) -o $$@ $(4) $$(LDLIBS)
+
+$(1)/testd: $(TESTD_SRCS)
+	@mkdir -p $(1)
+	$$(CC) $$($(7)) -Wno-unused-result -o $$@ $$^
+
+$(1)/unit_test: $(5) tests/unit.c $(HEADERS)
+	$$(CC) $$($(6)) -o $$@ tests/unit.c $(5) $$(LDLIBS)
 endef
 
-.PHONY: all clean install test test-novg test-san test-tsan check static fuzz cppcheck coverage \
-        unit-test unit-test-vg unit-test-san unit-test-tsan integration
+$(eval $(call variant_rules,$(OBJDIR),CFLAGS,$(TARGET),$(OBJS),$(UNIT_OBJS),UNIT_CFLAGS,TESTD_CFLAGS))
+$(eval $(call variant_rules,$(SAN_OBJDIR),SAN_CFLAGS,$(SAN_OBJDIR)/curldbg,$(SAN_OBJS),$(SAN_UNIT_OBJS),SAN_CFLAGS,SAN_CFLAGS))
+$(eval $(call variant_rules,$(TSAN_OBJDIR),TSAN_CFLAGS,$(TSAN_OBJDIR)/curldbg,$(TSAN_OBJS),$(TSAN_UNIT_OBJS),TSAN_CFLAGS,TSAN_CFLAGS))
+
+.PHONY: all clean install test test-novg test-san test-tsan check static fuzz fuzz-url fuzz-huffman fuzz-hpack fuzz-all \
+        cppcheck coverage unit-test unit-test-vg unit-test-san unit-test-tsan integration analyze clang-analyze
 
 all: $(TARGET)
-
-$(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
-
-$(OBJDIR)/unit_test: tests/unit.c $(UNIT_OBJS)
-	$(CC) -g -O0 -Wall -Wextra -Werror -pthread -Iinclude \
-		-o $@ tests/unit.c $(UNIT_OBJS) $(LDLIBS)
 
 unit-test: $(OBJDIR)/unit_test
 	./$(OBJDIR)/unit_test
@@ -88,49 +97,16 @@ unit-test-tsan: $(TSAN_OBJDIR)/unit_test
 	TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1 \
 	setarch x86_64 -R ./$(TSAN_OBJDIR)/unit_test
 
-integration: $(TARGET)
-	$(CC) -O2 -Wall -Wextra -Wno-unused-result -Iinclude \
-		-o $(OBJDIR)/testd $(TESTD_SRCS)
+integration: $(TARGET) $(OBJDIR)/testd
 	@tests/integration/run.sh $(OBJDIR)/testd ./$(TARGET)
-
-$(OBJDIR)/%.o: src/%.c $(HEADERS)
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-$(SAN_OBJDIR)/%.o: src/%.c $(HEADERS)
-	@mkdir -p $(dir $@)
-	$(CC) $(SAN_CFLAGS) -c -o $@ $<
-
-$(SAN_OBJDIR)/curldbg: $(SAN_OBJS)
-	$(CC) $(SAN_CFLAGS) -o $@ $^ $(LDLIBS)
-
-$(SAN_OBJDIR)/testd: $(TESTD_SRCS)
-	@mkdir -p $(SAN_OBJDIR)
-	$(CC) $(SAN_CFLAGS) -Wno-unused-result -o $@ $^
-
-$(SAN_OBJDIR)/unit_test: $(SAN_UNIT_OBJS) tests/unit.c
-	$(CC) $(SAN_CFLAGS) -o $@ tests/unit.c $(SAN_UNIT_OBJS) $(LDLIBS)
-
-$(TSAN_OBJDIR)/%.o: src/%.c $(HEADERS)
-	@mkdir -p $(dir $@)
-	$(CC) $(TSAN_CFLAGS) -c -o $@ $<
-
-$(TSAN_OBJDIR)/curldbg: $(TSAN_OBJS)
-	$(CC) $(TSAN_CFLAGS) -o $@ $^ $(LDLIBS)
-
-$(TSAN_OBJDIR)/testd: $(TESTD_SRCS)
-	@mkdir -p $(TSAN_OBJDIR)
-	$(CC) $(TSAN_CFLAGS) -Wno-unused-result -o $@ $^
-
-$(TSAN_OBJDIR)/unit_test: $(TSAN_UNIT_OBJS) tests/unit.c
-	$(CC) $(TSAN_CFLAGS) -o $@ tests/unit.c $(TSAN_UNIT_OBJS) $(LDLIBS)
 
 clean:
 	rm -rf $(TARGET) $(OBJDIR) $(SAN_OBJDIR) $(TSAN_OBJDIR)
 	rm -f $(TARGET)-fuzz $(TARGET)-fuzz-url $(TARGET)-fuzz-huffman $(TARGET)-fuzz-hpack $(TARGET)-static gmon.out
 
-test: $(TARGET)
-	$(call run_unit_and_integration,valgrind --leak-check=full --error-exitcode=1 -q $(OBJDIR)/unit_test)
+test: $(TARGET) $(OBJDIR)/unit_test $(OBJDIR)/testd
+	valgrind --leak-check=full --error-exitcode=1 -q $(OBJDIR)/unit_test
+	tests/integration/run.sh $(OBJDIR)/testd ./$(TARGET)
 	@if command -v clang >/dev/null 2>&1; then \
 		echo "=== fuzz: parse_response_headers (30s) ==="; \
 		$(MAKE) fuzz; \
@@ -142,8 +118,9 @@ test: $(TARGET)
 		echo "=== fuzz: skipped (clang not found) ==="; \
 	fi
 
-test-novg: $(TARGET)
-	$(call run_unit_and_integration,./$(OBJDIR)/unit_test)
+test-novg: $(TARGET) $(OBJDIR)/unit_test $(OBJDIR)/testd
+	./$(OBJDIR)/unit_test
+	tests/integration/run.sh $(OBJDIR)/testd ./$(TARGET)
 
 test-san: $(SAN_OBJDIR)/unit_test $(SAN_OBJDIR)/testd $(SAN_OBJDIR)/curldbg
 	@echo "--- unit tests (ASan/UBSan) ---"
@@ -168,12 +145,23 @@ test-tsan: $(TSAN_OBJDIR)/unit_test $(TSAN_OBJDIR)/testd $(TSAN_OBJDIR)/curldbg
 check: test test-san test-tsan
 	@echo "=== check: all targets passed ==="
 
-static: CFLAGS += -no-pie
 STATIC_SSL_DEPS := $(filter-out -lssl -lcrypto -ldl -lpthread -pthread, $(shell pkg-config --static --libs libssl 2>/dev/null))
+static: CFLAGS += -no-pie
 static: LDLIBS = -pthread -lz $(LIBPSL_LIBS) -l:libssl.a -l:libcrypto.a $(STATIC_SSL_DEPS)
 static: $(OBJS)
 	$(CC) $(CFLAGS) -s -static-libgcc -o $(TARGET)-static $(OBJS) $(LDLIBS)
 	@echo "Built $(TARGET)-static (statically linked)"
+
+# GCC's interprocedural static analyzer (-fanalyzer).
+# Opt-in: it is slow and can produce false positives, so it is not part of `check`.
+analyze:
+	$(MAKE) clean
+	$(MAKE) EXTRA_CFLAGS="-fanalyzer" all
+
+# Clang static analyzer via scan-build. Fails the build on any finding.
+clang-analyze:
+	$(MAKE) clean
+	scan-build --status-bugs $(MAKE) CC=clang all
 
 install: $(TARGET) $(MANPAGE)
 	install -d $(DESTDIR)$(BINDIR) $(DESTDIR)$(MANDIR)
@@ -184,34 +172,30 @@ FUZZ_CC := clang
 FUZZ_CFLAGS := -g -O1 -fsanitize=fuzzer,address,undefined -Iinclude
 FUZZ_LIBS := -lz -lssl -lcrypto
 
-fuzz: $(TARGET)-fuzz
-	@echo "Run with time limit, e.g.:"
-	@echo "  ./$(TARGET)-fuzz -max_total_time=30"
-
-$(OBJDIR)/fuzz_response.o: src/http/response.c
-	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $@ $<
-
+# Fuzzer object files (one per instrumented source).
 $(OBJDIR)/fuzz_util.o: src/util.c
 	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $@ $<
-
-$(TARGET)-fuzz: $(OBJDIR)/fuzz_response.o $(OBJDIR)/fuzz_util.o tests/fuzz_response.c
-	$(FUZZ_CC) $(FUZZ_CFLAGS) -o $@ $(OBJDIR)/fuzz_response.o $(OBJDIR)/fuzz_util.o tests/fuzz_response.c $(FUZZ_LIBS)
-
-$(TARGET)-fuzz-url: $(OBJDIR)/fuzz_url.o $(OBJDIR)/fuzz_util.o tests/fuzz_url.c
-	$(FUZZ_CC) $(FUZZ_CFLAGS) -o $@ $(OBJDIR)/fuzz_url.o $(OBJDIR)/fuzz_util.o tests/fuzz_url.c $(FUZZ_LIBS)
-
+$(OBJDIR)/fuzz_response.o: src/http/response.c
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $@ $<
 $(OBJDIR)/fuzz_url.o: src/url.c
 	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $@ $<
-
 $(OBJDIR)/fuzz_hpack.o: src/net/hpack.c
 	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $@ $<
 
-$(TARGET)-fuzz-huffman: $(OBJDIR)/fuzz_hpack.o $(OBJDIR)/fuzz_util.o tests/fuzz_huffman.c
-	$(FUZZ_CC) $(FUZZ_CFLAGS) -o $@ $(OBJDIR)/fuzz_hpack.o $(OBJDIR)/fuzz_util.o tests/fuzz_huffman.c $(FUZZ_LIBS)
+# $(1)=target-suffix  $(2)=specific-object  $(3)=driver-source
+define fuzzer_rule
+$(TARGET)-fuzz$(1): $(OBJDIR)/$(2).o $(OBJDIR)/fuzz_util.o $(3)
+	$$(FUZZ_CC) $$(FUZZ_CFLAGS) -o $$@ $(OBJDIR)/$(2).o $(OBJDIR)/fuzz_util.o $(3) $$(FUZZ_LIBS)
+endef
 
-$(TARGET)-fuzz-hpack: $(OBJDIR)/fuzz_hpack.o $(OBJDIR)/fuzz_util.o tests/fuzz_hpack.c
-	$(FUZZ_CC) $(FUZZ_CFLAGS) -o $@ $(OBJDIR)/fuzz_hpack.o $(OBJDIR)/fuzz_util.o tests/fuzz_hpack.c $(FUZZ_LIBS)
+$(eval $(call fuzzer_rule,,fuzz_response,tests/fuzz_response.c))
+$(eval $(call fuzzer_rule,-url,fuzz_url,tests/fuzz_url.c))
+$(eval $(call fuzzer_rule,-huffman,fuzz_hpack,tests/fuzz_huffman.c))
+$(eval $(call fuzzer_rule,-hpack,fuzz_hpack,tests/fuzz_hpack.c))
 
+fuzz: $(TARGET)-fuzz
+	@echo "Run with time limit, e.g.:"
+	@echo "  ./$(TARGET)-fuzz -max_total_time=30"
 fuzz-url: $(TARGET)-fuzz-url
 fuzz-huffman: $(TARGET)-fuzz-huffman
 fuzz-hpack: $(TARGET)-fuzz-hpack
@@ -224,7 +208,7 @@ cppcheck:
 		--inline-suppr \
 		-Iinclude src/ tests/server/
 
-coverage: CFLAGS := -g -O0 --coverage -Wall -Wextra -Wshadow -Werror -pthread -Iinclude
+coverage: CFLAGS := -g -O0 --coverage $(WARN_FLAGS) -pthread -Iinclude
 coverage:
 	$(MAKE) clean
 	$(MAKE) all CFLAGS="$(CFLAGS)"

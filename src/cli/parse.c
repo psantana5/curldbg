@@ -12,6 +12,7 @@
 
 #define MAX_DATA_FILE_SIZE (16 * 1024 * 1024)
 
+__attribute__((format(printf, 2, 3)))
 static void set_cmdline_error(struct cmdline_opts *c, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);

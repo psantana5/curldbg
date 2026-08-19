@@ -621,3 +621,26 @@ int hpack_encode_literal_with_indexing(unsigned char *out, size_t out_size,
     off += sv;
     return (int)off;
 }
+
+int hpack_encode_literal_without_indexing(unsigned char *out, size_t out_size,
+                                          uint64_t name_index,
+                                          const char *name, size_t name_len,
+                                          const char *value, size_t value_len) {
+    size_t off = 0;
+    out[off] = 0x00;
+
+    size_t n = hpack_encode_int(out, out_size, name_index, 4);
+    if (n == 0) return -1;
+    off = n;
+
+    if (name_index == 0) {
+        size_t sn = hpack_encode_string(out + off, out_size - off, name, name_len);
+        if (sn == 0) return -1;
+        off += sn;
+    }
+
+    size_t sv = hpack_encode_string(out + off, out_size - off, value, value_len);
+    if (sv == 0) return -1;
+    off += sv;
+    return (int)off;
+}

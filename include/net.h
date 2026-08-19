@@ -154,5 +154,9 @@ int hpack_encode_literal_with_indexing(unsigned char *out, size_t out_size,
                                         uint64_t name_index,
                                         const char *name, size_t name_len,
                                         const char *value, size_t value_len);
+int hpack_encode_literal_without_indexing(unsigned char *out, size_t out_size,
+                                          uint64_t name_index,
+                                          const char *name, size_t name_len,
+                                          const char *value, size_t value_len);
 
 #endif

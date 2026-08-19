@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.1.3]
+
+### Changed
+- Modularize `src/net/http2.c` (1583 lines) into 9 files under `src/net/http2/`
+  (frame, settings, stream, dyn_table, conn, headers, request, response, http2_internal.h)
+- Simplify Makefile: unified build variants via `$(eval)` template, wildcard sources/headers,
+  generalized fuzz targets, shared `WARN_FLAGS` across all build configurations
+- Add new warning flags: `-Wformat=2 -Wnull-dereference -Wdouble-promotion -Wundef -Wstrict-prototypes`
+- Add `analyze` and `clang-analyze` Makefile targets
+- Move `hpack_encode_literal_without_indexing` from http2.c to src/net/hpack.c (public API)
+- Deduplicate SETTINGS parsing into `h2_settings_apply()`
+
+### Fixed
+- Dead code in HTTP/2 connection preface (unreachable `!got_settings` check)
+- Missing `__attribute__((format))` on format functions (caught by `-Wformat=2`)
+
 ## [2.1.2]
 
 ### Added
