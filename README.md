@@ -87,7 +87,17 @@ src/
 │   ├── connect.c            — TCP connection, Happy Eyeballs (RFC 8305), Unix sockets, socket I/O
 │   ├── dns.c                — DNS resolution with thread-based timeout, per-session DNS cache with TTL, resolve helpers
 │   ├── tls.c                — TLS handshake via OpenSSL, session-scoped SSL_CTX, SNI, cert verification
-│   ├── http2.c              — HTTP/2: stream multiplexing, frame dispatch, HPACK, flow control
+│   ├── hpack.c              — HPACK integer/string encoding, static table, Huffman tree
+│   ├── http2/
+│   │   ├── http2_internal.h  — HTTP/2 internal structs, enums, constants
+│   │   ├── conn.c            — connection preface, I/O helpers, cleanup
+│   │   ├── frame.c           — frame read/write, send_* builders
+│   │   ├── settings.c        — SETTINGS parsing and apply (deduped)
+│   │   ├── stream.c          — stream lifecycle, flow-control accounting
+│   │   ├── dyn_table.c       — HPACK dynamic table operations
+│   │   ├── headers.c         — header mapping, HPACK block decode
+│   │   ├── request.c         — HPACK header encoding, request send
+│   │   └── response.c        — response receive, DATA frame handling
 │   └── proxy.c              — HTTP CONNECT proxy handshake
 ├── http/
 │   ├── request.c            — HTTP/1.1 request building and sending
