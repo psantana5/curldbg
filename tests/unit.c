@@ -2488,6 +2488,94 @@ TEST(test_hpack_encoders_boundary_sweep) {
     ASSERT_TRUE(1, "no out-of-bounds accesses under ASan redzones");
 }
 
+static int make_h2_send_conn(struct connection *conn, struct h2_connection **h2_out,
+                             int *peer_fd) {
+    int fds[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) return -1;
+    struct h2_connection *h2 = make_test_h2();
+    if (h2 == NULL) {
+        close(fds[0]);
+        close(fds[1]);
+        return -1;
+    }
+    h2->settings.initial_window_size = 0;
+    h2->conn_window = 0;
+    memset(conn, 0, sizeof(*conn));
+    conn->fd = fds[0];
+    conn->h2 = h2;
+    *h2_out = h2;
+    *peer_fd = fds[1];
+    return 0;
+}
+
+static void write_wu_frame(int fd, uint32_t stream_id, size_t len, uint32_t inc) {
+    unsigned char f[9 + 8];
+    memset(f, 0, sizeof(f));
+    f[0] = (unsigned char)(len >> 16);
+    f[1] = (unsigned char)(len >> 8);
+    f[2] = (unsigned char)len;
+    f[3] = H2_WINDOW_UPDATE;
+    f[5] = (unsigned char)((stream_id >> 24) & 0x7F);
+    f[6] = (unsigned char)(stream_id >> 16);
+    f[7] = (unsigned char)(stream_id >> 8);
+    f[8] = (unsigned char)stream_id;
+    f[9] = (unsigned char)(inc >> 24);
+    f[10] = (unsigned char)(inc >> 16);
+    f[11] = (unsigned char)(inc >> 8);
+    f[12] = (unsigned char)inc;
+    ssize_t wr = write(fd, f, 9 + len);
+    (void)wr;
+}
+
+TEST(test_http2_send_request_rejects_oversized_window_update) {
+    struct connection conn;
+    struct h2_connection *h2 = NULL;
+    int peer = -1;
+    ASSERT_INT_EQ(make_h2_send_conn(&conn, &h2, &peer), 0, "setup");
+
+    struct url_info url;
+    memset(&url, 0, sizeof(url));
+    strcpy(url.host, "example.com");
+    strcpy(url.path, "/");
+
+    write_wu_frame(peer, 0, 5, 1000);
+
+    char err[128] = "";
+    uint32_t rid = http2_send_request(&conn, &url, "POST", "x", 1,
+                                      NULL, 0, NULL, NULL, err, sizeof(err));
+    ASSERT_INT_EQ((int)rid, 0, "request fails on oversized WINDOW_UPDATE");
+    ASSERT_TRUE(strstr(err, "must be 4 octets") != NULL, "error names exact-size requirement");
+
+    close(peer);
+    close(conn.fd);
+    free_test_h2(h2);
+}
+
+TEST(test_http2_send_request_sends_body_after_window_updates) {
+    struct connection conn;
+    struct h2_connection *h2 = NULL;
+    int peer = -1;
+    ASSERT_INT_EQ(make_h2_send_conn(&conn, &h2, &peer), 0, "setup");
+
+    struct url_info url;
+    memset(&url, 0, sizeof(url));
+    strcpy(url.host, "example.com");
+    strcpy(url.path, "/");
+
+    write_wu_frame(peer, 0, 4, 1000);
+    write_wu_frame(peer, 2, 4, 1000);
+
+    char err[128] = "";
+    uint32_t rid = http2_send_request(&conn, &url, "POST", "x", 1,
+                                      NULL, 0, NULL, NULL, err, sizeof(err));
+    ASSERT_INT_EQ((int)rid, 2, "request sent on stream 2");
+    ASSERT_STR_EQ(err, "", "no error");
+
+    close(peer);
+    close(conn.fd);
+    free_test_h2(h2);
+}
+
 /* ================================================================
  * Main
  * ================================================================ */
@@ -2726,6 +2814,8 @@ int main(void) {
     test_parse_h2_header_block_table_size_update_within_cap();
     test_parse_h2_header_block_table_size_update_above_cap();
     test_hpack_encoders_boundary_sweep();
+    test_http2_send_request_rejects_oversized_window_update();
+    test_http2_send_request_sends_body_after_window_updates();
 
     printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
            tests_run - tests_failed, tests_failed, tests_run);

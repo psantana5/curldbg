@@ -211,7 +211,12 @@ uint32_t http2_send_request(struct connection *conn, const struct url_info *url,
                                  ((uint32_t)whdr[6] << 16) |
                                  ((uint32_t)whdr[7] << 8) |
                                  (uint32_t)whdr[8]);
-                if (wtype == H2_WINDOW_UPDATE && wlen >= 4) {
+                if (wtype == H2_WINDOW_UPDATE) {
+                    if (wlen != 4) {
+                        set_error(error, error_len,
+                            "HTTP/2 WINDOW_UPDATE frame payload must be 4 octets");
+                        auto_buf_done(&ab); free_stream(h2, s); return 0;
+                    }
                     char wpayload[4];
                     if (conn_read(conn, wpayload, 4, error, error_len) != 0)
                         { auto_buf_done(&ab); free_stream(h2, s); return 0; }
