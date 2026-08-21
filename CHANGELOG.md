@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.1.5]
+
+### Fixed
+- Use-after-free/double-free: `conn->h2` is now cleared before `free(h2)` when
+  the stream array allocation fails in `http2_init_connection`, so a subsequent
+  `close_connection()` no longer dereferences freed memory
+- HPACK dynamic table is now emptied when a single entry exceeds the maximum
+  table size, per RFC 7541 Section 4.4 (previously the table was left untouched)
+- Infinite loop in `hpack_table_add`: adding to a full dynamic table could hang
+  forever because eviction guarded on `size > max_size`, a condition inserts can
+  never produce; eviction now targets `max_size - entry_size` via a shared
+  `hpack_table_evict_until()` helper
+
+### Added
+- Fuzz target `curldbg-fuzz-h2headers` exercising the stateful
+  `parse_h2_header_block()` path (dynamic table, Huffman strings, table size
+  updates); it found the eviction hang above
+- Unit tests for oversized-entry table emptying and full-table eviction
+
+### Changed
+- Fuzz CI workflow no longer swallows crash exit codes with `|| true`; any
+  non-zero fuzzer exit now fails the job (timeout safety cap still tolerated)
+
 ## [2.1.4]
 
 ### Changed
