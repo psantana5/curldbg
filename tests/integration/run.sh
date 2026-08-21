@@ -1,5 +1,14 @@
 #!/bin/bash
 set -e
+LOCAL_ONLY=0
+ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --local-only) LOCAL_ONLY=1 ;;
+        *) ARGS+=("$arg") ;;
+    esac
+done
+set -- "${ARGS[@]}"
 TESTD="$1"
 CURLDBG="$2"
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -52,7 +61,13 @@ run_test test_gzip.sh "$PORT"
 run_test test_cookies.sh "$PORT"
 run_test test_post.sh "$PORT"
 run_test test_http2.sh "$PORT"
-run_test test_http2_public.sh "$PORT"
+if [ "$LOCAL_ONLY" = "1" ]; then
+    echo "  test_http2_public.sh..."
+    echo "    SKIPPED (--local-only)"
+    SKIPPED=$((SKIPPED + 1))
+else
+    run_test test_http2_public.sh "$PORT"
+fi
 
 kill $TDPID 2>/dev/null
 wait $TDPID 2>/dev/null

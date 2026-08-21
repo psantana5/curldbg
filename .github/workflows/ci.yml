@@ -111,7 +111,7 @@ jobs:
       - name: Integration tests
         env:
           CURLDBG_STRICT_SKIP: "1"
-        run: make integration
+        run: make integration RUNTEST_FLAGS=--local-only
 
   cppcheck:
     runs-on: ubuntu-24.04
