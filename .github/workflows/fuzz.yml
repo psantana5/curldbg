@@ -24,10 +24,32 @@ jobs:
       - name: Build fuzzers
         run: make fuzz-all
       - name: Fuzz URL parser (60s)
-        run: timeout 65 ./curldbg-fuzz-url fuzz/corpus/url -max_total_time=60 -entropic=0 || true
+        run: |
+          rc=0
+          timeout 65 ./curldbg-fuzz-url fuzz/corpus/url -max_total_time=60 -entropic=0 || rc=$?
+          if [ $rc -eq 124 ]; then echo "  (timeout safety cap reached)"; rc=0; fi
+          exit $rc
       - name: Fuzz Huffman decode (60s)
-        run: timeout 65 ./curldbg-fuzz-huffman fuzz/corpus/huffman -max_total_time=60 -entropic=0 || true
-      - name: Fuzz HPACK decode (60s)
-        run: timeout 65 ./curldbg-fuzz-hpack fuzz/corpus/hpack -max_total_time=60 -entropic=0 || true
+        run: |
+          rc=0
+          timeout 65 ./curldbg-fuzz-huffman fuzz/corpus/huffman -max_total_time=60 -entropic=0 || rc=$?
+          if [ $rc -eq 124 ]; then echo "  (timeout safety cap reached)"; rc=0; fi
+          exit $rc
+      - name: Fuzz HPACK primitives (60s)
+        run: |
+          rc=0
+          timeout 65 ./curldbg-fuzz-hpack fuzz/corpus/hpack -max_total_time=60 -entropic=0 || rc=$?
+          if [ $rc -eq 124 ]; then echo "  (timeout safety cap reached)"; rc=0; fi
+          exit $rc
+      - name: Fuzz HPACK header block (60s)
+        run: |
+          rc=0
+          timeout 65 ./curldbg-fuzz-h2headers fuzz/corpus/h2headers -max_total_time=60 -entropic=0 || rc=$?
+          if [ $rc -eq 124 ]; then echo "  (timeout safety cap reached)"; rc=0; fi
+          exit $rc
       - name: Fuzz response headers (60s)
-        run: timeout 65 ./curldbg-fuzz fuzz/corpus/response -max_total_time=60 -entropic=0 || true
+        run: |
+          rc=0
+          timeout 65 ./curldbg-fuzz fuzz/corpus/response -max_total_time=60 -entropic=0 || rc=$?
+          if [ $rc -eq 124 ]; then echo "  (timeout safety cap reached)"; rc=0; fi
+          exit $rc
