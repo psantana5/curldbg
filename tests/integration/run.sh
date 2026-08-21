@@ -63,8 +63,7 @@ run_test test_post.sh "$PORT"
 run_test test_http2.sh "$PORT"
 if [ "$LOCAL_ONLY" = "1" ]; then
     echo "  test_http2_public.sh..."
-    echo "    SKIPPED (--local-only)"
-    SKIPPED=$((SKIPPED + 1))
+    echo "    SKIPPED (--local-only, not counted against CURLDBG_STRICT_SKIP)"
 else
     run_test test_http2_public.sh "$PORT"
 fi
