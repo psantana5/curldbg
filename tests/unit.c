@@ -1177,27 +1177,27 @@ TEST(test_output_filename_from_url_overflow) {
 
 TEST(test_find_header_end_rnrn) {
     char buf[] = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
-    char *body = find_header_end(buf, strlen(buf));
+    const char *body = find_header_end(buf, strlen(buf));
     ASSERT_PTR_NOTNULL(body, "found delimiter");
     ASSERT_STR_EQ(body, "hello", "body starts correctly");
 }
 
 TEST(test_find_header_end_nn) {
     char buf[] = "HTTP/1.1 200 OK\nContent-Length: 5\n\nhello";
-    char *body = find_header_end(buf, strlen(buf));
+    const char *body = find_header_end(buf, strlen(buf));
     ASSERT_PTR_NOTNULL(body, "found LF-only delimiter");
     ASSERT_STR_EQ(body, "hello", "body starts correctly");
 }
 
 TEST(test_find_header_end_no_delimiter) {
     char buf[] = "HTTP/1.1 200 OK\r\nContent-Length: 5";
-    char *body = find_header_end(buf, strlen(buf));
+    const char *body = find_header_end(buf, strlen(buf));
     ASSERT_TRUE(body == NULL, "no delimiter returns NULL");
 }
 
 TEST(test_find_header_end_at_start) {
     char buf[] = "\r\n\r\nbody here";
-    char *body = find_header_end(buf, strlen(buf));
+    const char *body = find_header_end(buf, strlen(buf));
     ASSERT_PTR_NOTNULL(body, "found at start");
     ASSERT_STR_EQ(body, "body here", "body at start");
 }
@@ -1330,6 +1330,39 @@ TEST(test_receive_response_103_early_hints) {
         NULL, false, &out, err, sizeof(err));
     ASSERT_INT_EQ(rc, 0, "103 Early Hints handled");
     ASSERT_INT_EQ(out.status_code, 200, "final status is 200");
+    free(out.body_buf);
+}
+
+TEST(test_receive_response_chunked_overrides_content_length) {
+    struct response_info out;
+    char err[128] = "";
+    memset(&out, 0, sizeof(out));
+    int rc = receive_response_from_string(
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 99\r\n\r\n"
+        "5\r\nhello\r\n0\r\n\r\n",
+        NULL, false, &out, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "chunked+CL receive ok");
+    ASSERT_INT_EQ(out.status_code, 200, "status parsed");
+    ASSERT_TRUE(out.chunked, "chunked flagged");
+    ASSERT_INT_EQ((int)out.body_len, 5, "body decoded as chunked");
+    ASSERT_TRUE(out.body_buf != NULL && memcmp(out.body_buf, "hello", 5) == 0,
+                "chunked body content, CL ignored");
+    free(out.body_buf);
+}
+
+TEST(test_receive_response_chunked_with_malformed_content_length) {
+    struct response_info out;
+    char err[128] = "";
+    memset(&out, 0, sizeof(out));
+    int rc = receive_response_from_string(
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: abc\r\n\r\n"
+        "3\r\nabc\r\n0\r\n\r\n",
+        NULL, false, &out, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "malformed CL tolerated when chunked");
+    ASSERT_TRUE(out.chunked, "chunked flagged");
+    ASSERT_INT_EQ((int)out.body_len, 3, "body decoded as chunked");
+    ASSERT_TRUE(out.body_buf != NULL && memcmp(out.body_buf, "abc", 3) == 0,
+                "body content correct");
     free(out.body_buf);
 }
 
@@ -1618,7 +1651,7 @@ TEST(test_copy_addrinfo_list_single) {
 }
 
 TEST(test_copy_addrinfo_list_null) {
-    struct addrinfo *copy = copy_addrinfo_list(NULL);
+    const struct addrinfo *copy = copy_addrinfo_list(NULL);
     ASSERT_TRUE(copy == NULL, "null in null out");
 }
 
@@ -1819,7 +1852,7 @@ TEST(test_parse_cmdline_resolve_ipv4) {
     ASSERT_STR_EQ(c.resolve_entries[0].host, "example.com", "host");
     ASSERT_STR_EQ(c.resolve_entries[0].port, "80", "port");
     ASSERT_INT_EQ(c.resolve_entries[0].family, AF_INET, "AF_INET");
-    struct sockaddr_in *sin = (struct sockaddr_in *)&c.resolve_entries[0].ss;
+    const struct sockaddr_in *sin = (const struct sockaddr_in *)&c.resolve_entries[0].ss;
     struct in_addr expected;
     inet_pton(AF_INET, "1.2.3.4", &expected);
     ASSERT_INT_EQ(memcmp(&sin->sin_addr, &expected, sizeof(expected)), 0, "IPv4 addr");
@@ -1835,7 +1868,7 @@ TEST(test_parse_cmdline_resolve_ipv6_bare) {
     ASSERT_STR_EQ(c.resolve_entries[0].host, "example.com", "host");
     ASSERT_STR_EQ(c.resolve_entries[0].port, "80", "port");
     ASSERT_INT_EQ(c.resolve_entries[0].family, AF_INET6, "AF_INET6");
-    struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)&c.resolve_entries[0].ss;
+    const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6 *)&c.resolve_entries[0].ss;
     struct in6_addr expected;
     inet_pton(AF_INET6, "2001:db8::1", &expected);
     ASSERT_INT_EQ(memcmp(&sin6->sin6_addr, &expected, sizeof(expected)), 0, "IPv6 addr");
@@ -2360,6 +2393,101 @@ TEST(test_hpack_table_add_evicts_when_full) {
     free(dyn.entries);
 }
 
+TEST(test_parse_h2_header_block_table_size_update_within_cap) {
+    struct h2_connection *h2 = make_test_h2();
+    ASSERT_PTR_NOTNULL(h2, "make_test_h2");
+    struct connection *conn = make_test_conn();
+    ASSERT_PTR_NOTNULL(conn, "make_test_conn");
+
+    struct h2_stream *s = &h2->streams[0];
+    s->active = true;
+
+    unsigned char block[16];
+    block[0] = 0x20;
+    size_t bl = hpack_encode_int(block, sizeof(block), 1024, 5);
+    ASSERT_TRUE(bl > 0, "size update encoded");
+
+    char err[256] = {0};
+    int rc = parse_h2_header_block(h2, s, conn, 1, block, bl, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "update within advertised cap accepted");
+    ASSERT_INT_EQ((int)h2->dyn_table.max_size, 1024, "max_size applied");
+
+    free(conn);
+    free_test_h2(h2);
+}
+
+TEST(test_parse_h2_header_block_table_size_update_above_cap) {
+    struct h2_connection *h2 = make_test_h2();
+    ASSERT_PTR_NOTNULL(h2, "make_test_h2");
+    struct connection *conn = make_test_conn();
+    ASSERT_PTR_NOTNULL(conn, "make_test_conn");
+
+    struct h2_stream *s = &h2->streams[0];
+    s->active = true;
+
+    unsigned char block[16];
+    block[0] = 0x20;
+    size_t bl = hpack_encode_int(block, sizeof(block), 8192, 5);
+    ASSERT_TRUE(bl > 0, "size update encoded");
+
+    char err[256] = {0};
+    int rc = parse_h2_header_block(h2, s, conn, 1, block, bl, err, sizeof(err));
+    ASSERT_INT_EQ(rc, -1, "update above advertised cap rejected");
+    ASSERT_INT_EQ((int)h2->dyn_table.max_size, (int)H2_MAX_DYNAMIC_TABLE_SIZE,
+                  "max_size unchanged after rejection");
+
+    free(conn);
+    free_test_h2(h2);
+}
+
+TEST(test_hpack_encoders_boundary_sweep) {
+    static const uint64_t name_indexes[] = {0, 1, 15, 16, 62, 100000};
+    static const size_t str_lens[] = {0, 1, 2, 3, 5, 8, 40, 126, 127, 128, 300};
+    static const uint64_t int_values[] = {0, 1, 14, 15, 16, 127, 128, 16383, 16384};
+
+    char *name_buf = malloc(301);
+    char *val_buf = malloc(301);
+    ASSERT_PTR_NOTNULL(name_buf, "name_buf alloc");
+    ASSERT_PTR_NOTNULL(val_buf, "val_buf alloc");
+    memset(name_buf, 'n', 301);
+    memset(val_buf, 'v', 301);
+
+    for (size_t os = 0; os <= 200; os++) {
+        unsigned char *buf = malloc(os);
+        ASSERT_PTR_NOTNULL(buf, "sweep buf alloc");
+
+        for (size_t ni = 0; ni < sizeof(name_indexes) / sizeof(name_indexes[0]); ni++) {
+            for (size_t li = 0; li < sizeof(str_lens) / sizeof(str_lens[0]); li++) {
+                memset(buf, 0xCC, os);
+                (void)hpack_encode_literal_with_indexing(buf, os, name_indexes[ni],
+                                                         name_buf, str_lens[li], val_buf, str_lens[li]);
+                memset(buf, 0xCC, os);
+                (void)hpack_encode_literal_without_indexing(buf, os, name_indexes[ni],
+                                                            name_buf, str_lens[li], val_buf, str_lens[li]);
+            }
+        }
+
+        for (uint8_t pb = 4; pb <= 7; pb++) {
+            for (size_t vi = 0; vi < sizeof(int_values) / sizeof(int_values[0]); vi++) {
+                memset(buf, 0xCC, os);
+                (void)hpack_encode_int(buf, os, int_values[vi], pb);
+            }
+        }
+
+        memset(buf, 0xCC, os);
+        (void)hpack_encode_string(buf, os, val_buf, 15);
+
+        for (size_t sl = 299; sl <= 301; sl++)
+            (void)hpack_encode_string(buf, os, val_buf, sl);
+
+        free(buf);
+    }
+
+    free(name_buf);
+    free(val_buf);
+    ASSERT_TRUE(1, "no out-of-bounds accesses under ASan redzones");
+}
+
 /* ================================================================
  * Main
  * ================================================================ */
@@ -2499,6 +2627,8 @@ int main(void) {
     test_receive_response_100_continue();
     test_receive_response_100_continue_no_body();
     test_receive_response_103_early_hints();
+    test_receive_response_chunked_overrides_content_length();
+    test_receive_response_chunked_with_malformed_content_length();
 
     test_final_status_code_no_hops();
     test_final_status_code_one_hop();
@@ -2593,6 +2723,9 @@ int main(void) {
 
     test_hpack_table_add_oversized_entry_empties_table();
     test_hpack_table_add_evicts_when_full();
+    test_parse_h2_header_block_table_size_update_within_cap();
+    test_parse_h2_header_block_table_size_update_above_cap();
+    test_hpack_encoders_boundary_sweep();
 
     printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
            tests_run - tests_failed, tests_failed, tests_run);
