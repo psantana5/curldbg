@@ -349,8 +349,7 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                 hpack_off += 5;
             }
 
-            size_t hpack_len = length;
-            if (hpack_off <= length) hpack_len = length - hpack_off;
+            size_t hpack_len = length - hpack_off;
 
             if (dst == s && !s->seen_first_byte && hpack_len > 0) {
                 if (clock_gettime(CLOCK_MONOTONIC, &s->first_byte_ts) != 0) {
