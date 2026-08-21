@@ -30,6 +30,10 @@ HARDEN_FLAGS := -fstack-protector-strong -fcf-protection=full -fstack-clash-prot
 # --- Build variant flags ---
 CFLAGS := $(OPT) $(COMMON_CFLAGS) $(HARDEN_FLAGS)
 CFLAGS += $(EXTRA_CFLAGS)
+# SAN/TSAN variants intentionally omit HARDEN_FLAGS: -D_FORTIFY_SOURCE needs
+# optimization (no effect at -O0/-O1 under sanitizers) and fortify wrappers can
+# obscure sanitizer stack traces; the sanitizers subsume what the hardening
+# flags detect here.
 SAN_CFLAGS := -g -O0 -fsanitize=address,undefined $(COMMON_CFLAGS)
 TSAN_CFLAGS := -g -O1 -fsanitize=thread $(COMMON_CFLAGS)
 
@@ -172,23 +176,31 @@ FUZZ_CC := clang
 FUZZ_CFLAGS := -g -O1 -fsanitize=fuzzer,address,undefined -Iinclude -Isrc/net/http2
 FUZZ_LIBS := -lz -lssl -lcrypto
 
+.PHONY: require-clang
+require-clang:
+	@if ! command -v $(FUZZ_CC) >/dev/null 2>&1; then \
+		echo "ERROR: '$(FUZZ_CC)' not found; libFuzzer targets require clang." >&2; \
+		echo "       Install clang, or use 'make test' (skips fuzzing when clang is absent)." >&2; \
+		exit 1; \
+	fi
+
 # Fuzzer object files (one per instrumented source).
-$(OBJDIR)/fuzz_util.o: src/util.c
+$(OBJDIR)/fuzz_util.o: src/util.c | require-clang
 	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $@ $<
-$(OBJDIR)/fuzz_response.o: src/http/response.c
+$(OBJDIR)/fuzz_response.o: src/http/response.c | require-clang
 	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $@ $<
-$(OBJDIR)/fuzz_url.o: src/url.c
+$(OBJDIR)/fuzz_url.o: src/url.c | require-clang
 	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $@ $<
-$(OBJDIR)/fuzz_hpack.o: src/net/hpack.c
+$(OBJDIR)/fuzz_hpack.o: src/net/hpack.c | require-clang
 	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $@ $<
-$(OBJDIR)/fuzz_h2_dyn_table.o: src/net/http2/dyn_table.c
+$(OBJDIR)/fuzz_h2_dyn_table.o: src/net/http2/dyn_table.c | require-clang
 	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $@ $<
-$(OBJDIR)/fuzz_h2_headers.o: src/net/http2/headers.c
+$(OBJDIR)/fuzz_h2_headers.o: src/net/http2/headers.c | require-clang
 	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $@ $<
 
 # $(1)=target-suffix  $(2)=specific-object  $(3)=driver-source
 define fuzzer_rule
-$(TARGET)-fuzz$(1): $(OBJDIR)/$(2).o $(OBJDIR)/fuzz_util.o $(3)
+$(TARGET)-fuzz$(1): $(OBJDIR)/$(2).o $(OBJDIR)/fuzz_util.o $(3) | require-clang
 	$$(FUZZ_CC) $$(FUZZ_CFLAGS) -o $$@ $(OBJDIR)/$(2).o $(OBJDIR)/fuzz_util.o $(3) $$(FUZZ_LIBS)
 endef
 
@@ -198,7 +210,7 @@ $(eval $(call fuzzer_rule,-huffman,fuzz_hpack,tests/fuzz_huffman.c))
 $(eval $(call fuzzer_rule,-hpack,fuzz_hpack,tests/fuzz_hpack.c))
 
 $(TARGET)-fuzz-h2headers: $(OBJDIR)/fuzz_h2_headers.o $(OBJDIR)/fuzz_h2_dyn_table.o \
-                          $(OBJDIR)/fuzz_hpack.o $(OBJDIR)/fuzz_util.o tests/fuzz_h2headers.c
+                          $(OBJDIR)/fuzz_hpack.o $(OBJDIR)/fuzz_util.o tests/fuzz_h2headers.c | require-clang
 	$(FUZZ_CC) $(FUZZ_CFLAGS) -o $@ $(OBJDIR)/fuzz_h2_headers.o $(OBJDIR)/fuzz_h2_dyn_table.o \
 		$(OBJDIR)/fuzz_hpack.o $(OBJDIR)/fuzz_util.o tests/fuzz_h2headers.c $(FUZZ_LIBS)
 
@@ -215,8 +227,9 @@ fuzz-all: fuzz fuzz-url fuzz-huffman fuzz-hpack fuzz-h2headers
 cppcheck:
 	cppcheck --enable=warning,performance,portability,style \
 		--error-exitcode=1 --suppress=missingIncludeSystem \
+		--suppress=nullPointerRedundantCheck:tests/unit.c \
 		--inline-suppr \
-		-Iinclude src/ tests/server/
+		-Iinclude src/ tests/
 
 coverage: CFLAGS := -g -O0 --coverage $(WARN_FLAGS) -pthread -Iinclude -Isrc/net/http2
 coverage:
