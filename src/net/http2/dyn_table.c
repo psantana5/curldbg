@@ -13,8 +13,8 @@ void hpack_entry_free(struct h2_hpack_entry *e) {
     e->value_len = 0;
 }
 
-void hpack_table_evict(struct h2_hpack_table *dyn) {
-    while (dyn->size > dyn->max_size && dyn->count > 0) {
+static void hpack_table_evict_until(struct h2_hpack_table *dyn, size_t limit) {
+    while (dyn->size > limit && dyn->count > 0) {
         struct h2_hpack_entry *last = &dyn->entries[dyn->count - 1];
         dyn->size -= last->name_len + last->value_len + 32;
         hpack_entry_free(last);
@@ -22,14 +22,23 @@ void hpack_table_evict(struct h2_hpack_table *dyn) {
     }
 }
 
+void hpack_table_evict(struct h2_hpack_table *dyn) {
+    hpack_table_evict_until(dyn, dyn->max_size);
+}
+
 int hpack_table_add(struct h2_hpack_table *dyn, const char *name, size_t name_len,
                     const char *value, size_t value_len) {
     if (name_len > SIZE_MAX - value_len - 32) return -1;
     size_t entry_size = name_len + value_len + 32;
-    if (entry_size > dyn->max_size) return 0;
+    if (entry_size > dyn->max_size) {
+        for (size_t i = 0; i < dyn->count; i++)
+            hpack_entry_free(&dyn->entries[i]);
+        dyn->count = 0;
+        dyn->size = 0;
+        return 0;
+    }
 
-    while (dyn->size + entry_size > dyn->max_size)
-        hpack_table_evict(dyn);
+    hpack_table_evict_until(dyn, dyn->max_size - entry_size);
 
     if (dyn->count >= dyn->capacity) {
         size_t new_cap = dyn->capacity * 2;

@@ -2289,6 +2289,77 @@ TEST(test_parse_h2_header_block_empty) {
     free_test_h2(h2);
 }
 
+TEST(test_hpack_table_add_oversized_entry_empties_table) {
+    struct h2_hpack_table dyn;
+    memset(&dyn, 0, sizeof(dyn));
+    dyn.capacity = 16;
+    dyn.entries = calloc(dyn.capacity, sizeof(struct h2_hpack_entry));
+    ASSERT_PTR_NOTNULL(dyn.entries, "dyn.entries alloc");
+    dyn.max_size = 128;
+
+    int rc = hpack_table_add(&dyn, "x-small", 7, "val", 3);
+    ASSERT_INT_EQ(rc, 0, "small entry added");
+    ASSERT_INT_EQ((int)dyn.count, 1, "table has one entry");
+    ASSERT_INT_EQ((int)dyn.size, 7 + 3 + 32, "size tracked");
+
+    char big_value[256];
+    memset(big_value, 'a', sizeof(big_value));
+    rc = hpack_table_add(&dyn, "x-big", 5, big_value, sizeof(big_value));
+    ASSERT_INT_EQ(rc, 0, "oversized entry declined without error");
+    ASSERT_INT_EQ((int)dyn.count, 0, "RFC 7541 4.4: table emptied");
+    ASSERT_INT_EQ((int)dyn.size, 0, "RFC 7541 4.4: size reset");
+
+    rc = hpack_table_add(&dyn, "x-after", 7, "ok", 2);
+    ASSERT_INT_EQ(rc, 0, "entry added after emptying");
+    ASSERT_INT_EQ((int)dyn.count, 1, "one entry after re-add");
+
+    const char *n, *v;
+    size_t nl, vl;
+    ASSERT_INT_EQ(get_table_entry(&dyn, 62, &n, &nl, &v, &vl), 0,
+                  "newest entry at index 62");
+    ASSERT_TRUE(nl == 7 && strcmp(n, "x-after") == 0, "name matches");
+    ASSERT_TRUE(vl == 2 && strcmp(v, "ok") == 0, "value matches");
+
+    for (size_t i = 0; i < dyn.count; i++)
+        hpack_entry_free(&dyn.entries[i]);
+    free(dyn.entries);
+}
+
+TEST(test_hpack_table_add_evicts_when_full) {
+    struct h2_hpack_table dyn;
+    memset(&dyn, 0, sizeof(dyn));
+    dyn.capacity = 16;
+    dyn.entries = calloc(dyn.capacity, sizeof(struct h2_hpack_entry));
+    ASSERT_PTR_NOTNULL(dyn.entries, "dyn.entries alloc");
+    dyn.max_size = 128;
+
+    char val[10];
+    memset(val, 'v', 9);
+    val[9] = '\0';
+
+    for (int i = 0; i < 3; i++) {
+        ASSERT_INT_EQ(hpack_table_add(&dyn, "h", 1, val, 9), 0, "fill insert");
+    }
+    ASSERT_INT_EQ((int)dyn.count, 3, "three entries");
+    ASSERT_INT_EQ((int)dyn.size, 3 * (1 + 9 + 32), "size = 126");
+
+    ASSERT_INT_EQ(hpack_table_add(&dyn, "h", 1, val, 9), 0,
+                  "add to full table terminates (eviction boundary)");
+    ASSERT_INT_EQ((int)dyn.count, 3, "oldest evicted, newest added");
+    ASSERT_INT_EQ((int)dyn.size, 3 * (1 + 9 + 32), "size back to steady state");
+
+    const char *n, *v;
+    size_t nl, vl;
+    ASSERT_INT_EQ(get_table_entry(&dyn, 62, &n, &nl, &v, &vl), 0,
+                  "newest entry at index 62");
+    ASSERT_TRUE(nl == 1 && n[0] == 'h', "name matches");
+    ASSERT_TRUE(vl == 9 && strncmp(v, val, 9) == 0, "value matches");
+
+    for (size_t i = 0; i < dyn.count; i++)
+        hpack_entry_free(&dyn.entries[i]);
+    free(dyn.entries);
+}
+
 /* ================================================================
  * Main
  * ================================================================ */
@@ -2519,6 +2590,9 @@ int main(void) {
     test_parse_h2_header_block_content_length();
     test_parse_h2_header_block_literal_without_indexing();
     test_parse_h2_header_block_empty();
+
+    test_hpack_table_add_oversized_entry_empties_table();
+    test_hpack_table_add_evicts_when_full();
 
     printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
            tests_run - tests_failed, tests_failed, tests_run);
