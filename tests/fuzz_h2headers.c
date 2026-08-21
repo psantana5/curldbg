@@ -27,6 +27,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     struct h2_connection h2;
     memset(&h2, 0, sizeof(h2));
     h2.huff_tree = tree;
+    h2.settings.header_table_size = H2_MAX_DYNAMIC_TABLE_SIZE;
     h2.dyn_table.max_size = H2_MAX_DYNAMIC_TABLE_SIZE;
     h2.dyn_table.capacity = 16;
     h2.dyn_table.entries = calloc(h2.dyn_table.capacity,

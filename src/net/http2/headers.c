@@ -131,6 +131,8 @@ int parse_h2_header_block(struct h2_connection *h2,
             uint64_t new_size;
             if (hpack_decode_int(block, block_len, &hp, 5, &new_size) != 0)
                 return -1;
+            if (new_size > h2->settings.header_table_size)
+                return -1;
             hpack_table_set_max_size(&h2->dyn_table, (uint32_t)new_size);
         } else {
             uint64_t name_idx;
