@@ -64,6 +64,7 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
 
     h2->streams = calloc(H2_MAX_STREAMS, sizeof(struct h2_stream));
     if (h2->streams == NULL) {
+        conn->h2 = NULL;
         free(h2);
         set_error(error, error_len, "Out of memory");
         return -1;
