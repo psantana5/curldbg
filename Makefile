@@ -77,7 +77,7 @@ $(eval $(call variant_rules,$(OBJDIR),CFLAGS,$(TARGET),$(OBJS),$(UNIT_OBJS),UNIT
 $(eval $(call variant_rules,$(SAN_OBJDIR),SAN_CFLAGS,$(SAN_OBJDIR)/curldbg,$(SAN_OBJS),$(SAN_UNIT_OBJS),SAN_CFLAGS,SAN_CFLAGS))
 $(eval $(call variant_rules,$(TSAN_OBJDIR),TSAN_CFLAGS,$(TSAN_OBJDIR)/curldbg,$(TSAN_OBJS),$(TSAN_UNIT_OBJS),TSAN_CFLAGS,TSAN_CFLAGS))
 
-.PHONY: all clean install test test-novg test-san test-tsan check static fuzz fuzz-url fuzz-huffman fuzz-hpack fuzz-all \
+.PHONY: all clean install test test-novg test-san test-tsan check static fuzz fuzz-url fuzz-huffman fuzz-hpack fuzz-h2headers fuzz-all \
         cppcheck coverage unit-test unit-test-vg unit-test-san unit-test-tsan integration analyze clang-analyze
 
 all: $(TARGET)
@@ -102,7 +102,7 @@ integration: $(TARGET) $(OBJDIR)/testd
 
 clean:
 	rm -rf $(TARGET) $(OBJDIR) $(SAN_OBJDIR) $(TSAN_OBJDIR)
-	rm -f $(TARGET)-fuzz $(TARGET)-fuzz-url $(TARGET)-fuzz-huffman $(TARGET)-fuzz-hpack $(TARGET)-static gmon.out
+	rm -f $(TARGET)-fuzz $(TARGET)-fuzz-url $(TARGET)-fuzz-huffman $(TARGET)-fuzz-hpack $(TARGET)-fuzz-h2headers $(TARGET)-static gmon.out
 
 test: $(TARGET) $(OBJDIR)/unit_test $(OBJDIR)/testd
 	valgrind --leak-check=full --error-exitcode=1 -q $(OBJDIR)/unit_test
@@ -169,7 +169,7 @@ install: $(TARGET) $(MANPAGE)
 	install -m 644 $(MANPAGE) $(DESTDIR)$(MANDIR)/curldbg.1
 
 FUZZ_CC := clang
-FUZZ_CFLAGS := -g -O1 -fsanitize=fuzzer,address,undefined -Iinclude
+FUZZ_CFLAGS := -g -O1 -fsanitize=fuzzer,address,undefined -Iinclude -Isrc/net/http2
 FUZZ_LIBS := -lz -lssl -lcrypto
 
 # Fuzzer object files (one per instrumented source).
@@ -180,6 +180,10 @@ $(OBJDIR)/fuzz_response.o: src/http/response.c
 $(OBJDIR)/fuzz_url.o: src/url.c
 	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $@ $<
 $(OBJDIR)/fuzz_hpack.o: src/net/hpack.c
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $@ $<
+$(OBJDIR)/fuzz_h2_dyn_table.o: src/net/http2/dyn_table.c
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $@ $<
+$(OBJDIR)/fuzz_h2_headers.o: src/net/http2/headers.c
 	$(FUZZ_CC) $(FUZZ_CFLAGS) -c -o $@ $<
 
 # $(1)=target-suffix  $(2)=specific-object  $(3)=driver-source
@@ -193,13 +197,19 @@ $(eval $(call fuzzer_rule,-url,fuzz_url,tests/fuzz_url.c))
 $(eval $(call fuzzer_rule,-huffman,fuzz_hpack,tests/fuzz_huffman.c))
 $(eval $(call fuzzer_rule,-hpack,fuzz_hpack,tests/fuzz_hpack.c))
 
+$(TARGET)-fuzz-h2headers: $(OBJDIR)/fuzz_h2_headers.o $(OBJDIR)/fuzz_h2_dyn_table.o \
+                          $(OBJDIR)/fuzz_hpack.o $(OBJDIR)/fuzz_util.o tests/fuzz_h2headers.c
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -o $@ $(OBJDIR)/fuzz_h2_headers.o $(OBJDIR)/fuzz_h2_dyn_table.o \
+		$(OBJDIR)/fuzz_hpack.o $(OBJDIR)/fuzz_util.o tests/fuzz_h2headers.c $(FUZZ_LIBS)
+
 fuzz: $(TARGET)-fuzz
 	@echo "Run with time limit, e.g.:"
 	@echo "  ./$(TARGET)-fuzz -max_total_time=30"
 fuzz-url: $(TARGET)-fuzz-url
 fuzz-huffman: $(TARGET)-fuzz-huffman
 fuzz-hpack: $(TARGET)-fuzz-hpack
-fuzz-all: fuzz fuzz-url fuzz-huffman fuzz-hpack
+fuzz-h2headers: $(TARGET)-fuzz-h2headers
+fuzz-all: fuzz fuzz-url fuzz-huffman fuzz-hpack fuzz-h2headers
 	@echo "=== All fuzzers built ==="
 
 cppcheck:
