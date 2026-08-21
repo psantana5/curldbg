@@ -1,5 +1,33 @@
 # Changelog
 
+## [2.1.6]
+
+### Fixed
+- HPACK dynamic table size update instructions inside a header block are now
+  rejected with a compression error when they exceed the advertised
+  SETTINGS_HEADER_TABLE_SIZE cap (RFC 7540 Section 6.5.2); previously the
+  SETTINGS path was clamped but the decoder path accepted any size up to 4 GB,
+  letting a peer inflate client memory
+- Remove provably dead `hpack_off <= length` bound check in HTTP/2 HEADERS
+  handling (guaranteed by the PADDED/PRIORITY validation above it)
+- README project tree now shows `include/` at the project root instead of
+  nested under `src/`
+
+### Added
+- Unit tests: HPACK table size update clamping (within/above cap), HPACK
+  encoder boundary sweep (output sizes 0-200 x name indexes x string lengths x
+  integer prefixes, exact-size allocations for ASan redzones), and
+  chunked-overrides-Content-Length policy (valid and malformed CL)
+- CI: documentation-only commits now skip the heavy test jobs via a
+  paths-filter gate; cppcheck still runs as the lightweight lint
+
+### Changed
+- cppcheck now scans all of `tests/` (fuzz drivers and unit.c) in addition to
+  `src/`; fixed the const-correctness nits it surfaced
+- Makefile documents that sanitizer builds intentionally omit hardening flags
+- Fuzz targets fail fast with a clear error when clang is missing instead of
+  an obscure compiler failure
+
 ## [2.1.5]
 
 ### Fixed
