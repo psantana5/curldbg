@@ -2,6 +2,11 @@ CC := gcc
 OPT ?= -O2
 TARGET := curldbg
 
+# Tunables: FUZZ_MAX_TIME = libFuzzer budget in `make test` (seconds);
+# RUNTEST_FLAGS = extra flags for tests/integration/run.sh, e.g. --local-only
+FUZZ_MAX_TIME ?= 30
+RUNTEST_FLAGS ?=
+
 # --- Directories ---
 OBJDIR := obj
 SAN_OBJDIR := obj-san
@@ -102,7 +107,7 @@ unit-test-tsan: $(TSAN_OBJDIR)/unit_test
 	setarch x86_64 -R ./$(TSAN_OBJDIR)/unit_test
 
 integration: $(TARGET) $(OBJDIR)/testd
-	@tests/integration/run.sh $(OBJDIR)/testd ./$(TARGET)
+	@tests/integration/run.sh $(RUNTEST_FLAGS) $(OBJDIR)/testd ./$(TARGET)
 
 clean:
 	rm -rf $(TARGET) $(OBJDIR) $(SAN_OBJDIR) $(TSAN_OBJDIR)
@@ -110,11 +115,11 @@ clean:
 
 test: $(TARGET) $(OBJDIR)/unit_test $(OBJDIR)/testd
 	valgrind --leak-check=full --error-exitcode=1 -q $(OBJDIR)/unit_test
-	tests/integration/run.sh $(OBJDIR)/testd ./$(TARGET)
+	tests/integration/run.sh $(RUNTEST_FLAGS) $(OBJDIR)/testd ./$(TARGET)
 	@if command -v clang >/dev/null 2>&1; then \
-		echo "=== fuzz: parse_response_headers (30s) ==="; \
+		echo "=== fuzz: parse_response_headers ($(FUZZ_MAX_TIME)s) ==="; \
 		$(MAKE) fuzz; \
-		timeout 35 ./$(TARGET)-fuzz -max_total_time=30 -entropic=0; FRC=$$?; \
+		timeout $$(( $(FUZZ_MAX_TIME) + 5 )) ./$(TARGET)-fuzz -max_total_time=$(FUZZ_MAX_TIME) -entropic=0; FRC=$$?; \
 		if [ $$FRC -eq 124 ]; then echo "  (timeout safety cap reached)"; FRC=0; fi; \
 		rm -f $(TARGET)-fuzz; \
 		exit $$FRC; \
@@ -124,7 +129,7 @@ test: $(TARGET) $(OBJDIR)/unit_test $(OBJDIR)/testd
 
 test-novg: $(TARGET) $(OBJDIR)/unit_test $(OBJDIR)/testd
 	./$(OBJDIR)/unit_test
-	tests/integration/run.sh $(OBJDIR)/testd ./$(TARGET)
+	tests/integration/run.sh $(RUNTEST_FLAGS) $(OBJDIR)/testd ./$(TARGET)
 
 test-san: $(SAN_OBJDIR)/unit_test $(SAN_OBJDIR)/testd $(SAN_OBJDIR)/curldbg
 	@echo "--- unit tests (ASan/UBSan) ---"
@@ -134,7 +139,7 @@ test-san: $(SAN_OBJDIR)/unit_test $(SAN_OBJDIR)/testd $(SAN_OBJDIR)/curldbg
 	@echo "--- integration tests (ASan/UBSan) ---"
 	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
-	tests/integration/run.sh $(SAN_OBJDIR)/testd $(SAN_OBJDIR)/curldbg
+	tests/integration/run.sh $(RUNTEST_FLAGS) $(SAN_OBJDIR)/testd $(SAN_OBJDIR)/curldbg
 	@echo "=== test-san: all passed ==="
 
 test-tsan: $(TSAN_OBJDIR)/unit_test $(TSAN_OBJDIR)/testd $(TSAN_OBJDIR)/curldbg
@@ -143,7 +148,7 @@ test-tsan: $(TSAN_OBJDIR)/unit_test $(TSAN_OBJDIR)/testd $(TSAN_OBJDIR)/curldbg
 	setarch x86_64 -R ./$(TSAN_OBJDIR)/unit_test
 	@echo "--- integration tests (TSan) ---"
 	TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1 \
-	setarch x86_64 -R tests/integration/run.sh $(TSAN_OBJDIR)/testd $(TSAN_OBJDIR)/curldbg
+	setarch x86_64 -R tests/integration/run.sh $(RUNTEST_FLAGS) $(TSAN_OBJDIR)/testd $(TSAN_OBJDIR)/curldbg
 	@echo "=== test-tsan: all passed ==="
 
 check: test test-san test-tsan
@@ -238,7 +243,7 @@ coverage:
 	$(CC) $(CFLAGS) -o $(OBJDIR)/unit_test tests/unit.c $(UNIT_OBJS) $(LDLIBS)
 	./$(OBJDIR)/unit_test
 	$(CC) $(CFLAGS) -Wno-unused-result -o $(OBJDIR)/testd $(TESTD_SRCS)
-	tests/integration/run.sh $(OBJDIR)/testd ./$(TARGET)
+	tests/integration/run.sh $(RUNTEST_FLAGS) $(OBJDIR)/testd ./$(TARGET)
 	lcov --capture --directory $(OBJDIR) --output-file $(OBJDIR)/coverage.info \
 		--rc geninfo_unexecuted_blocks=0 --ignore-errors gcov
 	lcov --remove $(OBJDIR)/coverage.info '*/tests/*' --output-file $(OBJDIR)/coverage.info \

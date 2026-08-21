@@ -9,7 +9,7 @@ make unit-test-vg # unit tests under Valgrind
 make unit-test-san # unit tests under ASan/UBSan
 make unit-test-tsan # unit tests under TSan
 make integration  # integration tests against testd + public HTTP/2 servers
-make test         # full test: Valgrind + integration + fuzz (30s)
+make test         # full test: Valgrind + integration + fuzz (FUZZ_MAX_TIME, default 30s)
 make test-san     # full test under ASan/UBSan
 make test-tsan    # full test under TSan
 make check        # test + test-san + test-tsan
