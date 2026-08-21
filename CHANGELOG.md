@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.1.7]
+
+### Fixed
+- WINDOW_UPDATE frames with a payload not exactly 4 octets are now rejected as
+  a protocol error during request body send; previously oversized frames left
+  extra bytes in the stream and desynced subsequent frame parsing (RFC 7540
+  Section 6.4)
+
+### Changed
+- Fuzz time budget in `make test` is configurable via `FUZZ_MAX_TIME`
+  (default 30s)
+- New `--local-only` flag for tests/integration/run.sh skips the public
+  HTTP/2 endpoint tests; the CI integration job uses it so CI no longer
+  depends on external services
+
 ## [2.1.6]
 
 ### Fixed
