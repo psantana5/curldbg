@@ -102,20 +102,21 @@ src/
 ├── http/
 │   ├── request.c            — HTTP/1.1 request building and sending
 │   └── response.c           — HTTP/1.1 response receive, header parsing, chunked decoding, gzip/deflate
-├── cli/
-│   ├── parse.c              — CLI option parsing with error returns, combined flags (-sfvk), signal setup
-│   └── help.c               — --help flag rendering
-└── include/
-    ├── version.h            — CURLDBG_VERSION
-    ├── url.h                — struct url_info, URL parsing/formatting
-    ├── http.h               — struct response_info, header flags, HTTP request/response
-    ├── net.h                — struct connection, resolve_entry, tls_params, DNS/TLS/connect/proxy/HTTP2
-    ├── cookie.h             — struct cookie_entry/jar, cookie persistence
-    ├── cli.h                — struct cmdline_opts, CLI parsing/help
-    ├── run.h                — struct hop_info/run_options/run_result, run/output/compare
-    ├── util.h               — utility function declarations
-    ├── flags.h              — flag definitions table
-    └── curldbg.h            — umbrella header (includes all above)
+└── cli/
+    ├── parse.c              — CLI option parsing with error returns, combined flags (-sfvk), signal setup
+    └── help.c               — --help flag rendering
+
+include/
+├── version.h                — CURLDBG_VERSION
+├── url.h                    — struct url_info, URL parsing/formatting
+├── http.h                   — struct response_info, header flags, HTTP request/response
+├── net.h                    — struct connection, resolve_entry, tls_params, DNS/TLS/connect/proxy/HTTP2
+├── cookie.h                 — struct cookie_entry/jar, cookie persistence
+├── cli.h                    — struct cmdline_opts, CLI parsing/help
+├── run.h                    — struct hop_info/run_options/run_result, run/output/compare
+├── util.h                   — utility function declarations
+├── flags.h                  — flag definitions table
+└── curldbg.h                — umbrella header (includes all above)
 ```
 
 ## Requirements
