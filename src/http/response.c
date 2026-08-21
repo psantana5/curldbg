@@ -418,6 +418,8 @@ parse_response: {}
                     decomp_init = true;
                 }
 
+                /* RFC 9112 6.3: when both are present, Transfer-Encoding
+                   overrides Content-Length; CL is ignored entirely. */
                 chunked = out->chunked;
                 body_remaining = out->content_length;
                 if (__builtin_expect(chunked, 0)) {
