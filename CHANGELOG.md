@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.1.8]
+
+### Fixed
+- Reject WINDOW_UPDATE frames with payload not exactly 4 octets in the HTTP/2
+  preface and response receive loops, matching the strict validation already
+  applied in `http2_send_request`
+- Check `hpack_table_add()` return value at its call site in
+  `parse_h2_header_block()`; OOM during a dynamic-table insert now fails
+  cleanly as a compression error instead of silently continuing with an
+  inconsistent table
+- Harden the overflow guard in `hpack_table_add()` so intermediate arithmetic
+  cannot underflow when both name and value lengths are near SIZE_MAX
+
+### Changed
+- Consolidate `signal(SIGPIPE, SIG_IGN)` to `parse_cmdline()` only; removed
+  the redundant copy from `main()`
+- Document project conventions in CONTRIBUTING.md: checked snprintf returns,
+  goto cleanup funnels, `conn->h2` ownership, and strict control-frame
+  payload validation
+
 ## [2.1.7]
 
 ### Fixed
