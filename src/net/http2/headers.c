@@ -124,7 +124,8 @@ int parse_h2_header_block(struct h2_connection *h2,
                                              name, value, &name_len, &value_len) != 0)
                 return -1;
 
-            hpack_table_add(&h2->dyn_table, name, name_len, value, value_len);
+            if (hpack_table_add(&h2->dyn_table, name, name_len, value, value_len) != 0)
+                return -1;
             rc = apply_h2_header(h2, dst, conn, fid, name, value, name_len, value_len, error, error_len);
             if (rc != 0) return rc;
         } else if ((b & 0x20) != 0) {
