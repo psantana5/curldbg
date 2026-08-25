@@ -28,7 +28,8 @@ void hpack_table_evict(struct h2_hpack_table *dyn) {
 
 int hpack_table_add(struct h2_hpack_table *dyn, const char *name, size_t name_len,
                     const char *value, size_t value_len) {
-    if (name_len > SIZE_MAX - value_len - 32) return -1;
+    if (value_len > SIZE_MAX - 32 || name_len > SIZE_MAX - 32 - value_len)
+        return -1;
     size_t entry_size = name_len + value_len + 32;
     if (entry_size > dyn->max_size) {
         for (size_t i = 0; i < dyn->count; i++)
