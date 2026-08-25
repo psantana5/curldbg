@@ -2,7 +2,6 @@
 
 #include <errno.h>
 #include <pthread.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,7 +23,6 @@ static void configure_output_buffering(void) {
 
 /* --- main --- */
 int main(int argc, char **argv) {
-    signal(SIGPIPE, SIG_IGN);
     int exit_code = EXIT_SUCCESS;
     struct cmdline_opts *c = calloc(1, sizeof(*c));
     if (c == NULL) die("calloc");
