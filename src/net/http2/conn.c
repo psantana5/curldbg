@@ -164,7 +164,13 @@ int http2_init_connection(struct connection *conn, char *error, size_t error_len
                 return -1;
             }
             acked_our_settings = true;
-        } else if (type == H2_WINDOW_UPDATE && length >= 4) {
+        } else if (type == H2_WINDOW_UPDATE) {
+            if (length != 4) {
+                free(payload);
+                set_error(error, error_len,
+                    "HTTP/2 WINDOW_UPDATE frame payload must be 4 octets");
+                return -1;
+            }
             uint32_t inc = (uint32_t)((unsigned char)payload[0] << 24) |
                           (uint32_t)((unsigned char)payload[1] << 16) |
                           (uint32_t)((unsigned char)payload[2] << 8) |

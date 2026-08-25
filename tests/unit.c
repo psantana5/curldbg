@@ -2508,23 +2508,33 @@ static int make_h2_send_conn(struct connection *conn, struct h2_connection **h2_
     return 0;
 }
 
-static void write_wu_frame(int fd, uint32_t stream_id, size_t len, uint32_t inc) {
-    unsigned char f[9 + 8];
-    memset(f, 0, sizeof(f));
-    f[0] = (unsigned char)(len >> 16);
-    f[1] = (unsigned char)(len >> 8);
-    f[2] = (unsigned char)len;
-    f[3] = H2_WINDOW_UPDATE;
-    f[5] = (unsigned char)((stream_id >> 24) & 0x7F);
-    f[6] = (unsigned char)(stream_id >> 16);
-    f[7] = (unsigned char)(stream_id >> 8);
-    f[8] = (unsigned char)stream_id;
-    f[9] = (unsigned char)(inc >> 24);
-    f[10] = (unsigned char)(inc >> 16);
-    f[11] = (unsigned char)(inc >> 8);
-    f[12] = (unsigned char)inc;
-    ssize_t wr = write(fd, f, 9 + len);
+static void write_h2_frame(int fd, uint8_t type, uint8_t flags, uint32_t stream_id,
+                           const unsigned char *payload, size_t len) {
+    unsigned char hdr[9];
+    hdr[0] = (unsigned char)(len >> 16);
+    hdr[1] = (unsigned char)(len >> 8);
+    hdr[2] = (unsigned char)len;
+    hdr[3] = type;
+    hdr[4] = flags;
+    hdr[5] = (unsigned char)((stream_id >> 24) & 0x7F);
+    hdr[6] = (unsigned char)(stream_id >> 16);
+    hdr[7] = (unsigned char)(stream_id >> 8);
+    hdr[8] = (unsigned char)stream_id;
+    ssize_t wr = write(fd, hdr, sizeof(hdr));
     (void)wr;
+    if (len > 0 && payload != NULL) {
+        wr = write(fd, payload, len);
+        (void)wr;
+    }
+}
+
+static void write_wu_frame(int fd, uint32_t stream_id, size_t len, uint32_t inc) {
+    unsigned char p[8] = {0};
+    p[0] = (unsigned char)(inc >> 24);
+    p[1] = (unsigned char)(inc >> 16);
+    p[2] = (unsigned char)(inc >> 8);
+    p[3] = (unsigned char)inc;
+    write_h2_frame(fd, H2_WINDOW_UPDATE, 0, stream_id, p, len);
 }
 
 TEST(test_http2_send_request_rejects_oversized_window_update) {
@@ -2573,6 +2583,124 @@ TEST(test_http2_send_request_sends_body_after_window_updates) {
 
     close(peer);
     close(conn.fd);
+    free_test_h2(h2);
+}
+
+static const unsigned char STATUS_200_BLOCK[] = {
+    0x00, 0x07, ':', 's', 't', 'a', 't', 'u', 's', 0x03, '2', '0', '0'
+};
+
+TEST(test_h2_init_rejects_oversized_window_update) {
+    int fds[2];
+    ASSERT_INT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0, "socketpair");
+    struct connection conn;
+    memset(&conn, 0, sizeof(conn));
+    conn.fd = fds[0];
+
+    write_h2_frame(fds[1], H2_SETTINGS, 0, 0, NULL, 0);
+    write_wu_frame(fds[1], 0, 5, 1000);
+    write_h2_frame(fds[1], H2_SETTINGS, H2_FLAG_SETTINGS_ACK, 0, NULL, 0);
+
+    char err[128] = "";
+    int rc = http2_init_connection(&conn, err, sizeof(err));
+    ASSERT_INT_EQ(rc, -1, "init fails on oversized WINDOW_UPDATE");
+    ASSERT_TRUE(strstr(err, "must be 4 octets") != NULL, "exact-size error");
+
+    http2_cleanup(&conn);
+    close(fds[0]);
+    close(fds[1]);
+}
+
+TEST(test_h2_init_accepts_valid_window_update) {
+    int fds[2];
+    ASSERT_INT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0, "socketpair");
+    struct connection conn;
+    memset(&conn, 0, sizeof(conn));
+    conn.fd = fds[0];
+
+    write_h2_frame(fds[1], H2_SETTINGS, 0, 0, NULL, 0);
+    write_h2_frame(fds[1], H2_SETTINGS, H2_FLAG_SETTINGS_ACK, 0, NULL, 0);
+    write_wu_frame(fds[1], 0, 4, 1000);
+
+    char err[128] = "";
+    int rc = http2_init_connection(&conn, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "init succeeds");
+    ASSERT_STR_EQ(err, "", "no error");
+
+    http2_cleanup(&conn);
+    close(fds[0]);
+    close(fds[1]);
+}
+
+TEST(test_http2_receive_response_applies_valid_window_update) {
+    struct connection conn;
+    struct h2_connection *h2 = NULL;
+    int peer = -1;
+    ASSERT_INT_EQ(make_h2_send_conn(&conn, &h2, &peer), 0, "setup");
+    struct h2_stream *s = alloc_stream(h2);
+    ASSERT_PTR_NOTNULL(s, "alloc stream");
+    s->id = 2;
+
+    write_h2_frame(peer, H2_HEADERS, H2_FLAG_END_HEADERS, 2,
+                   STATUS_200_BLOCK, sizeof(STATUS_200_BLOCK));
+    write_wu_frame(peer, 0, 4, 1000);
+    write_h2_frame(peer, H2_HEADERS, H2_FLAG_END_HEADERS | H2_FLAG_END_STREAM, 2, NULL, 0);
+
+    struct response_info out;
+    memset(&out, 0, sizeof(out));
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    char err[128] = "";
+    int rc = http2_receive_response(&conn, 2, &out, &ts, NULL, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "receive succeeds");
+    ASSERT_INT_EQ(out.status_code, 200, "status 200");
+    ASSERT_INT_EQ((int)h2->conn_window, 1000, "connection window updated");
+
+    close(peer);
+    close(conn.fd);
+    free_test_h2(h2);
+}
+
+TEST(test_http2_receive_response_rejects_oversized_window_update) {
+    struct connection conn;
+    struct h2_connection *h2 = NULL;
+    int peer = -1;
+    ASSERT_INT_EQ(make_h2_send_conn(&conn, &h2, &peer), 0, "setup");
+    struct h2_stream *s = alloc_stream(h2);
+    ASSERT_PTR_NOTNULL(s, "alloc stream");
+    s->id = 2;
+
+    write_h2_frame(peer, H2_HEADERS, H2_FLAG_END_HEADERS, 2,
+                   STATUS_200_BLOCK, sizeof(STATUS_200_BLOCK));
+    write_wu_frame(peer, 0, 5, 1000);
+
+    struct response_info out;
+    memset(&out, 0, sizeof(out));
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    char err[128] = "";
+    int rc = http2_receive_response(&conn, 2, &out, &ts, NULL, err, sizeof(err));
+    ASSERT_INT_EQ(rc, -1, "receive fails on oversized WINDOW_UPDATE");
+    ASSERT_TRUE(strstr(err, "must be 4 octets") != NULL, "exact-size error");
+
+    close(peer);
+    close(conn.fd);
+    free_test_h2(h2);
+}
+
+TEST(test_hpack_table_add_overflow_guard) {
+    struct h2_connection *h2 = make_test_h2();
+    ASSERT_PTR_NOTNULL(h2, "make_test_h2");
+    char tiny[2] = "x";
+
+    ASSERT_INT_EQ(hpack_table_add(&h2->dyn_table, tiny, SIZE_MAX, tiny, 0), -1,
+                  "name_len near SIZE_MAX rejected");
+    ASSERT_INT_EQ(hpack_table_add(&h2->dyn_table, tiny, 0, tiny, SIZE_MAX - 16), -1,
+                  "value_len within 32 of SIZE_MAX rejected");
+    ASSERT_INT_EQ(hpack_table_add(&h2->dyn_table, tiny, SIZE_MAX - 40, tiny, SIZE_MAX - 40), -1,
+                  "combined overflow rejected");
+    ASSERT_INT_EQ((int)h2->dyn_table.count, 0, "table untouched");
+
     free_test_h2(h2);
 }
 
@@ -2816,6 +2944,11 @@ int main(void) {
     test_hpack_encoders_boundary_sweep();
     test_http2_send_request_rejects_oversized_window_update();
     test_http2_send_request_sends_body_after_window_updates();
+    test_h2_init_rejects_oversized_window_update();
+    test_h2_init_accepts_valid_window_update();
+    test_http2_receive_response_applies_valid_window_update();
+    test_http2_receive_response_rejects_oversized_window_update();
+    test_hpack_table_add_overflow_guard();
 
     printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
            tests_run - tests_failed, tests_failed, tests_run);
