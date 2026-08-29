@@ -174,6 +174,13 @@ static struct addrinfo *dns_cache_lookup(struct dns_cache *cache,
     for (int i = 0; i < cache->count; i++) {
         if (cache->entries[i].hash == hash && strcmp(cache->entries[i].key, key) == 0) {
             struct addrinfo *copy = copy_addrinfo_list(cache->entries[i].addrs);
+            /* LRU: move the hit to the MRU end so slot 0 stays the LRU slot */
+            if (i + 1 < cache->count) {
+                struct dns_cache_entry e = cache->entries[i];
+                memmove(&cache->entries[i], &cache->entries[i + 1],
+                        (size_t)(cache->count - i - 1) * sizeof(cache->entries[0]));
+                cache->entries[cache->count - 1] = e;
+            }
             pthread_mutex_unlock(&cache->lock);
             return copy;
         }

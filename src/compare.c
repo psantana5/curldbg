@@ -25,6 +25,11 @@ int run_compare_family(const struct cmdline_opts *c, struct run_options *opts) {
     opts->cookie_jar = NULL;
     opts->retry_count = 0;
     opts->retry_delay_ms = 0;
+    opts->dns_cache = dns_cache_create(300000);
+    if (opts->dns_cache == NULL) {
+        fprintf(stderr, "DNS cache setup failed: out of memory\n");
+        return EXIT_FAILURE;
+    }
 
     opts->address_family = AF_INET;
     struct run_options opts_v4 = *opts;
@@ -73,6 +78,8 @@ int run_compare_family(const struct cmdline_opts *c, struct run_options *opts) {
     free_run_result(&result_v4);
     free_run_result(&result_v6);
 
+    dns_cache_destroy(opts->dns_cache);
+
     return (ok_v4 && ok_v6) ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
@@ -90,6 +97,11 @@ int run_compare_urls(const struct cmdline_opts *c, struct run_options *opts) {
     opts->cookie_jar = NULL;
     opts->retry_count = 0;
     opts->retry_delay_ms = 0;
+    opts->dns_cache = dns_cache_create(300000);
+    if (opts->dns_cache == NULL) {
+        fprintf(stderr, "DNS cache setup failed: out of memory\n");
+        return EXIT_FAILURE;
+    }
 
     memset(&result_a, 0, sizeof(result_a));
     memset(&result_b, 0, sizeof(result_b));
@@ -131,6 +143,8 @@ int run_compare_urls(const struct cmdline_opts *c, struct run_options *opts) {
 
     free_run_result(&result_a);
     free_run_result(&result_b);
+
+    dns_cache_destroy(opts->dns_cache);
 
     return (ok_a && ok_b) ? EXIT_SUCCESS : EXIT_FAILURE;
 }
