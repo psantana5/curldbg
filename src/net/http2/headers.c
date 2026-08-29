@@ -116,63 +116,80 @@ int parse_h2_header_block(struct h2_connection *h2,
     char *error, size_t error_len)
 {
     size_t hp = 0;
-    int rc;
+    int rc = 0;
+    /* A decoded header value can be up to H2_MAX_HEADER_VALUE_LEN (64 KiB);
+     * keep it off the stack. The name buffer (4 KiB) stays inline. */
+    char name[H2_MAX_HEADER_NAME_LEN];
+    struct auto_buf value_ab;
+    char *value;
+
+    auto_buf_init(&value_ab, H2_MAX_HEADER_VALUE_LEN);
+    value = value_ab.data;
+    if (value == NULL)
+        return -1;
+
     while (hp < block_len) {
         unsigned char b = block[hp];
 
         if ((b & 0x80) != 0) {
             uint64_t idx;
-            if (hpack_decode_int(block, block_len, &hp, 7, &idx) != 0)
-                return -1;
-            const char *name, *value;
+            if (hpack_decode_int(block, block_len, &hp, 7, &idx) != 0) {
+                rc = -1; goto done;
+            }
+            const char *sn, *sv;
             size_t name_len, value_len;
-            if (get_table_entry(&h2->dyn_table, (int)idx, &name, &name_len,
-                                &value, &value_len) != 0)
-                return -1;
-            rc = apply_h2_header(h2, dst, conn, fid, name, value, name_len, value_len, error, error_len);
-            if (rc != 0) return rc;
+            if (get_table_entry(&h2->dyn_table, (int)idx, &sn, &name_len,
+                                &sv, &value_len) != 0) {
+                rc = -1; goto done;
+            }
+            rc = apply_h2_header(h2, dst, conn, fid, sn, sv, name_len, value_len, error, error_len);
+            if (rc != 0) goto done;
         } else if ((b & 0x40) != 0) {
             uint64_t name_idx;
-            if (hpack_decode_int(block, block_len, &hp, 6, &name_idx) != 0)
-                return -1;
-
-            char name[H2_MAX_HEADER_NAME_LEN];
-            char value[H2_MAX_HEADER_VALUE_LEN];
+            if (hpack_decode_int(block, block_len, &hp, 6, &name_idx) != 0) {
+                rc = -1; goto done;
+            }
             size_t name_len = 0, value_len = 0;
 
             if (decode_h2_header_name_value(h2->huff_tree, block, block_len, &hp,
                                              &h2->dyn_table, name_idx,
-                                             name, value, &name_len, &value_len) != 0)
-                return -1;
+                                             name, value, &name_len, &value_len) != 0) {
+                rc = -1; goto done;
+            }
 
-            if (hpack_table_add(&h2->dyn_table, name, name_len, value, value_len) != 0)
-                return -1;
+            if (hpack_table_add(&h2->dyn_table, name, name_len, value, value_len) != 0) {
+                rc = -1; goto done;
+            }
             rc = apply_h2_header(h2, dst, conn, fid, name, value, name_len, value_len, error, error_len);
-            if (rc != 0) return rc;
+            if (rc != 0) goto done;
         } else if ((b & 0x20) != 0) {
             uint64_t new_size;
-            if (hpack_decode_int(block, block_len, &hp, 5, &new_size) != 0)
-                return -1;
-            if (new_size > h2->settings.header_table_size)
-                return -1;
+            if (hpack_decode_int(block, block_len, &hp, 5, &new_size) != 0) {
+                rc = -1; goto done;
+            }
+            if (new_size > h2->settings.header_table_size) {
+                rc = -1; goto done;
+            }
             hpack_table_set_max_size(&h2->dyn_table, (uint32_t)new_size);
         } else {
             uint64_t name_idx;
-            if (hpack_decode_int(block, block_len, &hp, 4, &name_idx) != 0)
-                return -1;
-
-            char name[H2_MAX_HEADER_NAME_LEN];
-            char value[H2_MAX_HEADER_VALUE_LEN];
+            if (hpack_decode_int(block, block_len, &hp, 4, &name_idx) != 0) {
+                rc = -1; goto done;
+            }
             size_t name_len = 0, value_len = 0;
 
             if (decode_h2_header_name_value(h2->huff_tree, block, block_len, &hp,
                                              &h2->dyn_table, name_idx,
-                                             name, value, &name_len, &value_len) != 0)
-                return -1;
+                                             name, value, &name_len, &value_len) != 0) {
+                rc = -1; goto done;
+            }
 
             rc = apply_h2_header(h2, dst, conn, fid, name, value, name_len, value_len, error, error_len);
-            if (rc != 0) return rc;
+            if (rc != 0) goto done;
         }
     }
-    return 0;
+
+done:
+    auto_buf_done(&value_ab);
+    return rc;
 }
