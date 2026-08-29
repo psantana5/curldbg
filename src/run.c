@@ -322,6 +322,37 @@ static void free_built_headers(struct built_headers *h) {
     if (h->heap_owned) free((void *)h->headers);
 }
 
+/* Append a header pointer, growing to a heap array when the inline stack
+ * buffer (or an externally-owned array such as cmdline_opts.extra_headers)
+ * has no room. Never reallocs memory it does not own. */
+static int built_headers_append(struct built_headers *h, const char *header) {
+    size_t max_s = sizeof(h->stack_headers) / sizeof(h->stack_headers[0]);
+    size_t new_count = h->count + 1;
+    if (!h->heap_owned && new_count <= max_s) {
+        for (size_t i = 0; i < h->count; i++)
+            h->stack_headers[i] = h->headers ? h->headers[i] : NULL;
+        h->headers = h->stack_headers;
+        h->stack_headers[h->count] = header;
+        h->count = new_count;
+        return 0;
+    }
+    if (h->heap_owned) {
+        const char **nh = realloc((void *)h->headers, new_count * sizeof(*nh));
+        if (nh == NULL) return -1;
+        h->headers = nh;
+    } else {
+        const char **nh = malloc(new_count * sizeof(*nh));
+        if (nh == NULL) return -1;
+        for (size_t i = 0; i < h->count; i++)
+            nh[i] = h->headers ? h->headers[i] : NULL;
+        h->headers = nh;
+        h->heap_owned = true;
+    }
+    h->headers[h->count] = header;
+    h->count = new_count;
+    return 0;
+}
+
 static int build_request_headers(const struct run_options *opts,
                                   const struct url_info *url,
                                   struct built_headers *hdrs,
@@ -431,32 +462,25 @@ static int dispatch_request(struct connection *conn, const struct url_info *url,
         bool has_ct = (hdrs->flags & HF_CONTENT_TYPE) != 0;
         bool has_cl = (hdrs->flags & HF_CONTENT_LENGTH) != 0;
         char ct_buf[128] = "", cl_buf[64] = "";
-        size_t extra = 0;
         if ((data != NULL && data_len > 0) || upload_file != NULL) {
             size_t body_len = (upload_file != NULL) ? upload_size : data_len;
             if (!has_ct) {
                 const char *ct = (upload_file != NULL) ? "application/octet-stream"
                                                          : "application/x-www-form-urlencoded";
                 int n = snprintf(ct_buf, sizeof(ct_buf), "content-type: %s", ct);
-                if (n > 0 && (size_t)n < sizeof(ct_buf)) extra++;
+                if (n <= 0 || (size_t)n >= sizeof(ct_buf)) ct_buf[0] = '\0';
             }
             if (!has_cl) {
                 int n = snprintf(cl_buf, sizeof(cl_buf), "content-length: %zu", body_len);
-                if (n > 0 && (size_t)n < sizeof(cl_buf)) extra++;
+                if (n <= 0 || (size_t)n >= sizeof(cl_buf)) cl_buf[0] = '\0';
             }
-        }
-        if (extra > 0) {
-            size_t max_s = sizeof(hdrs->stack_headers) / sizeof(hdrs->stack_headers[0]);
-            if (hdrs->count + extra <= max_s) {
-                if (hdrs->headers != hdrs->stack_headers) {
-                    for (size_t i = 0; i < hdrs->count && i < max_s; i++)
-                        hdrs->stack_headers[i] = hdrs->headers[i];
-                    hdrs->headers = hdrs->stack_headers;
-                }
-                size_t idx = hdrs->count;
-                if (ct_buf[0] != '\0') hdrs->stack_headers[idx++] = ct_buf;
-                if (cl_buf[0] != '\0') hdrs->stack_headers[idx++] = cl_buf;
-                hdrs->count += extra;
+            if (ct_buf[0] != '\0' && built_headers_append(hdrs, ct_buf) != 0) {
+                snprintf(out->error, sizeof(out->error), "Out of memory");
+                return -1;
+            }
+            if (cl_buf[0] != '\0' && built_headers_append(hdrs, cl_buf) != 0) {
+                snprintf(out->error, sizeof(out->error), "Out of memory");
+                return -1;
             }
         }
 
