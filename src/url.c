@@ -288,8 +288,10 @@ int output_filename_from_url(const char *input_url, char *out, size_t out_size) 
     const char *path = url.path;
     const char *slash = strrchr(path, '/');
     const char *segment = (slash != NULL) ? slash + 1 : path;
-    if (segment[0] == '\0')
-        return (snprintf(out, out_size, "index.html") < 0 || (size_t)snprintf(out, out_size, "index.html") >= out_size) ? -1 : 0;
+    if (segment[0] == '\0') {
+        int n = snprintf(out, out_size, "index.html");
+        return (n < 0 || (size_t)n >= out_size) ? -1 : 0;
+    }
     char name_buf[1024];
     snprintf(name_buf, sizeof(name_buf), "%s", segment);
     char *cut = strpbrk(name_buf, "?#");

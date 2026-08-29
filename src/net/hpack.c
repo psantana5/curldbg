@@ -85,6 +85,10 @@ const struct h2_static_entry *get_static_entry(int idx) {
     return NULL;
 }
 
+/* Encodes an HPACK integer into the low prefix_bits of out[0] followed by
+ * continuation bytes. The caller MUST pre-initialize out[0] with the flag bits
+ * (e.g. 0x80 for a Huffman-coded string, 0x40/0x00 for literal headers);
+ * those high bits are preserved. */
 size_t hpack_encode_int(unsigned char *out, size_t out_size,
                                 uint64_t value, uint8_t prefix_bits) {
     uint8_t prefix_mask = (uint8_t)((1 << prefix_bits) - 1);
