@@ -461,8 +461,8 @@ static int dispatch_request(struct connection *conn, const struct url_info *url,
 
         bool has_ct = (hdrs->flags & HF_CONTENT_TYPE) != 0;
         bool has_cl = (hdrs->flags & HF_CONTENT_LENGTH) != 0;
-        char ct_buf[128] = "", cl_buf[64] = "";
         if ((data != NULL && data_len > 0) || upload_file != NULL) {
+            char ct_buf[128] = "", cl_buf[64] = "";
             size_t body_len = (upload_file != NULL) ? upload_size : data_len;
             if (!has_ct) {
                 const char *ct = (upload_file != NULL) ? "application/octet-stream"
