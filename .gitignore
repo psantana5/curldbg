@@ -21,3 +21,10 @@ curldbg-static
 curldbg-fuzz*
 gmon.out
 VERSIONING
+
+# Virtual environment for Python, used for testing HTTP/2
+.venv*
+
+# Python bytecode cache
+__pycache__/
+*.pyc
