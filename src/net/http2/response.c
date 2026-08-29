@@ -126,6 +126,7 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
     out->content_encoding[0] = '\0';
     out->location[0] = '\0';
     out->ttfb_ms = -1.0;
+    out->header_text[0] = '\0';
 
     while (!s->done) {
         unsigned char header[H2_FRAME_HEADER_SIZE];

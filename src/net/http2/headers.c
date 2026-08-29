@@ -30,6 +30,25 @@ static void parse_h2_header(const char *name, const char *value,
     }
 }
 
+/* Best-effort accumulation of the raw header block for --dump-header/-I/-v.
+ * The parsed header fields remain authoritative; this mirrors the HTTP/1.1
+ * path, which stores the raw status line + headers in header_text. */
+static void h2_header_text_append(struct response_info *out,
+                                  const char *name, const char *value) {
+    size_t cur = strlen(out->header_text);
+    size_t avail = sizeof(out->header_text) - cur;
+    int n;
+    if (avail < 3) return; /* buffer full: stop accumulating */
+    if (name[0] == ':') {
+        if (strcasecmp(name, ":status") != 0) return;
+        n = snprintf(out->header_text + cur, avail, "HTTP/2 %s\r\n", value);
+    } else {
+        n = snprintf(out->header_text + cur, avail, "%s: %s\r\n", name, value);
+    }
+    if (n < 0 || (size_t)n >= avail)
+        out->header_text[sizeof(out->header_text) - 1] = '\0';
+}
+
 static int apply_h2_header(const struct h2_connection *h2, struct h2_stream *dst,
     struct connection *conn, uint32_t fid,
     const char *name, const char *value,
@@ -51,6 +70,8 @@ static int apply_h2_header(const struct h2_connection *h2, struct h2_stream *dst
                 }
             }
         }
+        if (!dst->trailers_pending)
+            h2_header_text_append(dst->out, name, value);
         parse_h2_header(name, value, dst->out);
     }
     dst->header_list_size += (uint32_t)(name_len + value_len + 32);

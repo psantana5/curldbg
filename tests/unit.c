@@ -2302,6 +2302,49 @@ TEST(test_parse_h2_header_block_literal_without_indexing) {
     free_test_h2(h2);
 }
 
+TEST(test_parse_h2_header_block_captures_header_text) {
+    struct h2_connection *h2 = make_test_h2();
+    ASSERT_PTR_NOTNULL(h2, "make_test_h2");
+    struct connection *conn = make_test_conn();
+    ASSERT_PTR_NOTNULL(conn, "make_test_conn");
+
+    struct h2_stream *s = &h2->streams[0];
+    s->active = true;
+    struct response_info ri;
+    memset(&ri, 0, sizeof(ri));
+    s->out = &ri;
+
+    unsigned char block[128];
+    size_t hp = 0;
+
+    /* ":status: 200" (literal without indexing) */
+    block[hp++] = 0x00;
+    block[hp++] = 0x07;
+    memcpy(block + hp, ":status", 7);
+    hp += 7;
+    block[hp++] = 0x03;
+    memcpy(block + hp, "200", 3);
+    hp += 3;
+
+    /* "content-type: text/plain" (literal without indexing) */
+    block[hp++] = 0x00;
+    block[hp++] = 0x0C;  /* "content-type" = 12 chars */
+    memcpy(block + hp, "content-type", 12);
+    hp += 12;
+    block[hp++] = 0x0A;  /* "text/plain" = 10 chars */
+    memcpy(block + hp, "text/plain", 10);
+    hp += 10;
+
+    char err[256] = {0};
+    int rc = parse_h2_header_block(h2, s, conn, 1, block, hp, err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "parse succeeds");
+    ASSERT_STR_EQ(ri.header_text, "HTTP/2 200\r\ncontent-type: text/plain\r\n",
+                  "header_text mirrors raw header block");
+
+    free(conn);
+    free_test_h2(h2);
+}
+
 TEST(test_parse_h2_header_block_empty) {
     struct h2_connection *h2 = make_test_h2();
     ASSERT_PTR_NOTNULL(h2, "make_test_h2");
@@ -2655,6 +2698,8 @@ TEST(test_http2_receive_response_applies_valid_window_update) {
     ASSERT_INT_EQ(rc, 0, "receive succeeds");
     ASSERT_INT_EQ(out.status_code, 200, "status 200");
     ASSERT_INT_EQ((int)h2->conn_window, 1000, "connection window updated");
+    ASSERT_TRUE(strstr(out.header_text, "HTTP/2 200\r\n") != NULL,
+                "header_text captures synthesized status line");
 
     close(peer);
     close(conn.fd);
@@ -2935,6 +2980,7 @@ int main(void) {
     test_parse_h2_header_block_status();
     test_parse_h2_header_block_content_length();
     test_parse_h2_header_block_literal_without_indexing();
+    test_parse_h2_header_block_captures_header_text();
     test_parse_h2_header_block_empty();
 
     test_hpack_table_add_oversized_entry_empties_table();
