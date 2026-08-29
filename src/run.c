@@ -862,7 +862,10 @@ void init_run_options(struct run_options *opts, const struct cmdline_opts *c) {
 int run_single_request(const struct cmdline_opts *c, struct run_options *opts,
                                struct run_result *result, FILE *body_out,
                                struct connection_state *reuse) {
-    char *owned_proxy_host = NULL, *owned_proxy_port = NULL;
+    /* Proxy host/port are parsed once in main() and passed in on opts; they
+     * are preserved here because init_run_options() zeroes the struct. */
+    const char *proxy_host = opts->proxy_host;
+    const char *proxy_port = opts->proxy_port;
     struct cookie_jar *cookie_jar = opts->cookie_jar;
     SSL_CTX *existing_tls_ctx = opts->tls_ctx;
     struct dns_cache *existing_dns_cache = opts->dns_cache;
@@ -870,8 +873,8 @@ int run_single_request(const struct cmdline_opts *c, struct run_options *opts,
     opts->tls_ctx = existing_tls_ctx;
     opts->dns_cache = existing_dns_cache;
     opts->body_out = body_out;
-    opts->proxy_host = NULL;
-    opts->proxy_port = NULL;
+    opts->proxy_host = proxy_host;
+    opts->proxy_port = proxy_port;
     opts->cookie_jar = cookie_jar;
 
     if (opts->dns_cache == NULL) {
@@ -879,18 +882,6 @@ int run_single_request(const struct cmdline_opts *c, struct run_options *opts,
         if (opts->dns_cache == NULL) {
             fprintf(stderr, "DNS cache setup failed: out of memory\n"); return -1;
         }
-    }
-
-    if (c->proxy_url != NULL) {
-        struct url_info proxy_ui;
-        memset(&proxy_ui, 0, sizeof(proxy_ui));
-        if (parse_url(c->proxy_url, &proxy_ui) != 0) {
-            fprintf(stderr, "Invalid proxy URL: %s\n", c->proxy_url); return -1;
-        }
-        owned_proxy_host = strdup(proxy_ui.host);
-        owned_proxy_port = strdup(proxy_ui.port);
-        opts->proxy_host = owned_proxy_host;
-        opts->proxy_port = owned_proxy_port;
     }
 
     int max_attempts = 1 + opts->retry_count;
@@ -905,8 +896,6 @@ int run_single_request(const struct cmdline_opts *c, struct run_options *opts,
         }
     }
 
-    free(owned_proxy_host);
-    free(owned_proxy_port);
     if (rc != 0) {
         if (opts->retry_count > 0) {
             if ((!c->silent || c->show_error) && result->error[0] != '\0')
