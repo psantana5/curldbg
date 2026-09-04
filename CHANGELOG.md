@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.1.9]
+
+### Fixed
+- HTTP/2 response headers are now captured into `header_text`, so
+  `--dump-header`, `--head`, and `-v` show response headers over HTTP/2
+  instead of producing empty output
+- HTTP/2 requests with a body now always include `content-type` and
+  `content-length`; previously they were silently dropped when the header
+  list exceeded the inline buffer (30+ custom headers)
+
+### Changed
+- Parse `--proxy` once in `main()` and drop the duplicate parse in
+  `run_single_request()`
+- Keep the 64 KiB HPACK header value buffer on the heap instead of the stack
+  during header-block decoding
+- DNS cache now evicts least-recently-used entries, and compare modes share a
+  single DNS cache across both runs
+- Ignore Python artifacts (`__pycache__/`, `*.pyc`, `.venv*`) and untrack a
+  previously committed `.pyc` file
+
 ## [2.1.8]
 
 ### Fixed
