@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.1.10]
+
+### Changed
+- Multiplex eligible multi-URL requests over a shared HTTP/2 connection
+
+### Fixed
+- Use const-qualified cookie field pointers to satisfy cppcheck without
+  changing the mutable input-buffer parsing behavior
+
 ## [2.1.9]
 
 ### Fixed
