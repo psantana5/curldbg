@@ -365,7 +365,7 @@ void cookie_jar_load(struct cookie_jar *jar, const char *filepath) {
         while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = '\0';
         if (len == 0) continue;
 
-        char *domain = line;
+        char * const domain = line;
         int tab_count = 0;
         for (const char *p = line; *p != '\0'; p++) {
             if (*p == '\t') tab_count++;
@@ -379,7 +379,7 @@ void cookie_jar_load(struct cookie_jar *jar, const char *filepath) {
         tab = strchr(subdomains, '\t');
         if (tab == NULL) continue;
         *tab = '\0'; tab++;
-        char *path = tab;
+        char * const path = tab;
         tab = strchr(path, '\t');
         if (tab == NULL) continue;
         *tab = '\0'; tab++;
@@ -387,12 +387,12 @@ void cookie_jar_load(struct cookie_jar *jar, const char *filepath) {
         tab = strchr(secure, '\t');
         if (tab == NULL) continue;
         *tab = '\0'; tab++;
-        char *expiry = tab;
+        char * const expiry = tab;
         tab = strchr(expiry, '\t');
         if (tab == NULL) continue;
         *tab = '\0';
         tab++;
-        char *name = tab;
+        char * const name = tab;
         tab = strchr(name, '\t');
         if (tab == NULL) continue;
         *tab = '\0'; tab++;
