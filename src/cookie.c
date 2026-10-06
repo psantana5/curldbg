@@ -365,35 +365,35 @@ void cookie_jar_load(struct cookie_jar *jar, const char *filepath) {
         while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = '\0';
         if (len == 0) continue;
 
-        char * const domain = line;
+        const char *domain = line;
         int tab_count = 0;
         for (const char *p = line; *p != '\0'; p++) {
             if (*p == '\t') tab_count++;
         }
         if (tab_count != 6) continue;
 
-        char *tab = strchr(domain, '\t');
+        char *tab = strchr(line, '\t');
         if (tab == NULL) continue;
         *tab = '\0'; tab++;
         char *subdomains = tab;
         tab = strchr(subdomains, '\t');
         if (tab == NULL) continue;
         *tab = '\0'; tab++;
-        char * const path = tab;
-        tab = strchr(path, '\t');
+        const char *path = tab;
+        tab = strchr(tab, '\t');
         if (tab == NULL) continue;
         *tab = '\0'; tab++;
         char *secure = tab;
         tab = strchr(secure, '\t');
         if (tab == NULL) continue;
         *tab = '\0'; tab++;
-        char * const expiry = tab;
-        tab = strchr(expiry, '\t');
+        const char *expiry = tab;
+        tab = strchr(tab, '\t');
         if (tab == NULL) continue;
         *tab = '\0';
         tab++;
-        char * const name = tab;
-        tab = strchr(name, '\t');
+        const char *name = tab;
+        tab = strchr(tab, '\t');
         if (tab == NULL) continue;
         *tab = '\0'; tab++;
         const char *value = tab;
