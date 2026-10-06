@@ -433,6 +433,51 @@ static int build_request_headers(const struct run_options *opts,
     return 0;
 }
 
+/* Send an HTTP/2 request, adding synthesized content-type/length headers when
+ * a body is present. Returns the stream ID, or zero on failure. */
+static uint32_t send_h2_request(struct connection *conn, const struct url_info *url,
+                                const char *method, const char *data, size_t data_len,
+                                const FILE *upload_file, size_t upload_size,
+                                struct built_headers *hdrs,
+                                const struct run_options *opts,
+                                struct run_result *out) {
+    snprintf(out->resp.http_version, sizeof(out->resp.http_version), "HTTP/2");
+    const char *effective_auth = opts->basic_auth;
+    if (effective_auth == NULL || effective_auth[0] == '\0') {
+        if (url->user[0] != '\0') effective_auth = url->user;
+    }
+
+    bool has_ct = (hdrs->flags & HF_CONTENT_TYPE) != 0;
+    bool has_cl = (hdrs->flags & HF_CONTENT_LENGTH) != 0;
+    if ((data != NULL && data_len > 0) || upload_file != NULL) {
+        char ct_buf[128] = "", cl_buf[64] = "";
+        size_t body_len = (upload_file != NULL) ? upload_size : data_len;
+        if (!has_ct) {
+            const char *ct = (upload_file != NULL) ? "application/octet-stream"
+                                                     : "application/x-www-form-urlencoded";
+            int n = snprintf(ct_buf, sizeof(ct_buf), "content-type: %s", ct);
+            if (n <= 0 || (size_t)n >= sizeof(ct_buf)) ct_buf[0] = '\0';
+        }
+        if (!has_cl) {
+            int n = snprintf(cl_buf, sizeof(cl_buf), "content-length: %zu", body_len);
+            if (n <= 0 || (size_t)n >= sizeof(cl_buf)) cl_buf[0] = '\0';
+        }
+        if (ct_buf[0] != '\0' && built_headers_append(hdrs, ct_buf) != 0) {
+            snprintf(out->error, sizeof(out->error), "Out of memory");
+            return 0;
+        }
+        if (cl_buf[0] != '\0' && built_headers_append(hdrs, cl_buf) != 0) {
+            snprintf(out->error, sizeof(out->error), "Out of memory");
+            return 0;
+        }
+    }
+
+    return http2_send_request(conn, url, method, data, data_len,
+                              hdrs->headers, hdrs->count,
+                              opts->user_agent, effective_auth,
+                              out->error, sizeof(out->error));
+}
+
 /* Returns 0 on success, -1 on failure (error already set in out->error).
  * May append h2 content-type/length pseudo-headers to hdrs->stack_headers. */
 static int dispatch_request(struct connection *conn, const struct url_info *url,
@@ -453,41 +498,8 @@ static int dispatch_request(struct connection *conn, const struct url_info *url,
     }
 
     if (http2_negotiated(conn)) {
-        snprintf(out->resp.http_version, sizeof(out->resp.http_version), "HTTP/2");
-        const char *effective_auth = opts->basic_auth;
-        if (effective_auth == NULL || effective_auth[0] == '\0') {
-            if (url->user[0] != '\0') effective_auth = url->user;
-        }
-
-        bool has_ct = (hdrs->flags & HF_CONTENT_TYPE) != 0;
-        bool has_cl = (hdrs->flags & HF_CONTENT_LENGTH) != 0;
-        if ((data != NULL && data_len > 0) || upload_file != NULL) {
-            char ct_buf[128] = "", cl_buf[64] = "";
-            size_t body_len = (upload_file != NULL) ? upload_size : data_len;
-            if (!has_ct) {
-                const char *ct = (upload_file != NULL) ? "application/octet-stream"
-                                                         : "application/x-www-form-urlencoded";
-                int n = snprintf(ct_buf, sizeof(ct_buf), "content-type: %s", ct);
-                if (n <= 0 || (size_t)n >= sizeof(ct_buf)) ct_buf[0] = '\0';
-            }
-            if (!has_cl) {
-                int n = snprintf(cl_buf, sizeof(cl_buf), "content-length: %zu", body_len);
-                if (n <= 0 || (size_t)n >= sizeof(cl_buf)) cl_buf[0] = '\0';
-            }
-            if (ct_buf[0] != '\0' && built_headers_append(hdrs, ct_buf) != 0) {
-                snprintf(out->error, sizeof(out->error), "Out of memory");
-                return -1;
-            }
-            if (cl_buf[0] != '\0' && built_headers_append(hdrs, cl_buf) != 0) {
-                snprintf(out->error, sizeof(out->error), "Out of memory");
-                return -1;
-            }
-        }
-
-        uint32_t sid = http2_send_request(conn, url, method, data, data_len,
-                                           hdrs->headers, hdrs->count,
-                                           opts->user_agent, effective_auth,
-                                           out->error, sizeof(out->error));
+        uint32_t sid = send_h2_request(conn, url, method, data, data_len,
+                                       upload_file, upload_size, hdrs, opts, out);
         if (sid == 0) return -1;
         if (http2_receive_response(conn, sid, &out->resp, ttfb_start,
                                     opts->body_out, out->error, sizeof(out->error)) != 0)
@@ -906,5 +918,200 @@ int run_single_request(const struct cmdline_opts *c, struct run_options *opts,
         }
         return -1;
     }
+    return 0;
+}
+
+/* Concurrent HTTP/2 batch path: URLs must share one TLS authority.
+ * Returns 1 when the batch is unsupported and should use the serial path. */
+int run_multi_requests_fast(const struct cmdline_opts *c, struct run_options *opts,
+                            struct run_result *results, int url_count,
+                            struct connection_state *reuse) {
+    (void)reuse;
+    if (c == NULL || opts == NULL || results == NULL || c->urls == NULL ||
+        url_count < 2 || url_count != c->url_count)
+        return 1;
+
+    const char *proxy_host = opts->proxy_host;
+    const char *proxy_port = opts->proxy_port;
+    struct cookie_jar *cookie_jar = opts->cookie_jar;
+    SSL_CTX *tls_ctx = opts->tls_ctx;
+    struct dns_cache *dns_cache = opts->dns_cache;
+    init_run_options(opts, c);
+    opts->proxy_host = proxy_host;
+    opts->proxy_port = proxy_port;
+    opts->cookie_jar = cookie_jar;
+    opts->tls_ctx = tls_ctx;
+    opts->dns_cache = dns_cache;
+    if (opts->dns_cache == NULL) {
+        opts->dns_cache = dns_cache_create(300000);
+        if (opts->dns_cache == NULL) {
+            snprintf(results[0].error, sizeof(results[0].error), "DNS cache setup failed: out of memory");
+            return -1;
+        }
+    }
+
+    struct url_info *urls = calloc((size_t)url_count, sizeof(*urls));
+    uint32_t *sids = calloc((size_t)url_count, sizeof(*sids));
+    struct timespec *ttfb_starts = calloc((size_t)url_count, sizeof(*ttfb_starts));
+    if (urls == NULL || sids == NULL || ttfb_starts == NULL) {
+        free(urls);
+        free(sids);
+        free(ttfb_starts);
+        snprintf(results[0].error, sizeof(results[0].error), "Out of memory");
+        return -1;
+    }
+
+    for (int i = 0; i < url_count; i++) {
+        if (parse_url(c->urls[i], &urls[i]) != 0) {
+            free(urls); free(sids); free(ttfb_starts);
+            return 1;
+        }
+        if (i > 0 && (strcmp(urls[i].host, urls[0].host) != 0 ||
+                      strcmp(urls[i].port, urls[0].port) != 0 ||
+                      urls[i].use_tls != urls[0].use_tls ||
+                      strcmp(urls[i].user, urls[0].user) != 0)) {
+            free(urls); free(sids); free(ttfb_starts);
+            return 1;
+        }
+    }
+    if (!urls[0].use_tls) {
+        free(urls); free(sids); free(ttfb_starts);
+        return 1;
+    }
+
+    struct connection_state state;
+    memset(&state, 0, sizeof(state));
+    state.conn.fd = -1;
+    struct hop_info hop;
+    memset(&hop, 0, sizeof(hop));
+    struct connect_race_info race_info;
+    memset(&race_info, 0, sizeof(race_info));
+    struct timespec total_start, total_end;
+    if (clock_gettime(CLOCK_MONOTONIC, &total_start) != 0) {
+        snprintf(results[0].error, sizeof(results[0].error), "clock_gettime failed");
+        free(urls); free(sids); free(ttfb_starts);
+        return -1;
+    }
+
+    double dns_ms = 0.0, connect_ms = 0.0;
+    int preferred_family = opts->address_family;
+    if (establish_connection(&state.conn, &state.addrs, state.host, sizeof(state.host),
+                             state.port, sizeof(state.port), &state.use_tls,
+                             &urls[0], opts, &hop, &preferred_family, &race_info,
+                             &total_start, &connect_ms, &dns_ms,
+                             results[0].error, sizeof(results[0].error)) != 0) {
+        close_connection(&state.conn);
+        freeaddrinfo(state.addrs);
+        free(urls); free(sids); free(ttfb_starts);
+        return -1;
+    }
+    if (!http2_negotiated(&state.conn)) {
+        close_connection(&state.conn);
+        freeaddrinfo(state.addrs);
+        free(urls); free(sids); free(ttfb_starts);
+        return 1;
+    }
+    if ((uint32_t)url_count > http2_max_concurrent_streams(&state.conn)) {
+        close_connection(&state.conn);
+        freeaddrinfo(state.addrs);
+        free(urls); free(sids); free(ttfb_starts);
+        return 1;
+    }
+
+    int sent = 0;
+    for (int i = 0; i < url_count; i++) {
+        struct run_result *out = &results[i];
+        memset(out, 0, sizeof(*out));
+        out->is_head = opts->is_head_method;
+        struct built_headers hdrs;
+        if (build_request_headers(opts, &urls[i], &hdrs,
+                                  out->error, sizeof(out->error)) != 0) {
+            free_built_headers(&hdrs);
+            continue;
+        }
+        if (clock_gettime(CLOCK_MONOTONIC, &ttfb_starts[i]) != 0) {
+            snprintf(out->error, sizeof(out->error), "clock_gettime failed");
+            free_built_headers(&hdrs);
+            continue;
+        }
+        sids[i] = send_h2_request(&state.conn, &urls[i], opts->method,
+                                  opts->data, opts->data_len, NULL, 0,
+                                  &hdrs, opts, out);
+        free_built_headers(&hdrs);
+        if (sids[i] != 0) sent++;
+    }
+
+    if (sent > 0) {
+        uint32_t *ok_sids = malloc((size_t)sent * sizeof(*ok_sids));
+        struct response_info **ok_outs = malloc((size_t)sent * sizeof(*ok_outs));
+        struct timespec *ok_starts = malloc((size_t)sent * sizeof(*ok_starts));
+        if (ok_sids == NULL || ok_outs == NULL || ok_starts == NULL) {
+            free(ok_sids); free(ok_outs); free(ok_starts);
+            snprintf(results[0].error, sizeof(results[0].error), "Out of memory");
+            close_connection(&state.conn);
+            freeaddrinfo(state.addrs);
+            free(urls); free(sids); free(ttfb_starts);
+            return -1;
+        }
+        size_t k = 0;
+        for (int i = 0; i < url_count; i++) {
+            if (sids[i] != 0) {
+                ok_sids[k] = sids[i];
+                ok_outs[k] = &results[i].resp;
+                ok_starts[k] = ttfb_starts[i];
+                k++;
+            }
+        }
+        char receive_error[256] = "";
+        int drc = http2_receive_responses(&state.conn, ok_sids, (size_t)sent,
+                                          ok_outs, ok_starts, NULL,
+                                          receive_error, sizeof(receive_error));
+        free(ok_sids); free(ok_outs); free(ok_starts);
+        if (drc != 0) {
+            snprintf(results[0].error, sizeof(results[0].error), "%s",
+                     receive_error[0] != '\0' ? receive_error : "HTTP/2 response failed");
+            close_connection(&state.conn);
+            freeaddrinfo(state.addrs);
+            free(urls); free(sids); free(ttfb_starts);
+            return -1;
+        }
+    }
+
+    if (clock_gettime(CLOCK_MONOTONIC, &total_end) != 0) {
+        snprintf(results[0].error, sizeof(results[0].error), "clock_gettime failed");
+        close_connection(&state.conn);
+        freeaddrinfo(state.addrs);
+        free(urls); free(sids); free(ttfb_starts);
+        return -1;
+    }
+    double total_ms = ms_between(&total_start, &total_end);
+    for (int i = 0; i < url_count; i++) {
+        struct run_result *out = &results[i];
+        out->dns_ms = dns_ms;
+        out->connect_ms = connect_ms;
+        out->total_ms = total_ms;
+        out->ttfb_ms = out->resp.ttfb_ms;
+        if (sids[i] != 0 && out->resp.status_code == 0 && out->error[0] == '\0')
+            snprintf(out->error, sizeof(out->error), "HTTP/2 stream did not complete");
+        if (format_url(&urls[i], out->final_url, sizeof(out->final_url)) != 0)
+            safe_strlcpy(out->final_url, c->urls[i], sizeof(out->final_url));
+        out->hops = calloc(1, sizeof(*out->hops));
+        if (out->hops == NULL) {
+            snprintf(out->error, sizeof(out->error), "Out of memory");
+            continue;
+        }
+        out->hop_count = 1;
+        out->hops[0].status_code = out->resp.status_code;
+        snprintf(out->hops[0].host, sizeof(out->hops[0].host), "%s", urls[i].host);
+        out->hops[0].dns_ms = dns_ms;
+        out->hops[0].tcp_ms = connect_ms;
+        out->hops[0].ttfb_ms = out->resp.ttfb_ms;
+        snprintf(out->hops[0].connected_ip, sizeof(out->hops[0].connected_ip), "%s", hop.connected_ip);
+        out->hops[0].connected_family = hop.connected_family;
+    }
+
+    close_connection(&state.conn);
+    freeaddrinfo(state.addrs);
+    free(urls); free(sids); free(ttfb_starts);
     return 0;
 }

@@ -1206,6 +1206,8 @@ TEST(test_write_body_data_to_file) {
     struct response_info out;
     memset(&out, 0, sizeof(out));
     FILE *tmp = tmpfile();
+    ASSERT_PTR_NOTNULL(tmp, "tmpfile");
+    if (tmp == NULL) return;
     write_body_data("hello", 5, tmp, &out, true);
     rewind(tmp);
     char got[16];
@@ -1676,6 +1678,8 @@ TEST(test_build_body_headers_content_length) {
     bool inc = false;
     char err[64] = "";
     FILE *f = tmpfile();
+    ASSERT_PTR_NOTNULL(f, "tmpfile");
+    if (f == NULL) return;
     int rc = build_body_headers(hdrs, sizeof(hdrs), "PUT", NULL, 0, f, 42,
         false, false, false, &cl, &inc, err, sizeof(err));
     ASSERT_INT_EQ(rc, 0, "content-length ok");
@@ -1711,6 +1715,8 @@ TEST(test_build_body_headers_overflow) {
     bool inc = false;
     char err[64] = "";
     FILE *f = tmpfile();
+    ASSERT_PTR_NOTNULL(f, "tmpfile");
+    if (f == NULL) return;
     int rc = build_body_headers(hdrs, sizeof(hdrs), "PUT", NULL, 0, f, 999,
         false, false, false, &cl, &inc, err, sizeof(err));
     ASSERT_INT_EQ(rc, -1, "overflow error");
@@ -2492,12 +2498,22 @@ TEST(test_hpack_encoders_boundary_sweep) {
     char *val_buf = malloc(301);
     ASSERT_PTR_NOTNULL(name_buf, "name_buf alloc");
     ASSERT_PTR_NOTNULL(val_buf, "val_buf alloc");
+    if (name_buf == NULL || val_buf == NULL) {
+        free(name_buf);
+        free(val_buf);
+        return;
+    }
     memset(name_buf, 'n', 301);
     memset(val_buf, 'v', 301);
 
     for (size_t os = 0; os <= 200; os++) {
-        unsigned char *buf = malloc(os);
+        unsigned char *buf = malloc(os == 0 ? 1 : os);
         ASSERT_PTR_NOTNULL(buf, "sweep buf alloc");
+        if (buf == NULL) {
+            free(name_buf);
+            free(val_buf);
+            return;
+        }
 
         for (size_t ni = 0; ni < sizeof(name_indexes) / sizeof(name_indexes[0]); ni++) {
             for (size_t li = 0; li < sizeof(str_lens) / sizeof(str_lens[0]); li++) {
@@ -2673,6 +2689,52 @@ TEST(test_h2_init_accepts_valid_window_update) {
     http2_cleanup(&conn);
     close(fds[0]);
     close(fds[1]);
+}
+
+TEST(test_http2_receive_responses_drains_multiple_streams) {
+    struct connection conn;
+    struct h2_connection *h2 = NULL;
+    int peer = -1;
+    ASSERT_INT_EQ(make_h2_send_conn(&conn, &h2, &peer), 0, "setup");
+    struct h2_stream *s1 = alloc_stream(h2);
+    struct h2_stream *s2 = alloc_stream(h2);
+    ASSERT_PTR_NOTNULL(s1, "first stream");
+    ASSERT_PTR_NOTNULL(s2, "second stream");
+    s1->id = 2;
+    s2->id = 4;
+
+    static const unsigned char body_a[] = {'a'};
+    static const unsigned char body_b[] = {'b'};
+    write_h2_frame(peer, H2_HEADERS, H2_FLAG_END_HEADERS, 4,
+                   STATUS_200_BLOCK, sizeof(STATUS_200_BLOCK));
+    write_h2_frame(peer, H2_HEADERS, H2_FLAG_END_HEADERS, 2,
+                   STATUS_200_BLOCK, sizeof(STATUS_200_BLOCK));
+    write_h2_frame(peer, H2_DATA, H2_FLAG_END_STREAM, 2, body_a, sizeof(body_a));
+    write_h2_frame(peer, H2_DATA, H2_FLAG_END_STREAM, 4, body_b, sizeof(body_b));
+
+    struct response_info out1, out2;
+    struct response_info *outs[2] = {&out1, &out2};
+    const uint32_t ids[2] = {2, 4};
+    struct timespec starts[2];
+    ASSERT_INT_EQ(clock_gettime(CLOCK_MONOTONIC, &starts[0]), 0, "first start time");
+    starts[1] = starts[0];
+    char err[128] = "";
+    int rc = http2_receive_responses(&conn, ids, 2, outs, starts, NULL,
+                                     err, sizeof(err));
+    ASSERT_INT_EQ(rc, 0, "drain succeeds");
+    ASSERT_INT_EQ(out1.status_code, 200, "first response status");
+    ASSERT_INT_EQ(out2.status_code, 200, "second response status");
+    ASSERT_INT_EQ((int)out1.body_len, 1, "first body length");
+    ASSERT_INT_EQ((int)out2.body_len, 1, "second body length");
+    ASSERT_TRUE(out1.body_buf != NULL && out1.body_buf[0] == 'a', "first body routed to stream 2");
+    ASSERT_TRUE(out2.body_buf != NULL && out2.body_buf[0] == 'b', "second body routed to stream 4");
+    ASSERT_STR_EQ(err, "", "no error");
+
+    free(out1.body_buf);
+    free(out2.body_buf);
+    close(peer);
+    close(conn.fd);
+    free_test_h2(h2);
 }
 
 TEST(test_http2_receive_response_applies_valid_window_update) {
@@ -2992,6 +3054,7 @@ int main(void) {
     test_http2_send_request_sends_body_after_window_updates();
     test_h2_init_rejects_oversized_window_update();
     test_h2_init_accepts_valid_window_update();
+    test_http2_receive_responses_drains_multiple_streams();
     test_http2_receive_response_applies_valid_window_update();
     test_http2_receive_response_rejects_oversized_window_update();
     test_hpack_table_add_overflow_guard();

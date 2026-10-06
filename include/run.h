@@ -88,6 +88,9 @@ struct run_result {
 int run_single_request(const struct cmdline_opts *c, struct run_options *opts,
                        struct run_result *result, FILE *body_out,
                        struct connection_state *reuse);
+int run_multi_requests_fast(const struct cmdline_opts *c, struct run_options *opts,
+                            struct run_result *results, int url_count,
+                            struct connection_state *reuse);
 void init_run_options(struct run_options *opts, const struct cmdline_opts *c);
 void run_two_requests_parallel(const char *url_a, const struct run_options *opts_a,
                                struct run_result *result_a, bool *ok_a,

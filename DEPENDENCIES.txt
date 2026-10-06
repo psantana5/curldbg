@@ -1,0 +1,27 @@
+curldbg — dependencies
+======================
+
+System packages (Ubuntu/Debian)
+-------------------------------
+Install the build, test, static-analysis, and coverage dependencies used by
+GitHub Actions with:
+
+    sudo apt-get update
+    sudo apt-get install build-essential pkg-config libssl-dev zlib1g-dev libpsl-dev openssl valgrind clang cppcheck lcov python3-pip python3-venv
+
+The regular build needs a C compiler and make (provided by build-essential),
+pkg-config, and the development packages libssl-dev, zlib1g-dev, and libpsl-dev.
+The remaining packages provide the project's CI checks: Valgrind, Clang,
+cppcheck, lcov/genhtml, and Python virtual-environment tooling.
+
+Python dependency for the local HTTP/2 integration server
+---------------------------------------------------------
+Create a project-local virtual environment and install the test requirements:
+
+    python3 -m venv .venv
+    . .venv/bin/activate
+    python -m pip install -r tests/server/requirements.txt
+
+The requirements file currently installs h2. Activate .venv before running the
+HTTP/2 integration test directly. The integration test script can also create
+and populate its own temporary virtual environment when h2 is not available.

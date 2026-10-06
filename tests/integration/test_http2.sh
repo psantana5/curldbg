@@ -108,6 +108,9 @@ assert "HTTP/2 write-out http_version" \
 assert "HTTP/2 connection reuse (same connection, two requests)" \
     'a=$($CURLDBG -s --insecure "$BASE/" 2>/dev/null) && b=$($CURLDBG -s --insecure "$BASE/" 2>/dev/null) && echo "$a" | grep -q "Hello" && echo "$b" | grep -q "Hello"'
 
+assert "HTTP/2 multi-URL batch returns both results" \
+    'out=$($CURLDBG -I --insecure -w "%{http_code}:%{url_effective}\\n" "$BASE/" "$BASE/status404" 2>/dev/null) && printf "%s\\n" "$out" | grep -q "^200:https://localhost:$PORT/$" && printf "%s\\n" "$out" | grep -q "^404:https://localhost:$PORT/status404$"'
+
 assert "HTTP/2 large body (32 KiB)" \
     '$CURLDBG -s --insecure "$BASE/large32k" -o /tmp/h2test_large.bin 2>/dev/null && wc -c < /tmp/h2test_large.bin | grep -q "^32768$"'
 

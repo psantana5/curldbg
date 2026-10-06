@@ -21,6 +21,28 @@ static void configure_output_buffering(void) {
     (void)setvbuf(stdout, NULL, _IOFBF, 64 * 1024);
 }
 
+static void print_result(const struct cmdline_opts *c, const struct run_result *result,
+                         FILE *header_out) {
+    if (c->write_out_format != NULL)
+        write_out_expand(c->write_out_format, result);
+    if (header_out != NULL && result->resp.header_text[0] != '\0')
+        fputs(result->resp.header_text, header_out);
+    if (result->is_head && result->resp.header_text[0] != '\0') {
+        const char *h = result->resp.header_text;
+        while (*h != '\0') {
+            const char *nl = strstr(h, "\r\n");
+            if (nl == NULL) { printf("%s\n", h); break; }
+            size_t line_len = (size_t)(nl - h);
+            printf("%.*s\n", (int)line_len, h);
+            h = nl + 2;
+            if (*h == '\0' || (h[0] == '\r' && h[1] == '\n')) break;
+        }
+        printf("\n");
+    }
+    if (!c->silent)
+        print_single_output(result);
+}
+
 /* --- main --- */
 int main(int argc, char **argv) {
     int exit_code = EXIT_SUCCESS;
@@ -164,50 +186,72 @@ int main(int argc, char **argv) {
         if (c->url_count > 1 && !c->silent)
             printf("=== Multi-URL mode: %d URLs ===\n", c->url_count);
 
-        for (int ui = 0; ui < c->url_count; ui++) {
-            c->input_url = c->urls[ui];
-            memset(&result, 0, sizeof(result));
-
-            if (c->url_count > 1 && !c->silent)
-                printf("\n--- URL %d/%d: %s ---\n", ui + 1, c->url_count, c->input_url);
-
-            int rc = run_single_request(c, &session_opts, &result, body_out, &rconn);
-
-            if (c->write_out_format != NULL) {
-                write_out_expand(c->write_out_format, &result);
-            }
-
-            if (header_out != NULL && result.resp.header_text[0] != '\0') {
-                fputs(result.resp.header_text, header_out);
-            }
-
-            if (result.is_head && result.resp.header_text[0] != '\0') {
-                const char *h = result.resp.header_text;
-                while (*h != '\0') {
-                    const char *nl = strstr(h, "\r\n");
-                    if (nl == NULL) { printf("%s\n", h); break; }
-                    size_t line_len = (size_t)(nl - h);
-                    printf("%.*s\n", (int)line_len, h);
-                    h = nl + 2;
-                    if (*h == '\0' || (h[0] == '\r' && h[1] == '\n')) break;
+        bool fast_used = false;
+        struct run_result *fast_results = NULL;
+        bool fast_eligible = (c->url_count > 1 && !c->follow_redirects &&
+                              c->retry_count == 0 && c->upload_path == NULL &&
+                              c->request_data_len == 0 && !c->fail_on_http_error &&
+                              c->max_time_ms == 0 && c->force_http_version != 1 &&
+                              session_opts.cookie_jar == NULL && body_out == NULL);
+        if (fast_eligible) {
+            fast_results = calloc((size_t)c->url_count, sizeof(*fast_results));
+            if (fast_results != NULL) {
+                int frc = run_multi_requests_fast(c, &session_opts, fast_results,
+                                                  c->url_count, &rconn);
+                if (frc == 0) {
+                    fast_used = true;
+                } else if (frc == -1) {
+                    fprintf(stderr, "%s\n", fast_results[0].error[0] != '\0'
+                            ? fast_results[0].error : "Request failed");
+                    for (int i = 0; i < c->url_count; i++)
+                        free_run_result(&fast_results[i]);
+                    free(fast_results);
+                    exit_code = EXIT_FAILURE;
+                    goto cleanup;
+                } else {
+                    for (int i = 0; i < c->url_count; i++)
+                        free_run_result(&fast_results[i]);
+                    free(fast_results);
+                    fast_results = NULL;
                 }
-                printf("\n");
             }
-            if (!c->silent) {
-                print_single_output(&result);
+        }
+
+        if (fast_used) {
+            for (int ui = 0; ui < c->url_count; ui++) {
+                if (c->url_count > 1 && !c->silent)
+                    printf("\n--- URL %d/%d: %s ---\n", ui + 1, c->url_count, c->urls[ui]);
+                print_result(c, &fast_results[ui], header_out);
+                if (fast_results[ui].error[0] != '\0') {
+                    if (!c->silent || c->show_error)
+                        fprintf(stderr, "Request failed: %s\n", fast_results[ui].error);
+                    exit_code = EXIT_FAILURE;
+                }
+                free_run_result(&fast_results[ui]);
             }
+            free(fast_results);
+        } else {
+            for (int ui = 0; ui < c->url_count; ui++) {
+                c->input_url = c->urls[ui];
+                memset(&result, 0, sizeof(result));
 
-            free_run_result(&result);
+                if (c->url_count > 1 && !c->silent)
+                    printf("\n--- URL %d/%d: %s ---\n", ui + 1, c->url_count, c->input_url);
 
-            if (rc != 0) {
-                if (close_body) fclose(body_out);
-                if (close_header) fclose(header_out);
-                close_connection(&rconn.conn);
-                freeaddrinfo(rconn.addrs);
-                rconn.addrs = NULL;
-                rconn.conn.fd = -1;
-                exit_code = EXIT_FAILURE;
-                goto cleanup;
+                int rc = run_single_request(c, &session_opts, &result, body_out, &rconn);
+                print_result(c, &result, header_out);
+                free_run_result(&result);
+
+                if (rc != 0) {
+                    if (close_body) fclose(body_out);
+                    if (close_header) fclose(header_out);
+                    close_connection(&rconn.conn);
+                    freeaddrinfo(rconn.addrs);
+                    rconn.addrs = NULL;
+                    rconn.conn.fd = -1;
+                    exit_code = EXIT_FAILURE;
+                    goto cleanup;
+                }
             }
         }
 

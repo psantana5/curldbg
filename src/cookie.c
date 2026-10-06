@@ -93,7 +93,7 @@ static bool parse_cookie_max_age(const char *value, time_t *expires_at) {
 
 static bool parse_cookie_expires(const char *value, time_t *expires_at) {
     struct tm tm;
-    char *end = NULL;
+    const char *end = NULL;
 
     memset(&tm, 0, sizeof(tm));
     end = strptime(value, "%a, %d %b %Y %H:%M:%S GMT", &tm);
@@ -365,7 +365,7 @@ void cookie_jar_load(struct cookie_jar *jar, const char *filepath) {
         while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = '\0';
         if (len == 0) continue;
 
-        const char *domain = line;
+        char *domain = line;
         int tab_count = 0;
         for (const char *p = line; *p != '\0'; p++) {
             if (*p == '\t') tab_count++;
@@ -375,24 +375,24 @@ void cookie_jar_load(struct cookie_jar *jar, const char *filepath) {
         char *tab = strchr(domain, '\t');
         if (tab == NULL) continue;
         *tab = '\0'; tab++;
-        const char *subdomains = tab;
+        char *subdomains = tab;
         tab = strchr(subdomains, '\t');
         if (tab == NULL) continue;
         *tab = '\0'; tab++;
-        const char *path = tab;
+        char *path = tab;
         tab = strchr(path, '\t');
         if (tab == NULL) continue;
         *tab = '\0'; tab++;
-        const char *secure = tab;
+        char *secure = tab;
         tab = strchr(secure, '\t');
         if (tab == NULL) continue;
         *tab = '\0'; tab++;
-        const char *expiry = tab;
+        char *expiry = tab;
         tab = strchr(expiry, '\t');
         if (tab == NULL) continue;
         *tab = '\0';
         tab++;
-        const char *name = tab;
+        char *name = tab;
         tab = strchr(name, '\t');
         if (tab == NULL) continue;
         *tab = '\0'; tab++;

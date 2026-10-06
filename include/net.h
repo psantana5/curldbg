@@ -107,6 +107,7 @@ int proxy_connect(struct connection *conn, const struct url_info *target,
 
 /* HTTP/2 */
 bool http2_negotiated(const struct connection *conn);
+uint32_t http2_max_concurrent_streams(const struct connection *conn);
 int http2_init_connection(struct connection *conn, char *error, size_t error_len);
 uint32_t http2_send_request(struct connection *conn, const struct url_info *url,
                             const char *method, const char *data, size_t data_len,
@@ -117,6 +118,10 @@ int http2_receive_response(struct connection *conn, uint32_t stream_id,
                            struct response_info *out,
                            const struct timespec *ttfb_start,
                            FILE *body_out, char *error, size_t error_len);
+int http2_receive_responses(struct connection *conn, const uint32_t *stream_ids,
+                            size_t stream_count, struct response_info **outs,
+                            const struct timespec *ttfb_starts, FILE *body_out,
+                            char *error, size_t error_len);
 void http2_cleanup(struct connection *conn);
 
 /* Huffman HPACK */

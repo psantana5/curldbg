@@ -54,6 +54,12 @@ bool http2_negotiated(const struct connection *conn) {
     return conn != NULL && conn->http2;
 }
 
+uint32_t http2_max_concurrent_streams(const struct connection *conn) {
+    if (conn == NULL || conn->h2 == NULL)
+        return 0;
+    return conn->h2->settings.max_concurrent_streams;
+}
+
 int http2_init_connection(struct connection *conn, char *error, size_t error_len) {
     struct h2_connection *h2 = calloc(1, sizeof(struct h2_connection));
     if (h2 == NULL) {
